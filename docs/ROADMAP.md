@@ -15,12 +15,12 @@ the previous one.
 
 ## Phase 1 — Usable dashboard
 
-- [ ] Service icons (`di:`/`si:` resolution like glance, with local caching)
-- [ ] Bookmarks widget (static groups from config, like glance.nix today)
-- [ ] Search bar widget
+- [x] Service icons (`di:`/`si:`/`sh:` like glance, proxied + cached server-side)
+- [x] Bookmarks widget (static groups from config, like glance.nix today)
+- [x] Search bar widget (configurable engine via `search_url`)
 - [ ] Layout: columns/pages driven by config
-- [ ] Poll/refresh UX (auto-refresh dashboard, manual refresh button)
-- [ ] Desktop: server URL setting (persisted), instead of the hardcoded fallback
+- [x] Auto-refresh of service statuses (30s while the dashboard is open)
+- [ ] Desktop: server URL setting (persisted) — waiting on the desktop focus
 
 ## Phase 2 — Links (Linkwarden core)
 
@@ -49,9 +49,11 @@ the previous one.
 
 ## Phase 5 — Deployment
 
-- [ ] Flake packages: `chaos-server` (frontend baked in), `chaos-desktop`
-- [ ] NixOS module `services.chaos` generating chaos.toml from `servicesList`
-- [ ] Replace glance in the system flake
+- [x] Flake packages: `chaos-server`, `chaos-web` (trunk dist built in nix)
+- [x] NixOS module `services.chaos` (freeform TOML settings, monolith on PATH,
+      DynamicUser + /var/lib/chaos state) — see docs/deployment.md
+- [ ] Replace glance in the system flake (host-side change; recipe in
+      docs/deployment.md)
 - [ ] Desktop bundle with icons (`cargo tauri icon`, `bundle.active = true`)
 
 ## Deferred / explicitly out of scope
