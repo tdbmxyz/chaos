@@ -1,1 +1,7 @@
 inspirations/
+/target
+/crates/chaos-web/dist
+/result
+.direnv/
+*.db
+*.db-*
