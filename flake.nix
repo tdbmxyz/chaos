@@ -88,6 +88,7 @@
           binaryen # wasm-opt, used by trunk release builds
           cargo-tauri
           just
+          monolith # page snapshots for the link archiver
         ]
         ++ lib.optional hasCargoLock wasm-bindgen-cli;
 

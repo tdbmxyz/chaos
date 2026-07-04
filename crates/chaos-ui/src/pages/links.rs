@@ -1,18 +1,28 @@
-use chaos_domain::{Collection, CollectionRequest, CreateLinkRequest, Link, LinkQuery};
+use std::time::Duration;
+
+use chaos_domain::{
+    ArchiveState, Collection, CollectionRequest, CreateLinkRequest, Link, LinkQuery,
+    UpdateLinkRequest,
+};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use uuid::Uuid;
 
+use crate::components::Modal;
 use crate::use_client;
 
-/// Links page: collection sidebar, tag filters, search, quick-add and the
-/// link list itself. All mutations bump `refresh` to re-run the resources.
+type CollectionsResource = LocalResource<chaos_client::Result<Vec<Collection>>>;
+
+/// Links page: collection sidebar, tag filters, search, quick-add, link list
+/// and the edit dialogs. All mutations bump `refresh` to re-run the resources.
 #[component]
 pub fn Links() -> impl IntoView {
     let refresh = RwSignal::new(0u32);
     let selected_collection = RwSignal::new(None::<Uuid>);
     let selected_tag = RwSignal::new(None::<String>);
     let search = RwSignal::new(String::new());
+    let editing_link = RwSignal::new(None::<Link>);
+    let editing_collection = RwSignal::new(None::<Collection>);
 
     let client = use_client();
     let links = LocalResource::new({
@@ -29,7 +39,7 @@ pub fn Links() -> impl IntoView {
             async move { client.list_links(&query).await }
         }
     });
-    let collections = LocalResource::new({
+    let collections: CollectionsResource = LocalResource::new({
         let client = client.clone();
         move || {
             refresh.track();
@@ -48,12 +58,17 @@ pub fn Links() -> impl IntoView {
 
     view! {
         <div class="links-layout">
-            <CollectionSidebar collections selected=selected_collection refresh/>
+            <CollectionSidebar
+                collections
+                selected=selected_collection
+                editing=editing_collection
+                refresh
+            />
             <section class="links-main">
                 <div class="links-toolbar">
                     <input
                         type="search"
-                        placeholder="Search links…"
+                        placeholder="Search links (includes archived page text)…"
                         prop:value=search
                         on:input=move |ev| search.set(event_target_value(&ev))
                     />
@@ -63,10 +78,24 @@ pub fn Links() -> impl IntoView {
                 {move || match links.get() {
                     None => view! { <p class="muted">"Loading links…"</p> }.into_any(),
                     Some(Ok(page)) => {
+                        // Light polling while snapshots are being taken, so
+                        // "archiving…" badges resolve without manual refresh.
+                        if page
+                            .items
+                            .iter()
+                            .any(|l| matches!(l.archive, ArchiveState::Pending))
+                        {
+                            set_timeout(
+                                move || refresh.update(|n| *n += 1),
+                                Duration::from_secs(4),
+                            );
+                        }
                         let total = page.total;
                         view! {
-                            <p class="muted links-count">{total} " link" {if total == 1 { "" } else { "s" }}</p>
-                            <LinkList links=page.items refresh/>
+                            <p class="muted links-count">
+                                {total} " link" {if total == 1 { "" } else { "s" }}
+                            </p>
+                            <LinkList links=page.items editing=editing_link refresh/>
                         }
                             .into_any()
                     }
@@ -77,6 +106,26 @@ pub fn Links() -> impl IntoView {
                 }}
             </section>
         </div>
+        {move || {
+            editing_link
+                .get()
+                .map(|link| view! { <EditLinkModal link collections editing=editing_link refresh/> })
+        }}
+        {move || {
+            editing_collection
+                .get()
+                .map(|collection| {
+                    view! {
+                        <EditCollectionModal
+                            collection
+                            collections
+                            editing=editing_collection
+                            selected=selected_collection
+                            refresh
+                        />
+                    }
+                })
+        }}
     }
 }
 
@@ -102,10 +151,37 @@ fn with_depth(collections: &[Collection]) -> Vec<(usize, Collection)> {
     out
 }
 
+/// Options of a collection <select>, hierarchy shown by indentation.
+/// `exclude` drops one collection (a collection cannot be its own parent).
+#[component]
+fn CollectionOptions(
+    collections: CollectionsResource,
+    current: Option<Uuid>,
+    exclude: Option<Uuid>,
+) -> impl IntoView {
+    move || match collections.get() {
+        Some(Ok(list)) => with_depth(&list)
+            .into_iter()
+            .filter(|(_, c)| Some(c.id) != exclude)
+            .map(|(depth, c)| {
+                let label = format!("{}{}", "\u{a0}\u{a0}".repeat(depth), c.name);
+                view! {
+                    <option value=c.id.to_string() selected=current == Some(c.id)>
+                        {label}
+                    </option>
+                }
+            })
+            .collect_view()
+            .into_any(),
+        _ => ().into_any(),
+    }
+}
+
 #[component]
 fn CollectionSidebar(
-    collections: LocalResource<chaos_client::Result<Vec<Collection>>>,
+    collections: CollectionsResource,
     selected: RwSignal<Option<Uuid>>,
+    editing: RwSignal<Option<Collection>>,
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
     let client = use_client();
@@ -149,15 +225,25 @@ fn CollectionSidebar(
                     .into_iter()
                     .map(|(depth, c)| {
                         let id = c.id;
+                        let edit_target = c.clone();
                         view! {
-                            <button
-                                class="collection-item"
-                                class:active=move || selected.get() == Some(id)
-                                style:padding-left=format!("{}rem", 0.75 + depth as f64 * 0.9)
-                                on:click=move |_| selected.set(Some(id))
-                            >
-                                {c.name.clone()}
-                            </button>
+                            <div class="collection-row">
+                                <button
+                                    class="collection-item"
+                                    class:active=move || selected.get() == Some(id)
+                                    style:padding-left=format!("{}rem", 0.75 + depth as f64 * 0.9)
+                                    on:click=move |_| selected.set(Some(id))
+                                >
+                                    {c.name.clone()}
+                                </button>
+                                <button
+                                    class="icon-btn"
+                                    title="Edit collection"
+                                    on:click=move |_| editing.set(Some(edit_target.clone()))
+                                >
+                                    "✎"
+                                </button>
+                            </div>
                         }
                     })
                     .collect_view()
@@ -246,12 +332,7 @@ fn AddLinkForm(
                 .filter(|t| !t.is_empty()),
             description: None,
             collection_id: selected_collection.get_untracked(),
-            tags: tags
-                .get_untracked()
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect(),
+            tags: split_tags(&tags.get_untracked()),
         };
         let client = client.clone();
         spawn_local(async move {
@@ -279,7 +360,7 @@ fn AddLinkForm(
             />
             <input
                 type="text"
-                placeholder="Title (optional)"
+                placeholder="Title (fetched if empty)"
                 prop:value=title
                 on:input=move |ev| title.set(event_target_value(&ev))
             />
@@ -295,8 +376,19 @@ fn AddLinkForm(
     }
 }
 
+fn split_tags(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 #[component]
-fn LinkList(links: Vec<Link>, refresh: RwSignal<u32>) -> impl IntoView {
+fn LinkList(
+    links: Vec<Link>,
+    editing: RwSignal<Option<Link>>,
+    refresh: RwSignal<u32>,
+) -> impl IntoView {
     if links.is_empty() {
         return view! { <p class="muted">"Nothing here yet — add your first link above."</p> }
             .into_any();
@@ -305,7 +397,7 @@ fn LinkList(links: Vec<Link>, refresh: RwSignal<u32>) -> impl IntoView {
         <ul class="link-list">
             {links
                 .into_iter()
-                .map(|link| view! { <LinkItem link refresh/> })
+                .map(|link| view! { <LinkItem link editing refresh/> })
                 .collect_view()}
         </ul>
     }
@@ -313,19 +405,62 @@ fn LinkList(links: Vec<Link>, refresh: RwSignal<u32>) -> impl IntoView {
 }
 
 #[component]
-fn LinkItem(link: Link, refresh: RwSignal<u32>) -> impl IntoView {
+fn LinkItem(link: Link, editing: RwSignal<Option<Link>>, refresh: RwSignal<u32>) -> impl IntoView {
     let client = use_client();
     let id = link.id;
     let host = link.url.host_str().unwrap_or_default().to_string();
+    let edit_target = link.clone();
 
-    let delete = move |_| {
+    let delete = {
         let client = client.clone();
-        spawn_local(async move {
-            match client.delete_link(id).await {
-                Ok(()) => refresh.update(|n| *n += 1),
-                Err(err) => leptos::logging::warn!("delete link: {err}"),
+        move |_| {
+            let client = client.clone();
+            spawn_local(async move {
+                match client.delete_link(id).await {
+                    Ok(()) => refresh.update(|n| *n += 1),
+                    Err(err) => leptos::logging::warn!("delete link: {err}"),
+                }
+            });
+        }
+    };
+    let rearchive = {
+        let client = client.clone();
+        move |_| {
+            let client = client.clone();
+            spawn_local(async move {
+                match client.archive_link(id).await {
+                    Ok(_) => refresh.update(|n| *n += 1),
+                    Err(err) => leptos::logging::warn!("archive link: {err}"),
+                }
+            });
+        }
+    };
+
+    let archive_badge = match &link.archive {
+        ArchiveState::Archived { .. } => client
+            .archive_view_url(id)
+            .map(|url| {
+                view! {
+                    <a class="chip small archive-ok" href=url.to_string() target="_blank">
+                        "archived"
+                    </a>
+                }
+                .into_any()
+            })
+            .unwrap_or(().into_any()),
+        ArchiveState::Pending => {
+            view! { <span class="chip small archive-pending">"archiving…"</span> }.into_any()
+        }
+        ArchiveState::Failed { reason, .. } => {
+            let reason = reason.clone();
+            view! {
+                <span class="chip small archive-failed" title=reason>
+                    "archive failed"
+                </span>
             }
-        });
+            .into_any()
+        }
+        ArchiveState::None => ().into_any(),
     };
 
     view! {
@@ -337,6 +472,7 @@ fn LinkItem(link: Link, refresh: RwSignal<u32>) -> impl IntoView {
                 <span class="muted link-host">{host}</span>
                 {link.description.map(|d| view! { <p class="link-desc">{d}</p> })}
                 <div class="link-tags">
+                    {archive_badge}
                     {link
                         .tags
                         .into_iter()
@@ -344,9 +480,264 @@ fn LinkItem(link: Link, refresh: RwSignal<u32>) -> impl IntoView {
                         .collect_view()}
                 </div>
             </div>
-            <button class="danger" title="Delete" on:click=delete>
-                "✕"
-            </button>
+            <div class="link-actions">
+                <button class="icon-btn" title="Snapshot page" on:click=rearchive>
+                    "⭳"
+                </button>
+                <button
+                    class="icon-btn"
+                    title="Edit"
+                    on:click=move |_| editing.set(Some(edit_target.clone()))
+                >
+                    "✎"
+                </button>
+                <button class="icon-btn danger" title="Delete" on:click=delete>
+                    "✕"
+                </button>
+            </div>
         </li>
+    }
+}
+
+#[component]
+fn EditLinkModal(
+    link: Link,
+    collections: CollectionsResource,
+    editing: RwSignal<Option<Link>>,
+    refresh: RwSignal<u32>,
+) -> impl IntoView {
+    let client = use_client();
+    let id = link.id;
+    let url = RwSignal::new(link.url.to_string());
+    let title = RwSignal::new(link.title.clone());
+    let description = RwSignal::new(link.description.clone().unwrap_or_default());
+    let tags = RwSignal::new(
+        link.tags
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    let collection = RwSignal::new(
+        link.collection_id
+            .map(|c| c.to_string())
+            .unwrap_or_default(),
+    );
+    let error = RwSignal::new(None::<String>);
+
+    let save = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let parsed = match url.get_untracked().trim().parse::<url::Url>() {
+            Ok(u) => u,
+            Err(_) => {
+                error.set(Some("invalid URL".into()));
+                return;
+            }
+        };
+        let req = UpdateLinkRequest {
+            url: parsed,
+            title: title.get_untracked().trim().to_string(),
+            description: Some(description.get_untracked())
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty()),
+            collection_id: Uuid::parse_str(&collection.get_untracked()).ok(),
+            tags: split_tags(&tags.get_untracked()),
+        };
+        let client = client.clone();
+        spawn_local(async move {
+            match client.update_link(id, &req).await {
+                Ok(_) => {
+                    editing.set(None);
+                    refresh.update(|n| *n += 1);
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+        });
+    };
+
+    view! {
+        <Modal title="Edit link".to_string() on_close=move |_: ()| editing.set(None)>
+            <form class="modal-form" on:submit=save>
+                <label>
+                    "URL"
+                    <input
+                        type="text"
+                        prop:value=url
+                        on:input=move |ev| url.set(event_target_value(&ev))
+                    />
+                </label>
+                <label>
+                    "Title"
+                    <input
+                        type="text"
+                        prop:value=title
+                        on:input=move |ev| title.set(event_target_value(&ev))
+                    />
+                </label>
+                <label>
+                    "Description"
+                    <textarea
+                        prop:value=description
+                        on:input=move |ev| description.set(event_target_value(&ev))
+                    ></textarea>
+                </label>
+                <label>
+                    "Collection"
+                    <select on:change=move |ev| collection.set(event_target_value(&ev))>
+                        <option value="" selected=link.collection_id.is_none()>
+                            "(unsorted)"
+                        </option>
+                        <CollectionOptions collections current=link.collection_id exclude=None/>
+                    </select>
+                </label>
+                <label>
+                    "Tags (comma separated)"
+                    <input
+                        type="text"
+                        prop:value=tags
+                        on:input=move |ev| tags.set(event_target_value(&ev))
+                    />
+                </label>
+                {move || error.get().map(|e| view! { <p class="error">{e}</p> })}
+                <div class="modal-actions">
+                    <button type="button" on:click=move |_| editing.set(None)>
+                        "Cancel"
+                    </button>
+                    <button type="submit" class="primary">
+                        "Save"
+                    </button>
+                </div>
+            </form>
+        </Modal>
+    }
+}
+
+#[component]
+fn EditCollectionModal(
+    collection: Collection,
+    collections: CollectionsResource,
+    editing: RwSignal<Option<Collection>>,
+    selected: RwSignal<Option<Uuid>>,
+    refresh: RwSignal<u32>,
+) -> impl IntoView {
+    let client = use_client();
+    let id = collection.id;
+    let name = RwSignal::new(collection.name.clone());
+    let description = RwSignal::new(collection.description.clone().unwrap_or_default());
+    let color = RwSignal::new(collection.color.clone().unwrap_or_default());
+    let parent = RwSignal::new(
+        collection
+            .parent_id
+            .map(|p| p.to_string())
+            .unwrap_or_default(),
+    );
+    let error = RwSignal::new(None::<String>);
+    let confirm_delete = RwSignal::new(false);
+
+    let save = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let req = CollectionRequest {
+            name: name.get_untracked().trim().to_string(),
+            description: Some(description.get_untracked())
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty()),
+            color: Some(color.get_untracked())
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty()),
+            parent_id: Uuid::parse_str(&parent.get_untracked()).ok(),
+        };
+        let client = client.clone();
+        spawn_local(async move {
+            match client.update_collection(id, &req).await {
+                Ok(_) => {
+                    editing.set(None);
+                    refresh.update(|n| *n += 1);
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+        });
+    };
+
+    let client_del = use_client();
+    let delete = move |_| {
+        if !confirm_delete.get_untracked() {
+            confirm_delete.set(true);
+            return;
+        }
+        let client = client_del.clone();
+        spawn_local(async move {
+            match client.delete_collection(id).await {
+                Ok(()) => {
+                    if selected.get_untracked() == Some(id) {
+                        selected.set(None);
+                    }
+                    editing.set(None);
+                    refresh.update(|n| *n += 1);
+                }
+                Err(err) => error.set(Some(err.to_string())),
+            }
+        });
+    };
+
+    view! {
+        <Modal title="Edit collection".to_string() on_close=move |_: ()| editing.set(None)>
+            <form class="modal-form" on:submit=save>
+                <label>
+                    "Name"
+                    <input
+                        type="text"
+                        prop:value=name
+                        on:input=move |ev| name.set(event_target_value(&ev))
+                    />
+                </label>
+                <label>
+                    "Description"
+                    <textarea
+                        prop:value=description
+                        on:input=move |ev| description.set(event_target_value(&ev))
+                    ></textarea>
+                </label>
+                <label>
+                    "Color (hex, e.g. #7c9aff)"
+                    <input
+                        type="text"
+                        prop:value=color
+                        on:input=move |ev| color.set(event_target_value(&ev))
+                    />
+                </label>
+                <label>
+                    "Parent collection"
+                    <select on:change=move |ev| parent.set(event_target_value(&ev))>
+                        <option value="" selected=collection.parent_id.is_none()>
+                            "(root)"
+                        </option>
+                        <CollectionOptions
+                            collections
+                            current=collection.parent_id
+                            exclude=Some(id)
+                        />
+                    </select>
+                </label>
+                {move || error.get().map(|e| view! { <p class="error">{e}</p> })}
+                <div class="modal-actions">
+                    <button type="button" class="danger" on:click=delete>
+                        {move || {
+                            if confirm_delete.get() {
+                                "Really delete? Links become unsorted"
+                            } else {
+                                "Delete collection"
+                            }
+                        }}
+                    </button>
+                    <span class="grow"></span>
+                    <button type="button" on:click=move |_| editing.set(None)>
+                        "Cancel"
+                    </button>
+                    <button type="submit" class="primary">
+                        "Save"
+                    </button>
+                </div>
+            </form>
+        </Modal>
     }
 }

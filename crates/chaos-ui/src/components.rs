@@ -1,6 +1,28 @@
 use chaos_domain::{HealthState, ServiceWithStatus};
 use leptos::prelude::*;
 
+/// Centered dialog over a click-to-close backdrop.
+#[component]
+pub fn Modal(
+    title: String,
+    #[prop(into)] on_close: Callback<()>,
+    children: Children,
+) -> impl IntoView {
+    view! {
+        <div class="modal-backdrop" on:click=move |_| on_close.run(())>
+            <div class="modal" on:click=|ev| ev.stop_propagation()>
+                <div class="modal-head">
+                    <h3>{title}</h3>
+                    <button class="modal-close" on:click=move |_| on_close.run(())>
+                        "✕"
+                    </button>
+                </div>
+                {children()}
+            </div>
+        </div>
+    }
+}
+
 #[component]
 pub fn ServiceGrid(services: Vec<ServiceWithStatus>) -> impl IntoView {
     if services.is_empty() {

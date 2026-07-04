@@ -9,6 +9,13 @@ listen = "0.0.0.0:4600"
 interval_secs = 60
 timeout_ms = 5000
 
+[archive]
+enabled = true
+auto = true            # snapshot new links automatically
+dir = "archives"
+monolith_bin = "monolith"
+timeout_secs = 120
+
 [[services]]
 id = "jellyfin"
 title = "Jellyfin"

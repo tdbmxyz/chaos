@@ -1,6 +1,8 @@
 mod api;
+mod archiver;
 mod config;
 mod db;
+mod import;
 mod metadata;
 mod monitor;
 mod state;
@@ -22,7 +24,20 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("opening database {}", config.db_path.display()))?;
 
     let state = state::AppState::new(config, db);
+
+    // One-shot CLI mode: `chaos-server import-linkwarden <export.json>`.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [cmd, path] = args.as_slice()
+        && cmd == "import-linkwarden"
+    {
+        return import::linkwarden(&state, std::path::Path::new(path)).await;
+    }
+    if !args.is_empty() {
+        anyhow::bail!("unknown arguments {args:?}; usage: chaos-server [import-linkwarden <file>]");
+    }
+
     monitor::spawn(state.clone());
+    archiver::spawn(state.clone());
 
     let app = api::router(state.clone());
     let listener = tokio::net::TcpListener::bind(state.config.listen)

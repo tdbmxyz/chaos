@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chaos_domain::ServiceStatus;
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
 
 use crate::config::Config;
 use crate::db::Db;
@@ -12,8 +12,10 @@ use crate::db::Db;
 pub struct AppState {
     pub config: Arc<Config>,
     pub db: Db,
-    /// Outbound client for page metadata (and later archiving) fetches.
+    /// Outbound client for page metadata fetches.
     pub fetcher: reqwest::Client,
+    /// Wakes the archiver when a link becomes pending.
+    pub archive_notify: Arc<Notify>,
     /// Last known status per service id, written by the monitor task.
     pub statuses: Arc<RwLock<HashMap<String, ServiceStatus>>>,
 }
@@ -24,6 +26,7 @@ impl AppState {
             config: Arc::new(config),
             db,
             fetcher: crate::metadata::http_client(),
+            archive_notify: Arc::new(Notify::new()),
             statuses: Arc::new(RwLock::new(HashMap::new())),
         }
     }

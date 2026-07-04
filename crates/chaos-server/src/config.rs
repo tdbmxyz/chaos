@@ -24,8 +24,36 @@ pub struct Config {
     /// SQLite database file (created on first start).
     pub db_path: PathBuf,
     pub monitor: MonitorConfig,
+    pub archive: ArchiveConfig,
     /// Services shown (and polled) on the dashboard.
     pub services: Vec<ServiceDef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArchiveConfig {
+    /// Master switch for the archiver worker.
+    pub enabled: bool,
+    /// Archive new links automatically on save.
+    pub auto: bool,
+    /// Directory where snapshots are stored (one <link-id>.html per link).
+    pub dir: PathBuf,
+    /// monolith executable; on NixOS provided via the service PATH.
+    pub monolith_bin: String,
+    /// Per-page snapshot timeout.
+    pub timeout_secs: u64,
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto: true,
+            dir: PathBuf::from("archives"),
+            monolith_bin: "monolith".into(),
+            timeout_secs: 120,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +72,7 @@ impl Default for Config {
             static_dir: None,
             db_path: PathBuf::from("chaos.db"),
             monitor: MonitorConfig::default(),
+            archive: ArchiveConfig::default(),
             services: Vec::new(),
         }
     }

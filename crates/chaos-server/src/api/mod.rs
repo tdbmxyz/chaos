@@ -26,6 +26,10 @@ pub fn router(state: AppState) -> Router {
             get(links::get_one).put(links::update).delete(links::delete),
         )
         .route(
+            "/links/{id}/archive",
+            get(links::serve_archive).post(links::rearchive),
+        )
+        .route(
             "/collections",
             get(collections::list).post(collections::create),
         )

@@ -109,6 +109,21 @@ impl ChaosClient {
         self.send_no_content(req).await
     }
 
+    // ---- archive ----
+
+    /// Queue (or re-queue) a page snapshot; returns the link in pending state.
+    pub async fn archive_link(&self, id: Uuid) -> Result<Link> {
+        let req = self
+            .http
+            .post(self.url(&format!("api/v1/links/{id}/archive"))?);
+        self.send(req).await
+    }
+
+    /// Where the archived copy of a link is served (for direct browser use).
+    pub fn archive_view_url(&self, id: Uuid) -> Option<Url> {
+        self.base.join(&format!("api/v1/links/{id}/archive")).ok()
+    }
+
     // ---- tags ----
 
     pub async fn list_tags(&self) -> Result<Vec<TagWithCount>> {

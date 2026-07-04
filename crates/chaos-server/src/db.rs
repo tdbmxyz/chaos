@@ -212,7 +212,9 @@ impl Db {
 
     // ---- links ----
 
-    pub async fn create_link(&self, req: &CreateLinkRequest) -> Result<Link> {
+    /// `archive` decides the initial archive state: `true` enqueues the link
+    /// for the archiver (the caller must wake it up afterwards).
+    pub async fn create_link(&self, req: &CreateLinkRequest, archive: bool) -> Result<Link> {
         let id = Uuid::now_v7();
         let now = Utc::now();
         let title = req
@@ -221,14 +223,14 @@ impl Db {
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .map(String::from)
-            // Placeholder until metadata fetching lands (ROADMAP phase 2).
+            // Metadata fetch happens in the API layer; this is the last resort.
             .unwrap_or_else(|| req.url.host_str().unwrap_or("untitled").to_string());
 
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO links (id, url, title, description, collection_id,
                                 archive_state, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'none', ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(req.url.as_str())
@@ -240,6 +242,7 @@ impl Db {
                 .filter(|s| !s.is_empty()),
         )
         .bind(req.collection_id.map(|c| c.to_string()))
+        .bind(if archive { "pending" } else { "none" })
         .bind(now)
         .bind(now)
         .execute(&mut *tx)
@@ -291,7 +294,95 @@ impl Db {
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound);
         }
+        sqlx::query("DELETE FROM archive_fts WHERE link_id = ?")
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await?;
         collect_orphan_tags(&mut tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    // ---- archiving ----
+
+    /// (Re-)enqueue a link for archiving.
+    pub async fn set_archive_pending(&self, id: Uuid) -> Result<Link> {
+        let result = sqlx::query(
+            "UPDATE links SET archive_state = 'pending', archived_at = NULL,
+                              archive_size_bytes = NULL, archive_error = NULL
+             WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound);
+        }
+        self.get_link(id).await
+    }
+
+    /// Oldest link waiting for the archiver, if any. Single-worker setup:
+    /// no claim marking needed, the worker owns all pending rows.
+    pub async fn next_pending_archive(&self) -> Result<Option<Link>> {
+        let row = sqlx::query_as::<_, LinkRow>(
+            "SELECT * FROM links WHERE archive_state = 'pending' ORDER BY updated_at LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => Ok(Some(self.get_link(parse_uuid(row.id)?).await?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Record the outcome of an archive attempt; on success the extracted
+    /// text replaces the link's full-text index entry.
+    pub async fn finish_archive(&self, id: Uuid, outcome: ArchiveOutcome) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
+        let result = match &outcome {
+            ArchiveOutcome::Success { size_bytes, .. } => {
+                sqlx::query(
+                    "UPDATE links SET archive_state = 'archived', archived_at = ?,
+                                  archive_size_bytes = ?, archive_error = NULL
+                 WHERE id = ?",
+                )
+                .bind(now)
+                .bind(*size_bytes as i64)
+                .bind(id.to_string())
+                .execute(&mut *tx)
+                .await?
+            }
+            ArchiveOutcome::Failure { reason } => {
+                sqlx::query(
+                    "UPDATE links SET archive_state = 'failed', archived_at = ?,
+                                  archive_size_bytes = NULL, archive_error = ?
+                 WHERE id = ?",
+                )
+                .bind(now)
+                .bind(reason)
+                .bind(id.to_string())
+                .execute(&mut *tx)
+                .await?
+            }
+        };
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound);
+        }
+
+        sqlx::query("DELETE FROM archive_fts WHERE link_id = ?")
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        if let ArchiveOutcome::Success { text, .. } = &outcome
+            && !text.is_empty()
+        {
+            sqlx::query("INSERT INTO archive_fts (link_id, content) VALUES (?, ?)")
+                .bind(id.to_string())
+                .bind(text)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -331,7 +422,8 @@ impl Db {
                 qb.push(" COLLATE NOCASE");
             }
             if let Some(q) = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
-                // Substring match; FTS5 is planned for archived content later.
+                // Substring match over the link fields, plus full-text match
+                // over archived page content.
                 let pattern = format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"));
                 qb.push(" AND (l.title LIKE ");
                 qb.push_bind(pattern.clone());
@@ -339,7 +431,16 @@ impl Db {
                 qb.push_bind(pattern.clone());
                 qb.push(" ESCAPE '\\' OR l.url LIKE ");
                 qb.push_bind(pattern);
-                qb.push(" ESCAPE '\\')");
+                qb.push(" ESCAPE '\\'");
+                let fts = fts_match_query(q);
+                if !fts.is_empty() {
+                    qb.push(
+                        " OR l.id IN (SELECT link_id FROM archive_fts WHERE archive_fts MATCH ",
+                    );
+                    qb.push_bind(fts);
+                    qb.push(")");
+                }
+                qb.push(")");
             }
         };
 
@@ -445,6 +546,30 @@ async fn collect_orphan_tags(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Re
         .execute(&mut **tx)
         .await?;
     Ok(())
+}
+
+/// Outcome of an archive attempt, reported by the archiver worker.
+#[derive(Debug)]
+pub enum ArchiveOutcome {
+    Success {
+        size_bytes: u64,
+        /// Plain text extracted from the snapshot, for full-text search.
+        text: String,
+    },
+    Failure {
+        reason: String,
+    },
+}
+
+/// Turn free-form user input into a safe FTS5 MATCH expression: every token
+/// is double-quoted (phrase syntax), so operators and punctuation in the
+/// input cannot break the query.
+fn fts_match_query(q: &str) -> String {
+    q.split_whitespace()
+        .map(|token| format!("\"{}\"", token.replace('"', "")))
+        .filter(|t| t.len() > 2) // drop empty quotes
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn validate_name(name: &str) -> Result<()> {
@@ -626,10 +751,10 @@ mod tests {
         let db = Db::in_memory().await.unwrap();
 
         let link = db
-            .create_link(&link_req(
-                "https://blog.rust-lang.org/post",
-                &["rust", "blog"],
-            ))
+            .create_link(
+                &link_req("https://blog.rust-lang.org/post", &["rust", "blog"]),
+                false,
+            )
             .await
             .unwrap();
         // Title falls back to the host until metadata fetch lands.
@@ -640,7 +765,10 @@ mod tests {
 
         // Duplicate/whitespace tag names collapse; matching is case-insensitive.
         let other = db
-            .create_link(&link_req("https://example.com", &["Rust", " rust ", ""]))
+            .create_link(
+                &link_req("https://example.com", &["Rust", " rust ", ""]),
+                false,
+            )
             .await
             .unwrap();
         assert_eq!(other.tags.len(), 1);
@@ -692,6 +820,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn archive_lifecycle_and_fts_search() {
+        let db = Db::in_memory().await.unwrap();
+
+        // Created with archiving enabled -> pending.
+        let link = db
+            .create_link(&link_req("https://example.com/article", &[]), true)
+            .await
+            .unwrap();
+        assert_eq!(link.archive, ArchiveState::Pending);
+        assert_eq!(
+            db.next_pending_archive().await.unwrap().unwrap().id,
+            link.id
+        );
+
+        // Successful archive stores state + text; FTS search finds it even
+        // though title/description/url contain none of the words.
+        db.finish_archive(
+            link.id,
+            ArchiveOutcome::Success {
+                size_bytes: 1234,
+                text: "the quick brown fox jumped over the lazy dog".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(db.next_pending_archive().await.unwrap().is_none());
+        let archived = db.get_link(link.id).await.unwrap();
+        assert!(matches!(
+            archived.archive,
+            ArchiveState::Archived {
+                size_bytes: 1234,
+                ..
+            }
+        ));
+        let hits = db
+            .list_links(&LinkQuery {
+                q: Some("brown fox".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(hits.total, 1);
+        // Porter stemming: "jumping" matches "jumped".
+        let stemmed = db
+            .list_links(&LinkQuery {
+                q: Some("jumping".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(stemmed.total, 1);
+        // Hostile FTS input must not error out (operators become literal
+        // quoted tokens; "AND" isn't in the text, so no match — that's fine).
+        let hostile = db
+            .list_links(&LinkQuery {
+                q: Some("\"fox* AND (dog OR".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(hostile.total, 0);
+        // Sanity: punctuation-stripped tokens still match on their own.
+        let punctuated = db
+            .list_links(&LinkQuery {
+                q: Some("fox* dog!".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(punctuated.total, 1);
+
+        // Re-archive resets to pending; failure records the reason.
+        let pending = db.set_archive_pending(link.id).await.unwrap();
+        assert_eq!(pending.archive, ArchiveState::Pending);
+        db.finish_archive(
+            link.id,
+            ArchiveOutcome::Failure {
+                reason: "timeout".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let failed = db.get_link(link.id).await.unwrap();
+        assert!(
+            matches!(failed.archive, ArchiveState::Failed { ref reason, .. } if reason == "timeout")
+        );
+        // Failed archive removed its FTS entry.
+        let gone = db
+            .list_links(&LinkQuery {
+                q: Some("brown fox".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(gone.total, 0);
+
+        // Deleting a link cleans its FTS row (would otherwise orphan).
+        db.finish_archive(
+            link.id,
+            ArchiveOutcome::Success {
+                size_bytes: 10,
+                text: "unique zanzibar content".into(),
+            },
+        )
+        .await
+        .unwrap();
+        db.delete_link(link.id).await.unwrap();
+        let after_delete = db
+            .list_links(&LinkQuery {
+                q: Some("zanzibar".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(after_delete.total, 0);
+    }
+
+    #[tokio::test]
     async fn list_links_filters_and_pagination() {
         let db = Db::in_memory().await.unwrap();
         let dev = db
@@ -704,25 +950,31 @@ mod tests {
             .await
             .unwrap();
 
-        db.create_link(&CreateLinkRequest {
-            url: "https://docs.rs/axum".parse().unwrap(),
-            title: Some("axum docs".into()),
-            description: None,
-            collection_id: Some(dev.id),
-            tags: vec!["rust".into(), "web".into()],
-        })
+        db.create_link(
+            &CreateLinkRequest {
+                url: "https://docs.rs/axum".parse().unwrap(),
+                title: Some("axum docs".into()),
+                description: None,
+                collection_id: Some(dev.id),
+                tags: vec!["rust".into(), "web".into()],
+            },
+            false,
+        )
         .await
         .unwrap();
-        db.create_link(&CreateLinkRequest {
-            url: "https://leptos.dev".parse().unwrap(),
-            title: Some("leptos".into()),
-            description: Some("reactive UI".into()),
-            collection_id: Some(dev.id),
-            tags: vec!["rust".into()],
-        })
+        db.create_link(
+            &CreateLinkRequest {
+                url: "https://leptos.dev".parse().unwrap(),
+                title: Some("leptos".into()),
+                description: Some("reactive UI".into()),
+                collection_id: Some(dev.id),
+                tags: vec!["rust".into()],
+            },
+            false,
+        )
         .await
         .unwrap();
-        db.create_link(&link_req("https://news.ycombinator.com", &["news"]))
+        db.create_link(&link_req("https://news.ycombinator.com", &["news"]), false)
             .await
             .unwrap();
 
