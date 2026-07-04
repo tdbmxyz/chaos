@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod db;
 mod monitor;
 mod state;
 
@@ -15,7 +16,11 @@ async fn main() -> anyhow::Result<()> {
     let config = config::load().context("loading configuration")?;
     tracing::info!(services = config.services.len(), "configuration loaded");
 
-    let state = state::AppState::new(config);
+    let db = db::Db::connect(&config.db_path)
+        .await
+        .with_context(|| format!("opening database {}", config.db_path.display()))?;
+
+    let state = state::AppState::new(config, db);
     monitor::spawn(state.clone());
 
     let app = api::router(state.clone());

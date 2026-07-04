@@ -21,6 +21,8 @@ pub struct Config {
     /// Directory with the built web frontend (trunk dist). When set, the
     /// server serves it with an SPA fallback to index.html.
     pub static_dir: Option<PathBuf>,
+    /// SQLite database file (created on first start).
+    pub db_path: PathBuf,
     pub monitor: MonitorConfig,
     /// Services shown (and polled) on the dashboard.
     pub services: Vec<ServiceDef>,
@@ -40,6 +42,7 @@ impl Default for Config {
         Self {
             listen: "0.0.0.0:4600".parse().expect("valid default listen addr"),
             static_dir: None,
+            db_path: PathBuf::from("chaos.db"),
             monitor: MonitorConfig::default(),
             services: Vec::new(),
         }

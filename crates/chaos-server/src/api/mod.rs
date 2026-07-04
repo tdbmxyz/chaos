@@ -1,12 +1,18 @@
 //! HTTP API (`/api/v1`) and static frontend serving.
 
+mod collections;
+mod error;
+mod links;
+
 use axum::extract::State;
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use chaos_domain::{HealthResponse, ServiceStatus, ServiceWithStatus};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
+
+pub use error::ApiError;
 
 use crate::state::AppState;
 
@@ -14,6 +20,20 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/services", get(services))
+        .route("/links", get(links::list).post(links::create))
+        .route(
+            "/links/{id}",
+            get(links::get_one).put(links::update).delete(links::delete),
+        )
+        .route(
+            "/collections",
+            get(collections::list).post(collections::create),
+        )
+        .route(
+            "/collections/{id}",
+            put(collections::update).delete(collections::delete),
+        )
+        .route("/tags", get(links::tags))
         .with_state(state.clone());
 
     let mut app = Router::new().nest("/api/v1", api);
