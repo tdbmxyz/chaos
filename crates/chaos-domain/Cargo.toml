@@ -1,0 +1,11 @@
+[package]
+name = "chaos-domain"
+description = "Shared domain types and API contract for chaos"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+url.workspace = true

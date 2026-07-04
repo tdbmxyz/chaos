@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/chaos-domain",
+    "crates/chaos-client",
+    "crates/chaos-server",
+    "crates/chaos-ui",
+    "crates/chaos-web",
+    "crates/chaos-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Tibo <thibaudbalem@gmail.com>"]
+repository = "https://github.com/tibo/chaos"
+
+[workspace.dependencies]
+# internal crates
+chaos-domain = { path = "crates/chaos-domain" }
+chaos-client = { path = "crates/chaos-client" }
+chaos-ui = { path = "crates/chaos-ui" }
+
+# shared
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["serde"] }
+url = { version = "2", features = ["serde"] }
+thiserror = "2"
+
+# server
+anyhow = "1"
+futures = "0.3"
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# http client (native + wasm)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# frontend
+leptos = { version = "0.8", features = ["csr"] }
+leptos_router = "0.8"
+console_error_panic_hook = "0.1"
+web-sys = "0.3"
+
+# desktop
+tauri = { version = "2", features = [] }
+tauri-build = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Small wasm output for the web frontend
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
