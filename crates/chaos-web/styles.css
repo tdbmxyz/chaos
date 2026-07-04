@@ -79,6 +79,13 @@ main {
   text-decoration: none;
 }
 
+.service-icon {
+  width: 1.4rem;
+  height: 1.4rem;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
 .service-card:hover {
   border-color: var(--accent);
 }
@@ -454,4 +461,65 @@ button.primary {
   border-color: var(--accent);
   color: #10121a;
   font-weight: 600;
+}
+
+/* dashboard */
+
+.dashboard-search {
+  margin: 0.5rem 0 1.5rem;
+}
+
+.dashboard-search input {
+  width: 100%;
+  font-size: 1.1rem;
+  padding: 0.7rem 1rem;
+  border-radius: 0.5rem;
+}
+
+.bookmark-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.75rem;
+}
+
+.bookmark-group {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.9rem 1.1rem;
+}
+
+.bookmark-group h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.bookmark-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.bookmark-group a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.bookmark-group a:hover {
+  color: var(--accent);
+}
+
+.bookmark-icon {
+  width: 1rem;
+  height: 1rem;
+  object-fit: contain;
 }

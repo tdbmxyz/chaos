@@ -56,12 +56,21 @@ fn ServiceCard(service: ServiceWithStatus) -> impl IntoView {
         .latency_ms
         .map(|ms| format!("{ms} ms"))
         .unwrap_or_default();
+    let icon = service
+        .def
+        .icon
+        .as_deref()
+        .and_then(|spec| crate::use_client().icon_url(spec));
 
     view! {
         <a class="service-card" href=service.def.url.to_string() target="_blank" rel="noreferrer">
-            <span class=dot_class title=state_label></span>
+            {icon
+                .map(|url| {
+                    view! { <img class="service-icon" src=url.to_string() loading="lazy" alt=""/> }
+                })}
             <span class="service-title">{service.def.title}</span>
             <span class="service-latency muted">{latency}</span>
+            <span class=dot_class title=state_label></span>
         </a>
     }
 }
