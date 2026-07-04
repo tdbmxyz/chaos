@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "chaos",
+  "version": "0.1.0",
+  "identifier": "dev.tibo.chaos",
+  "build": {
+    "beforeDevCommand": "cd ../chaos-web && trunk serve",
+    "devUrl": "http://localhost:8080",
+    "beforeBuildCommand": "cd ../chaos-web && trunk build --release",
+    "frontendDist": "../chaos-web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "chaos",
+        "width": 1280,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": []
+  }
+}

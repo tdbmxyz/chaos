@@ -1,0 +1,11 @@
+[package]
+name = "chaos-desktop"
+description = "Tauri shell embedding the chaos web frontend"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tauri.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
