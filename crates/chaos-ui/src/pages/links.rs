@@ -482,7 +482,7 @@ fn LinkItem(link: Link, editing: RwSignal<Option<Link>>, refresh: RwSignal<u32>)
             </div>
             <div class="link-actions">
                 <button class="icon-btn" title="Snapshot page" on:click=rearchive>
-                    "⭳"
+                    "↻"
                 </button>
                 <button
                     class="icon-btn"
