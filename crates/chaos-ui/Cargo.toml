@@ -10,3 +10,4 @@ chaos-client.workspace = true
 leptos.workspace = true
 leptos_router.workspace = true
 url.workspace = true
+uuid.workspace = true

@@ -25,13 +25,3 @@ pub fn Dashboard() -> impl IntoView {
         </section>
     }
 }
-
-#[component]
-pub fn Links() -> impl IntoView {
-    view! {
-        <section>
-            <h2>"Links"</h2>
-            <p class="muted">"Link management lands in Phase 2 (see ROADMAP.md)."</p>
-        </section>
-    }
-}
