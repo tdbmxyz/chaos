@@ -1,0 +1,115 @@
+/* Minimal glance-inspired dark theme; will grow into a proper design system. */
+:root {
+  --bg: #14161c;
+  --surface: #1c1f27;
+  --border: #2a2e39;
+  --text: #d6d9e0;
+  --muted: #8a90a0;
+  --accent: #7c9aff;
+  --up: #4ade80;
+  --degraded: #facc15;
+  --down: #f87171;
+  --unknown: #6b7280;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.topbar a[aria-current] {
+  color: var(--text);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-right: 1rem;
+}
+
+main {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--down);
+}
+
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.75rem;
+}
+
+.service-card {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.service-card:hover {
+  border-color: var(--accent);
+}
+
+.service-title {
+  flex: 1;
+}
+
+.service-latency {
+  font-size: 0.8rem;
+}
+
+.dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot.up {
+  background: var(--up);
+}
+
+.dot.degraded {
+  background: var(--degraded);
+}
+
+.dot.down {
+  background: var(--down);
+}
+
+.dot.unknown {
+  background: var(--unknown);
+}
