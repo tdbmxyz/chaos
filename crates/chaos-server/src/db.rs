@@ -96,7 +96,12 @@ impl Db {
         )
         .bind(id.to_string())
         .bind(req.name.trim())
-        .bind(&req.description)
+        .bind(
+            req.description
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        )
         .bind(&req.color)
         .bind(req.parent_id.map(|p| p.to_string()))
         .bind(Utc::now())
@@ -116,7 +121,12 @@ impl Db {
              WHERE id = ?",
         )
         .bind(req.name.trim())
-        .bind(&req.description)
+        .bind(
+            req.description
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        )
         .bind(&req.color)
         .bind(req.parent_id.map(|p| p.to_string()))
         .bind(id.to_string())
@@ -223,7 +233,12 @@ impl Db {
         .bind(id.to_string())
         .bind(req.url.as_str())
         .bind(&title)
-        .bind(&req.description)
+        .bind(
+            req.description
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        )
         .bind(req.collection_id.map(|c| c.to_string()))
         .bind(now)
         .bind(now)
@@ -246,7 +261,12 @@ impl Db {
         )
         .bind(req.url.as_str())
         .bind(req.title.trim())
-        .bind(&req.description)
+        .bind(
+            req.description
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        )
         .bind(req.collection_id.map(|c| c.to_string()))
         .bind(Utc::now())
         .bind(id.to_string())

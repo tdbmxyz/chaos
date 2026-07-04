@@ -5,7 +5,12 @@ use chaos_domain::{CreateLinkRequest, Link, LinkPage, LinkQuery, TagWithCount, U
 use uuid::Uuid;
 
 use super::ApiError;
+use crate::metadata;
 use crate::state::AppState;
+
+fn is_blank(value: &Option<String>) -> bool {
+    value.as_deref().map(str::trim).is_none_or(str::is_empty)
+}
 
 pub async fn list(
     State(state): State<AppState>,
@@ -23,8 +28,20 @@ pub async fn get_one(
 
 pub async fn create(
     State(state): State<AppState>,
-    Json(req): Json<CreateLinkRequest>,
+    Json(mut req): Json<CreateLinkRequest>,
 ) -> Result<(StatusCode, Json<Link>), ApiError> {
+    // Fill missing title/description from the page itself. Best-effort:
+    // on fetch failure the db layer still falls back to the URL host.
+    if is_blank(&req.title) || is_blank(&req.description) {
+        let meta = metadata::fetch(&state.fetcher, &req.url).await;
+        if is_blank(&req.title) {
+            req.title = meta.title;
+        }
+        if is_blank(&req.description) {
+            req.description = meta.description;
+        }
+    }
+
     let link = state.db.create_link(&req).await?;
     Ok((StatusCode::CREATED, Json(link)))
 }

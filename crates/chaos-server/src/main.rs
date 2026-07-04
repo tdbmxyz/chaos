@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod db;
+mod metadata;
 mod monitor;
 mod state;
 

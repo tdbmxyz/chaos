@@ -12,6 +12,8 @@ use crate::db::Db;
 pub struct AppState {
     pub config: Arc<Config>,
     pub db: Db,
+    /// Outbound client for page metadata (and later archiving) fetches.
+    pub fetcher: reqwest::Client,
     /// Last known status per service id, written by the monitor task.
     pub statuses: Arc<RwLock<HashMap<String, ServiceStatus>>>,
 }
@@ -21,6 +23,7 @@ impl AppState {
         Self {
             config: Arc::new(config),
             db,
+            fetcher: crate::metadata::http_client(),
             statuses: Arc::new(RwLock::new(HashMap::new())),
         }
     }

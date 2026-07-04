@@ -26,7 +26,7 @@ the previous one.
 
 - [x] sqlx + SQLite in chaos-server, migrations, `Db` layer (in-memory tests)
 - [x] CRUD API: links, collections (hierarchical, cycle-guarded), tags (auto-GC)
-- [ ] Metadata fetch on save (title, description, favicon)
+- [x] Metadata fetch on save (title, description; favicon later with icons)
 - [x] Links UI: list, collection sidebar, tag filters, search
 - [x] Quick-add (paste URL) and delete
 - [ ] Edit link / edit collection dialogs
