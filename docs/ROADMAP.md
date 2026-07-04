@@ -24,11 +24,12 @@ the previous one.
 
 ## Phase 2 — Links (Linkwarden core)
 
-- [ ] sqlx + SQLite in chaos-server, migrations, `Db` layer
-- [ ] CRUD API: links, collections (hierarchical), tags
+- [x] sqlx + SQLite in chaos-server, migrations, `Db` layer (in-memory tests)
+- [x] CRUD API: links, collections (hierarchical, cycle-guarded), tags (auto-GC)
 - [ ] Metadata fetch on save (title, description, favicon)
-- [ ] Links UI: list/grid, collection sidebar, tag filters, search
-- [ ] Quick-add (paste URL), edit, delete
+- [x] Links UI: list, collection sidebar, tag filters, search
+- [x] Quick-add (paste URL) and delete
+- [ ] Edit link / edit collection dialogs
 
 ## Phase 3 — Archiving & import
 
