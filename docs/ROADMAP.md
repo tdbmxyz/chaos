@@ -1,0 +1,61 @@
+# Roadmap
+
+Phases are ordered so each one ships something usable and none requires reworking
+the previous one.
+
+## Phase 0 — Foundations ✅ (this commit)
+
+- [x] Cargo workspace, six crates, compile on native + wasm
+- [x] Nix devshell (stable rust + trunk + wasm-bindgen-cli pinned by Cargo.lock + Tauri deps)
+- [x] Axum server: `/api/v1/health`, `/api/v1/services`, static serving, config via figment
+- [x] Service monitor task (glance `monitor` widget equivalent)
+- [x] Leptos app shell: router, dashboard page rendering service tiles
+- [x] Tauri v2 scaffold
+- [x] Architecture docs + ADRs
+
+## Phase 1 — Usable dashboard
+
+- [ ] Service icons (`di:`/`si:` resolution like glance, with local caching)
+- [ ] Bookmarks widget (static groups from config, like glance.nix today)
+- [ ] Search bar widget
+- [ ] Layout: columns/pages driven by config
+- [ ] Poll/refresh UX (auto-refresh dashboard, manual refresh button)
+- [ ] Desktop: server URL setting (persisted), instead of the hardcoded fallback
+
+## Phase 2 — Links (Linkwarden core)
+
+- [ ] sqlx + SQLite in chaos-server, migrations, `Db` layer
+- [ ] CRUD API: links, collections (hierarchical), tags
+- [ ] Metadata fetch on save (title, description, favicon)
+- [ ] Links UI: list/grid, collection sidebar, tag filters, search
+- [ ] Quick-add (paste URL), edit, delete
+
+## Phase 3 — Archiving & import
+
+- [ ] Archive queue (background task) using `monolith` for single-file snapshots
+- [ ] Serve/view archived copies; re-archive action
+- [ ] Importer from Linkwarden (API or export file) — one-shot migration command
+- [ ] Full-text search over archived content (SQLite FTS5)
+
+## Phase 4 — More widgets
+
+- [ ] Weather (Open-Meteo), calendar
+- [ ] RSS/Hacker News/Lobsters feeds
+- [ ] GitHub releases watcher
+- [ ] Server stats (local host metrics)
+- [ ] Custom API widget (user-defined template like glance's custom-api)
+
+## Phase 5 — Deployment
+
+- [ ] Flake packages: `chaos-server` (frontend baked in), `chaos-desktop`
+- [ ] NixOS module `services.chaos` generating chaos.toml from `servicesList`
+- [ ] Replace glance in the system flake
+- [ ] Desktop bundle with icons (`cargo tauri icon`, `bundle.active = true`)
+
+## Deferred / explicitly out of scope
+
+- **Auth** — LAN-only posture for now; revisit if exposed beyond the LAN
+  (axum middleware + token in chaos-client is the planned seam).
+- **Manga/webtoon reader** — separate application, see [manga-app.md](manga-app.md).
+- **Mobile** — Tauri v2 supports Android/iOS; the chaos-ui/shell split keeps the
+  door open, but the manga app is the one that really needs mobile.
