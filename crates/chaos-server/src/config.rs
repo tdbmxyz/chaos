@@ -8,7 +8,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use chaos_domain::ServiceDef;
+use chaos_domain::{BookmarkGroup, ServiceDef};
 use figment::Figment;
 use figment::providers::{Env, Format, Serialized, Toml};
 use serde::{Deserialize, Serialize};
@@ -23,10 +23,17 @@ pub struct Config {
     pub static_dir: Option<PathBuf>,
     /// SQLite database file (created on first start).
     pub db_path: PathBuf,
+    /// On-disk cache for proxied service/bookmark icons.
+    pub icon_cache_dir: PathBuf,
+    /// Search engine template for the dashboard search bar; `{}` is replaced
+    /// by the url-encoded query. None hides the search bar.
+    pub search_url: Option<String>,
     pub monitor: MonitorConfig,
     pub archive: ArchiveConfig,
     /// Services shown (and polled) on the dashboard.
     pub services: Vec<ServiceDef>,
+    /// Static bookmark groups shown on the dashboard.
+    pub bookmarks: Vec<BookmarkGroup>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,9 +78,12 @@ impl Default for Config {
             listen: "0.0.0.0:4600".parse().expect("valid default listen addr"),
             static_dir: None,
             db_path: PathBuf::from("chaos.db"),
+            icon_cache_dir: PathBuf::from("icons"),
+            search_url: None,
             monitor: MonitorConfig::default(),
             archive: ArchiveConfig::default(),
             services: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 }

@@ -6,9 +6,11 @@
 //! no I/O, no async runtime, no framework dependencies.
 
 pub mod api;
+pub mod dashboard;
 pub mod links;
 pub mod service;
 
 pub use api::*;
+pub use dashboard::*;
 pub use links::*;
 pub use service::*;

@@ -5,8 +5,8 @@
 //! the API surface is exercised from exactly one place.
 
 use chaos_domain::{
-    ApiErrorBody, Collection, CollectionRequest, CreateLinkRequest, HealthResponse, Link, LinkPage,
-    LinkQuery, ServiceWithStatus, TagWithCount, UpdateLinkRequest,
+    ApiErrorBody, Collection, CollectionRequest, CreateLinkRequest, DashboardConfig,
+    HealthResponse, Link, LinkPage, LinkQuery, ServiceWithStatus, TagWithCount, UpdateLinkRequest,
 };
 use url::Url;
 use uuid::Uuid;
@@ -52,6 +52,19 @@ impl ChaosClient {
 
     pub async fn services(&self) -> Result<Vec<ServiceWithStatus>> {
         self.get("api/v1/services").await
+    }
+
+    pub async fn dashboard(&self) -> Result<DashboardConfig> {
+        self.get("api/v1/dashboard").await
+    }
+
+    /// Server-cached icon for a `di:`/`si:`/`sh:` spec; direct URLs pass
+    /// through unchanged.
+    pub fn icon_url(&self, spec: &str) -> Option<Url> {
+        if spec.starts_with("http://") || spec.starts_with("https://") {
+            return spec.parse().ok();
+        }
+        self.base.join(&format!("api/v1/icons/{spec}")).ok()
     }
 
     // ---- links ----

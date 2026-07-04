@@ -2,12 +2,13 @@
 
 mod collections;
 mod error;
+mod icons;
 mod links;
 
 use axum::extract::State;
 use axum::routing::{get, put};
 use axum::{Json, Router};
-use chaos_domain::{HealthResponse, ServiceStatus, ServiceWithStatus};
+use chaos_domain::{DashboardConfig, HealthResponse, ServiceStatus, ServiceWithStatus};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -20,6 +21,8 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/services", get(services))
+        .route("/dashboard", get(dashboard))
+        .route("/icons/{spec}", get(icons::icon))
         .route("/links", get(links::list).post(links::create))
         .route(
             "/links/{id}",
@@ -61,6 +64,13 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
+    })
+}
+
+async fn dashboard(State(state): State<AppState>) -> Json<DashboardConfig> {
+    Json(DashboardConfig {
+        search_url: state.config.search_url.clone(),
+        bookmarks: state.config.bookmarks.clone(),
     })
 }
 

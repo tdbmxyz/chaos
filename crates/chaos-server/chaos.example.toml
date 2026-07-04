@@ -4,6 +4,10 @@
 
 listen = "0.0.0.0:4600"
 # static_dir = "/var/lib/chaos/www"
+# icon_cache_dir = "icons"
+
+# Dashboard search bar; {} is replaced by the url-encoded query.
+search_url = "https://duckduckgo.com/?q={}"
 
 [monitor]
 interval_secs = 60
@@ -33,3 +37,21 @@ id = "grafana"
 title = "Grafana"
 url = "http://zeus:3000"
 icon = "di:grafana"
+
+[[bookmarks]]
+title = "Main"
+
+[[bookmarks.links]]
+title = "ProtonMail"
+url = "https://mail.proton.me"
+icon = "si:protonmail"
+
+[[bookmarks.links]]
+title = "GitHub"
+url = "https://github.com"
+icon = "si:github"
+
+[[bookmarks.links]]
+title = "Reddit"
+url = "https://reddit.com"
+icon = "si:reddit"
