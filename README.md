@@ -40,3 +40,14 @@ $ just check             # fmt + clippy + wasm check
 First checkout only: `Cargo.lock` drives the pinned `wasm-bindgen-cli` in the flake.
 If the lock file is missing, enter the shell, run `cargo generate-lockfile`,
 `git add Cargo.lock`, and re-enter the shell.
+
+## Deployment
+
+```console
+$ nix build .#chaos-server   # backend binary
+$ nix build .#chaos-web      # static frontend dist
+```
+
+A NixOS module is provided as `nixosModules.chaos` — see
+[docs/deployment.md](docs/deployment.md) for the `services.chaos` options and
+the recipe replacing the old glance configuration.

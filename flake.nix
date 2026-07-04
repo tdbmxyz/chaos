@@ -20,8 +20,14 @@
     };
     inherit (pkgs) lib;
 
+    version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
+
     # Toolchain pinned by rust-toolchain.toml (stable + wasm32 target).
     rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+    rustPlatform = pkgs.makeRustPlatform {
+      cargo = rustToolchain;
+      rustc = rustToolchain;
+    };
 
     # trunk invokes wasm-bindgen; its CLI version must match the wasm-bindgen
     # crate version in Cargo.lock exactly (wasm-bindgen is not semver-stable).
@@ -70,7 +76,66 @@
       openssl
       dbus
     ];
+
+    chaos-server = rustPlatform.buildRustPackage {
+      pname = "chaos-server";
+      inherit version;
+      src = self;
+
+      cargoLock.lockFile = ./Cargo.lock;
+
+      # Only the backend: the desktop crate would drag the webkit stack in.
+      cargoBuildFlags = ["-p" "chaos-server"];
+      cargoTestFlags = ["-p" "chaos-server"];
+
+      meta = {
+        description = "chaos backend: dashboard API, service monitor, link store";
+        mainProgram = "chaos-server";
+      };
+    };
+
+    chaos-web = pkgs.stdenv.mkDerivation {
+      pname = "chaos-web";
+      inherit version;
+      src = self;
+
+      cargoDeps = pkgs.rustPlatform.importCargoLock {lockFile = ./Cargo.lock;};
+
+      nativeBuildInputs = [
+        rustToolchain
+        pkgs.trunk
+        pkgs.binaryen
+        wasm-bindgen-cli
+        pkgs.rustPlatform.cargoSetupHook
+      ];
+
+      buildPhase = ''
+        runHook preBuild
+        export HOME=$TMPDIR
+        cd crates/chaos-web
+        trunk build --release --offline true --dist dist
+        runHook postBuild
+      '';
+
+      installPhase = ''
+        runHook preInstall
+        cp -r dist $out
+        runHook postInstall
+      '';
+
+      meta.description = "chaos web frontend (static trunk dist)";
+    };
   in {
+    packages.${system} = {
+      inherit chaos-server chaos-web;
+      default = chaos-server;
+    };
+
+    nixosModules = {
+      chaos = import ./nix/module.nix self;
+      default = self.nixosModules.chaos;
+    };
+
     devShells.${system}.default = pkgs.mkShell {
       name = "chaos";
 
