@@ -29,14 +29,15 @@ the previous one.
 - [x] Metadata fetch on save (title, description; favicon later with icons)
 - [x] Links UI: list, collection sidebar, tag filters, search
 - [x] Quick-add (paste URL) and delete
-- [ ] Edit link / edit collection dialogs
+- [x] Edit link / edit collection dialogs (incl. collection delete with confirm)
 
 ## Phase 3 — Archiving & import
 
-- [ ] Archive queue (background task) using `monolith` for single-file snapshots
-- [ ] Serve/view archived copies; re-archive action
-- [ ] Importer from Linkwarden (API or export file) — one-shot migration command
-- [ ] Full-text search over archived content (SQLite FTS5)
+- [x] Archive queue (background task) shelling out to `monolith` (single-file,
+      JS-stripped, isolated snapshots; auto on save + manual re-archive)
+- [x] Serve archived copies (`GET /api/v1/links/{id}/archive`, CSP-sandboxed)
+- [x] Importer from Linkwarden export file (`chaos-server import-linkwarden <file>`)
+- [x] Full-text search over archived content (SQLite FTS5, porter stemming)
 
 ## Phase 4 — More widgets
 
