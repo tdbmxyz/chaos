@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use chaos_domain::{
-    BookmarkGroup, ColumnSize, DashboardLayout, ServerStats, WeatherData, Widget, WidgetData,
-    WidgetInstance,
+    BookmarkGroup, ColumnSize, DashboardLayout, ServerStats, SystemdAction, SystemdActionRequest,
+    SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Utc};
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 use crate::components::ServiceGrid;
 use crate::use_client;
@@ -18,6 +19,9 @@ const WIDGET_REFRESH: Duration = Duration::from_secs(300);
 /// Bumped by the manual refresh button; every widget resource tracks it.
 #[derive(Clone, Copy)]
 struct RefreshTick(RwSignal<u32>);
+
+/// Busy flag + action dispatcher backing the systemd control buttons.
+type SystemdControls = (RwSignal<bool>, Callback<(String, SystemdAction)>);
 
 #[component]
 pub fn Dashboard() -> impl IntoView {
@@ -89,6 +93,8 @@ fn WidgetView(instance: WidgetInstance) -> impl IntoView {
             .into_any(),
         Widget::Services => view! { <ServicesWidget/> }.into_any(),
         Widget::Bookmarks { groups } => view! { <Bookmarks groups/> }.into_any(),
+        Widget::Calendar => view! { <CalendarWidget/> }.into_any(),
+        Widget::Systemd { title, .. } => view! { <SystemdWidget id=instance.id title/> }.into_any(),
         widget => view! { <DataWidget id=instance.id widget/> }.into_any(),
     }
 }
@@ -232,10 +238,224 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 Some(Ok(WidgetData::ServerStats(stats))) => {
                     view! { <ServerStatsView stats/> }.into_any()
                 }
+                // Systemd widgets render through SystemdWidget; this arm only
+                // exists for exhaustiveness.
+                Some(Ok(WidgetData::Systemd { units })) => systemd_rows(units, None).into_any(),
                 Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
             }}
         </section>
     }
+}
+
+/// Systemd unit states with optional start/stop/restart controls.
+#[component]
+fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
+    let client = use_client();
+    let refresh = use_context::<RefreshTick>();
+    let title = title.unwrap_or_else(|| "Service control".into());
+
+    // Unit states change on their own (crashes, timers), so poll like the
+    // services grid does; `version` bumps after our own control actions.
+    let tick = RwSignal::new(0u32);
+    if let Ok(handle) = set_interval_with_handle(move || tick.update(|n| *n += 1), SERVICES_REFRESH)
+    {
+        on_cleanup(move || handle.clear());
+    }
+    let version = RwSignal::new(0u32);
+    let busy = RwSignal::new(false);
+    let action_error = RwSignal::new(None::<String>);
+
+    let data = LocalResource::new({
+        let client = client.clone();
+        let id = id.clone();
+        move || {
+            tick.track();
+            version.track();
+            if let Some(RefreshTick(refresh)) = refresh {
+                refresh.track();
+            }
+            let client = client.clone();
+            let id = id.clone();
+            async move { client.widget_data(&id).await }
+        }
+    });
+
+    let run = Callback::new(move |(unit, action): (String, SystemdAction)| {
+        let client = client.clone();
+        let id = id.clone();
+        busy.set(true);
+        action_error.set(None);
+        spawn_local(async move {
+            match client
+                .systemd_action(&id, &SystemdActionRequest { unit, action })
+                .await
+            {
+                Ok(_) => version.update(|n| *n += 1),
+                Err(err) => action_error.set(Some(err.to_string())),
+            }
+            busy.set(false);
+        });
+    });
+
+    view! {
+        <section class="widget">
+            <h2>{title}</h2>
+            {move || action_error.get().map(|err| view! { <p class="error">{err}</p> })}
+            {move || match data.get() {
+                None => view! { <p class="muted">"Loading…"</p> }.into_any(),
+                Some(Ok(WidgetData::Systemd { units })) => {
+                    systemd_rows(units, Some((busy, run))).into_any()
+                }
+                Some(Ok(_)) => view! { <p class="error">"Unexpected widget data"</p> }.into_any(),
+                Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+            }}
+        </section>
+    }
+}
+
+fn systemd_rows(units: Vec<SystemdUnitStatus>, controls: Option<SystemdControls>) -> impl IntoView {
+    view! {
+        <ul class="unit-list">
+            {units
+                .into_iter()
+                .map(|unit| {
+                    let dot = match unit.active_state.as_str() {
+                        "active" => "dot up",
+                        "failed" => "dot down",
+                        "activating" | "deactivating" | "reloading" => "dot degraded",
+                        _ => "dot unknown",
+                    };
+                    let state = if unit.sub_state.is_empty() {
+                        unit.active_state.clone()
+                    } else {
+                        unit.sub_state.clone()
+                    };
+                    let actions = controls
+                        .filter(|_| unit.controllable)
+                        .map(|(busy, run)| {
+                            unit_actions(
+                                unit.unit.clone(),
+                                unit.active_state == "active",
+                                busy,
+                                run,
+                            )
+                        });
+                    view! {
+                        <li class="unit-row">
+                            <span class=dot title=unit.active_state.clone()></span>
+                            <span class="unit-title">{unit.title}</span>
+                            <span class="muted unit-state">{state}</span>
+                            {actions}
+                        </li>
+                    }
+                })
+                .collect_view()}
+        </ul>
+    }
+}
+
+fn unit_actions(
+    unit: String,
+    active: bool,
+    busy: RwSignal<bool>,
+    run: Callback<(String, SystemdAction)>,
+) -> impl IntoView {
+    let button = move |label: &'static str, title: &'static str, action: SystemdAction| {
+        let unit = unit.clone();
+        view! {
+            <button
+                class="unit-btn"
+                title=title
+                disabled=move || busy.get()
+                on:click=move |_| run.run((unit.clone(), action))
+            >
+                {label}
+            </button>
+        }
+    };
+    view! {
+        <span class="unit-actions">
+            {if active {
+                vec![
+                    button("↻", "Restart", SystemdAction::Restart),
+                    button("■", "Stop", SystemdAction::Stop),
+                ]
+            } else {
+                vec![button("▶", "Start", SystemdAction::Start)]
+            }}
+        </span>
+    }
+}
+
+/// Static month calendar, computed entirely client-side.
+#[component]
+fn CalendarWidget() -> impl IntoView {
+    let today = Local::now().date_naive();
+    let month = RwSignal::new((today.year(), today.month()));
+
+    let shift = move |delta: i32| {
+        month.update(|(year, m)| {
+            let total = *year * 12 + (*m as i32 - 1) + delta;
+            *year = total.div_euclid(12);
+            *m = (total.rem_euclid(12) + 1) as u32;
+        });
+    };
+
+    view! {
+        <section class="widget">
+            <div class="calendar-head">
+                <h2>
+                    {move || {
+                        let (year, m) = month.get();
+                        NaiveDate::from_ymd_opt(year, m, 1)
+                            .map(|d| d.format("%B %Y").to_string())
+                            .unwrap_or_default()
+                    }}
+                </h2>
+                <div class="calendar-nav">
+                    <button title="Previous month" on:click=move |_| shift(-1)>"‹"</button>
+                    <button
+                        title="Current month"
+                        on:click=move |_| month.set((today.year(), today.month()))
+                    >
+                        "•"
+                    </button>
+                    <button title="Next month" on:click=move |_| shift(1)>"›"</button>
+                </div>
+            </div>
+            <div class="calendar-grid">
+                {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+                    .into_iter()
+                    .map(|day| view! { <span class="calendar-weekday muted">{day}</span> })
+                    .collect_view()}
+                {move || calendar_cells(month.get(), today)}
+            </div>
+        </section>
+    }
+}
+
+/// Six fixed weeks around the shown month, starting on Monday.
+fn calendar_cells((year, month): (i32, u32), today: NaiveDate) -> impl IntoView {
+    let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
+        return ().into_any();
+    };
+    let offset = first.weekday().num_days_from_monday() as u64;
+    let start = first - Days::new(offset);
+
+    (0..42u64)
+        .map(|i| {
+            let date = start + Days::new(i);
+            let mut class = String::from("calendar-cell");
+            if date.month() != month {
+                class.push_str(" other");
+            }
+            if date == today {
+                class.push_str(" today");
+            }
+            view! { <span class=class>{date.day()}</span> }
+        })
+        .collect_view()
+        .into_any()
 }
 
 #[component]
