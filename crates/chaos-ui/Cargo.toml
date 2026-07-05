@@ -9,5 +9,6 @@ chaos-domain.workspace = true
 chaos-client.workspace = true
 leptos.workspace = true
 leptos_router.workspace = true
+chrono.workspace = true
 url.workspace = true
 uuid.workspace = true

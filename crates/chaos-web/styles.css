@@ -523,3 +523,198 @@ button.primary {
   height: 1rem;
   object-fit: contain;
 }
+
+/* ---- dashboard layout & widgets ---- */
+
+.dashboard-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.25rem;
+}
+
+.refresh-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+}
+
+.refresh-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.dashboard-columns {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.dashboard-column {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-column.small {
+  flex: 0 0 19rem;
+}
+
+@media (max-width: 56rem) {
+  .dashboard-columns {
+    flex-direction: column;
+  }
+
+  .dashboard-column,
+  .dashboard-column.small {
+    flex: none;
+    width: 100%;
+  }
+}
+
+.widget {
+  margin-bottom: 1.5rem;
+}
+
+.widget h2 {
+  font-size: 1rem;
+  margin: 0 0 0.75rem;
+}
+
+/* weather */
+
+.weather-now {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.9rem 1.1rem;
+}
+
+.weather-emoji {
+  font-size: 1.8rem;
+}
+
+.weather-temp {
+  font-size: 1.8rem;
+  font-weight: 600;
+}
+
+.weather-desc {
+  font-size: 0.9rem;
+  min-width: 0;
+}
+
+.weather-days {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.weather-day {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.85rem;
+}
+
+/* feeds & releases */
+
+.feed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.feed-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.45rem 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.feed-list li:last-child {
+  border-bottom: none;
+}
+
+.feed-list a {
+  color: var(--text);
+  text-decoration: none;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-list a:hover {
+  color: var(--accent);
+}
+
+.feed-list .muted {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.release-repo {
+  color: var(--muted);
+}
+
+/* server stats */
+
+.server-stats p {
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+}
+
+.meter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.meter-label {
+  flex: 0 0 6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meter {
+  flex: 1;
+  height: 0.45rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.meter-fill.high {
+  background: var(--down);
+}
+
+.meter-value {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+}
