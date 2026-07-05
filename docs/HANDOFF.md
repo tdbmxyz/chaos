@@ -1,4 +1,4 @@
-# chaos — session handoff (2026-07-05)
+# chaos — session handoff (2026-07-05, evening)
 
 Fresh-session primer. Everything below is committed on `main`; working tree
 clean. Companion project: [yomu](../../yomu) (manga app, own repo + HANDOFF).
@@ -14,7 +14,16 @@ decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
 
 - **Dashboard**: service monitor (up/degraded/down + latency, 30s
   auto-refresh), icons proxied+cached server-side (`di:`/`si:`/`sh:` like
-  glance), bookmarks groups from config, search bar (`search_url` template).
+  glance), bookmarks groups from config, search bar (`search_url` template),
+  manual refresh button.
+- **Layout & widgets**: `[[columns]]` in config place widgets explicitly
+  (sizes `full`/`small`; no columns ⇒ legacy single-column synthesized).
+  Data widgets — weather (Open-Meteo, geocoded), feed (RSS/Atom, covers
+  HN/lobsters), releases (GitHub `releases.atom`), server_stats (sysinfo,
+  optional `mounts` filter) — are served per instance id from
+  `GET /api/v1/widgets/{id}`, cached server-side with per-kind TTLs
+  (10min/5min/30min/10s), stale payload on upstream failure. See
+  `chaos-server/src/widgets/` and chaos.example.toml.
 - **Links**: SQLite (sqlx, WAL, FTS5), hierarchical collections
   (cycle-guarded), tags (case-insensitive, auto-GC), quick-add with page
   metadata fetch (og:/title, 6s/2MB bounded), edit dialogs, full-replacement
@@ -48,13 +57,11 @@ decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
 1. **Deploy on zeus** (user action + assist): wire `nixosModules.chaos` into
    the system flake per docs/deployment.md, port the glance servicesList
    mapping, run alongside glance, then retire glance.
-2. Phase 1 leftovers: config-driven layout (columns/pages), manual refresh
-   button, editable bookmarks(?).
-3. Phase 4 widgets: weather (Open-Meteo), RSS/HN/lobsters, GitHub releases,
-   server stats, custom-api — each as a server-side cached provider.
-4. Links polish: pagination UI (API supports limit/offset), FTS5 for
+2. Phase 4 leftovers: calendar widget, custom-api widget (user template).
+   Editable bookmarks still an open question.
+3. Links polish: pagination UI (API supports limit/offset), FTS5 for
    titles/descriptions too, link icons/favicons, bulk actions.
-5. Desktop (deferred until user has computer access): server URL picker,
+4. Desktop (deferred until user has computer access): server URL picker,
    `cargo tauri icon` + bundle, flake package.
-6. Auth story if ever exposed beyond LAN (axum middleware + token in
+5. Auth story if ever exposed beyond LAN (axum middleware + token in
    chaos-client is the planned seam).

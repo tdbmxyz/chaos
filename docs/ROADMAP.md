@@ -18,8 +18,10 @@ the previous one.
 - [x] Service icons (`di:`/`si:`/`sh:` like glance, proxied + cached server-side)
 - [x] Bookmarks widget (static groups from config, like glance.nix today)
 - [x] Search bar widget (configurable engine via `search_url`)
-- [ ] Layout: columns/pages driven by config
+- [x] Layout: columns driven by config (`[[columns]]` of widgets; multi-page
+      deferred until a real need shows up)
 - [x] Auto-refresh of service statuses (30s while the dashboard is open)
+- [x] Manual refresh button (re-runs every widget on the page)
 - [ ] Desktop: server URL setting (persisted) — waiting on the desktop focus
 
 ## Phase 2 — Links (Linkwarden core)
@@ -41,10 +43,15 @@ the previous one.
 
 ## Phase 4 — More widgets
 
-- [ ] Weather (Open-Meteo), calendar
-- [ ] RSS/Hacker News/Lobsters feeds
-- [ ] GitHub releases watcher
-- [ ] Server stats (local host metrics)
+Widgets are declared in config columns; data is fetched and cached
+server-side, one instance id per widget (`GET /api/v1/widgets/{id}`).
+
+- [x] Weather (Open-Meteo, geocoded location, 5-day forecast)
+- [x] RSS/Hacker News/Lobsters feeds (one `feed` widget; HN/lobsters are
+      plain RSS via hnrss.org / lobste.rs/rss)
+- [x] GitHub releases watcher (`releases.atom`, no API token needed)
+- [x] Server stats (host metrics via sysinfo; optional `mounts` filter)
+- [ ] Calendar
 - [ ] Custom API widget (user-defined template like glance's custom-api)
 
 ## Phase 5 — Deployment
