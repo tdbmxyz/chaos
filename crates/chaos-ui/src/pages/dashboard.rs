@@ -405,12 +405,15 @@ fn CalendarWidget() -> impl IntoView {
         <section class="widget">
             <div class="calendar-head">
                 <h2>
-                    {move || {
-                        let (year, m) = month.get();
-                        NaiveDate::from_ymd_opt(year, m, 1)
-                            .map(|d| d.format("%B %Y").to_string())
-                            .unwrap_or_default()
-                    }}
+                    // Clicking the title opens the full calendar section.
+                    <a class="widget-title-link" href="/calendar" title="Open calendar">
+                        {move || {
+                            let (year, m) = month.get();
+                            NaiveDate::from_ymd_opt(year, m, 1)
+                                .map(|d| d.format("%B %Y").to_string())
+                                .unwrap_or_default()
+                        }}
+                    </a>
                 </h2>
                 <div class="calendar-nav">
                     <button title="Previous month" on:click=move |_| shift(-1)>"‹"</button>
