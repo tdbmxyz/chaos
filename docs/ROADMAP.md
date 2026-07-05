@@ -51,8 +51,12 @@ server-side, one instance id per widget (`GET /api/v1/widgets/{id}`).
       plain RSS via hnrss.org / lobste.rs/rss)
 - [x] GitHub releases watcher (`releases.atom`, no API token needed)
 - [x] Server stats (host metrics via sysinfo; optional `mounts` filter)
-- [ ] Calendar
-- [ ] Custom API widget (user-defined template like glance's custom-api)
+- [x] Calendar (static month view, client-side)
+- [x] Systemd services manager (native replacement for the glance
+      custom-api + webservice workaround: unit states + start/stop/restart,
+      config allowlist, polkit rule via `services.chaos.systemdControl`)
+- [ ] Custom API widget (user-defined template like glance's custom-api) —
+      lower priority now that the main custom-api use case is native
 
 ## Phase 5 — Deployment
 

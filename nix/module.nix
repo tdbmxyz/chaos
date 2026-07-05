@@ -52,6 +52,22 @@ in {
       description = "Open the chaos port in the firewall.";
     };
 
+    systemdControl = {
+      enable = lib.mkEnableOption "control of systemd units from the chaos dashboard";
+
+      units = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        example = ["stirling-pdf.service" "sunshine.service"];
+        description = ''
+          Units the chaos server may start/stop/restart (for the `systemd`
+          dashboard widget). A polkit rule is installed that allows exactly
+          these units and verbs for the chaos user; the widget config in
+          `settings` should list the same units.
+        '';
+      };
+    };
+
     settings = lib.mkOption {
       type = settingsFormat.type;
       default = {};
@@ -103,14 +119,18 @@ in {
       after = ["network-online.target"];
       wants = ["network-online.target"];
 
-      # The archiver shells out to monolith.
-      path = [cfg.monolithPackage];
+      # The archiver shells out to monolith; the systemd widget to systemctl.
+      path = [cfg.monolithPackage] ++ lib.optional cfg.systemdControl.enable pkgs.systemd;
 
       environment.CHAOS_CONFIG = configFile;
 
       serviceConfig = {
         ExecStart = lib.getExe cfg.package;
-        DynamicUser = true;
+        # polkit rules match on the user name, so unit control needs a
+        # static identity instead of a dynamic one.
+        DynamicUser = !cfg.systemdControl.enable;
+        User = lib.mkIf cfg.systemdControl.enable "chaos";
+        Group = lib.mkIf cfg.systemdControl.enable "chaos";
         StateDirectory = "chaos";
         WorkingDirectory = "/var/lib/chaos";
         Restart = "on-failure";
@@ -127,6 +147,37 @@ in {
         LockPersonality = true;
       };
     };
+
+    users.users.chaos = lib.mkIf cfg.systemdControl.enable {
+      isSystemUser = true;
+      group = "chaos";
+    };
+    users.groups.chaos = lib.mkIf cfg.systemdControl.enable {};
+
+    # systemctl authorizes non-root callers through polkit; allow exactly
+    # the configured units and verbs for the chaos user.
+    security.polkit = lib.mkIf cfg.systemdControl.enable {
+      enable = true;
+      extraConfig = ''
+        polkit.addRule(function (action, subject) {
+          if (
+            action.id == "org.freedesktop.systemd1.manage-units" &&
+            subject.user == "chaos" &&
+            ${builtins.toJSON cfg.systemdControl.units}.indexOf(action.lookup("unit")) >= 0 &&
+            ["start", "stop", "restart"].indexOf(action.lookup("verb")) >= 0
+          ) {
+            return polkit.Result.YES;
+          }
+        });
+      '';
+    };
+
+    assertions = [
+      {
+        assertion = cfg.systemdControl.enable -> cfg.systemdControl.units != [];
+        message = "services.chaos.systemdControl.enable requires systemdControl.units to be non-empty.";
+      }
+    ];
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [cfg.port];
   };

@@ -24,6 +24,15 @@ decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   `GET /api/v1/widgets/{id}`, cached server-side with per-kind TTLs
   (10min/5min/30min/10s), stale payload on upstream failure. See
   `chaos-server/src/widgets/` and chaos.example.toml.
+- **Calendar**: static month widget, fully client-side (Monday-first,
+  prev/today/next).
+- **Systemd manager**: `systemd` widget lists configured units with state
+  dots and start/stop/restart buttons (`controllable = false` for
+  status-only rows). Control via `POST /api/v1/widgets/{id}/systemd`;
+  server enforces the config allowlist (422 otherwise) and shells out to
+  systemctl (5s status TTL). Deployment needs
+  `services.chaos.systemdControl` (static chaos user + scoped polkit
+  rule) — recipe in docs/deployment.md.
 - **Links**: SQLite (sqlx, WAL, FTS5), hierarchical collections
   (cycle-guarded), tags (case-insensitive, auto-GC), quick-add with page
   metadata fetch (og:/title, 6s/2MB bounded), edit dialogs, full-replacement
@@ -57,8 +66,9 @@ decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
 1. **Deploy on zeus** (user action + assist): wire `nixosModules.chaos` into
    the system flake per docs/deployment.md, port the glance servicesList
    mapping, run alongside glance, then retire glance.
-2. Phase 4 leftovers: calendar widget, custom-api widget (user template).
-   Editable bookmarks still an open question.
+2. Phase 4 leftover: custom-api widget (user template) — low priority now
+   that the systemd manager covers the real use case. Editable bookmarks
+   still an open question.
 3. Links polish: pagination UI (API supports limit/offset), FTS5 for
    titles/descriptions too, link icons/favicons, bulk actions.
 4. Desktop (deferred until user has computer access): server URL picker,
