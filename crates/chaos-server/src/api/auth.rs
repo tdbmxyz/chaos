@@ -1,0 +1,68 @@
+//! `/api/v1/auth/*`: login, logout, whoami.
+
+use axum::Json;
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, header};
+use axum::response::{IntoResponse, Response};
+use chaos_domain::{LoginRequest, LoginResponse, User};
+use chrono::{Duration, Utc};
+
+use crate::api::ApiError;
+use crate::auth::{
+    AuthUser, SESSION_COOKIE, SESSION_DAYS, new_token, request_token, token_hash, verify_password,
+};
+use crate::state::AppState;
+
+pub async fn login(
+    State(state): State<AppState>,
+    Json(req): Json<LoginRequest>,
+) -> Result<Response, ApiError> {
+    // Same rejection for unknown user and wrong password.
+    let (user, stored_hash) = state
+        .db
+        .user_with_password(&req.username)
+        .await
+        .map_err(|_| ApiError::Unauthorized)?;
+    if !verify_password(&req.password, &stored_hash) {
+        return Err(ApiError::Unauthorized);
+    }
+
+    let token = new_token();
+    state
+        .db
+        .create_session(
+            &token_hash(&token),
+            user.id,
+            Utc::now() + Duration::days(SESSION_DAYS),
+        )
+        .await?;
+    tracing::info!(username = user.username, "login");
+
+    Ok((
+        session_cookie_headers(&token, SESSION_DAYS * 24 * 60 * 60),
+        Json(LoginResponse { token, user }),
+    )
+        .into_response())
+}
+
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(token) = request_token(&headers) {
+        let _ = state.db.delete_session(&token_hash(&token)).await;
+    }
+    // Expire the cookie either way.
+    (session_cookie_headers("", 0), Json(serde_json::json!({}))).into_response()
+}
+
+pub async fn me(AuthUser(user): AuthUser) -> Json<User> {
+    Json(user)
+}
+
+fn session_cookie_headers(token: &str, max_age_secs: i64) -> HeaderMap {
+    let cookie =
+        format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}");
+    let mut headers = HeaderMap::new();
+    if let Ok(value) = HeaderValue::from_str(&cookie) {
+        headers.insert(header::SET_COOKIE, value);
+    }
+    headers
+}

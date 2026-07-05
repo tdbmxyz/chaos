@@ -39,7 +39,8 @@ pub type Result<T> = std::result::Result<T, DbError>;
 
 #[derive(Clone)]
 pub struct Db {
-    pool: SqlitePool,
+    // pub(crate) so db_auth.rs / db_calendar.rs can add impl blocks.
+    pub(crate) pool: SqlitePool,
 }
 
 impl Db {

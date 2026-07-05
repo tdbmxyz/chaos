@@ -5,9 +5,10 @@
 //! the API surface is exercised from exactly one place.
 
 use chaos_domain::{
-    ApiErrorBody, Collection, CollectionRequest, CreateLinkRequest, DashboardLayout,
-    HealthResponse, Link, LinkPage, LinkQuery, ServiceWithStatus, SystemdActionRequest,
-    TagWithCount, UpdateLinkRequest, WidgetData,
+    ApiErrorBody, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
+    CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse, Link,
+    LinkPage, LinkQuery, LoginRequest, LoginResponse, ServiceWithStatus, SystemdActionRequest,
+    TagWithCount, UpdateLinkRequest, User, WidgetData,
 };
 use url::Url;
 use uuid::Uuid;
@@ -25,12 +26,23 @@ pub enum ClientError {
     Decode(String),
 }
 
+impl ClientError {
+    /// True when the server rejected the session (signed off or expired).
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, ClientError::Api { status: 401, .. })
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ClientError>;
 
 #[derive(Debug, Clone)]
 pub struct ChaosClient {
     base: Url,
     http: reqwest::Client,
+    /// Session token sent as `Authorization: Bearer`. Browsers leave this
+    /// unset and rely on the same-origin session cookie instead; native
+    /// clients (desktop/mobile) store the token from `login`.
+    token: Option<String>,
 }
 
 impl ChaosClient {
@@ -40,7 +52,13 @@ impl ChaosClient {
         Self {
             base,
             http: reqwest::Client::new(),
+            token: None,
         }
+    }
+
+    pub fn with_token(mut self, token: Option<String>) -> Self {
+        self.token = token;
+        self
     }
 
     pub fn base(&self) -> &Url {
@@ -159,6 +177,76 @@ impl ChaosClient {
         self.get("api/v1/tags").await
     }
 
+    // ---- auth ----
+
+    pub async fn login(&self, req: &LoginRequest) -> Result<LoginResponse> {
+        let req = self.http.post(self.url("api/v1/auth/login")?).json(req);
+        self.send(req).await
+    }
+
+    pub async fn logout(&self) -> Result<()> {
+        let req = self.http.post(self.url("api/v1/auth/logout")?);
+        self.send_no_content(req).await
+    }
+
+    /// The signed-in user, or an `Api { status: 401 }` error when logged off.
+    pub async fn me(&self) -> Result<User> {
+        self.get("api/v1/auth/me").await
+    }
+
+    // ---- calendars & events ----
+
+    pub async fn list_calendars(&self) -> Result<Vec<Calendar>> {
+        self.get("api/v1/calendars").await
+    }
+
+    pub async fn create_calendar(&self, req: &CalendarRequest) -> Result<Calendar> {
+        let req = self.http.post(self.url("api/v1/calendars")?).json(req);
+        self.send(req).await
+    }
+
+    pub async fn update_calendar(&self, id: Uuid, req: &CalendarRequest) -> Result<Calendar> {
+        let req = self
+            .http
+            .put(self.url(&format!("api/v1/calendars/{id}"))?)
+            .json(req);
+        self.send(req).await
+    }
+
+    pub async fn delete_calendar(&self, id: Uuid) -> Result<()> {
+        let req = self
+            .http
+            .delete(self.url(&format!("api/v1/calendars/{id}"))?);
+        self.send_no_content(req).await
+    }
+
+    /// Merged events (local + feeds) across all the user's calendars.
+    pub async fn calendar_events(&self, query: &EventQuery) -> Result<Vec<CalendarEvent>> {
+        let req = self
+            .http
+            .get(self.url("api/v1/calendar/events")?)
+            .query(query);
+        self.send(req).await
+    }
+
+    pub async fn create_event(&self, req: &EventRequest) -> Result<Event> {
+        let req = self.http.post(self.url("api/v1/events")?).json(req);
+        self.send(req).await
+    }
+
+    pub async fn update_event(&self, id: Uuid, req: &EventRequest) -> Result<Event> {
+        let req = self
+            .http
+            .put(self.url(&format!("api/v1/events/{id}"))?)
+            .json(req);
+        self.send(req).await
+    }
+
+    pub async fn delete_event(&self, id: Uuid) -> Result<()> {
+        let req = self.http.delete(self.url(&format!("api/v1/events/{id}"))?);
+        self.send_no_content(req).await
+    }
+
     // ---- plumbing ----
 
     fn url(&self, path: &str) -> Result<Url> {
@@ -175,17 +263,21 @@ impl ChaosClient {
         &self,
         req: reqwest::RequestBuilder,
     ) -> Result<T> {
-        let resp = Self::check_status(req).await?;
+        let resp = self.check_status(req).await?;
         resp.json::<T>()
             .await
             .map_err(|e| ClientError::Decode(e.to_string()))
     }
 
     async fn send_no_content(&self, req: reqwest::RequestBuilder) -> Result<()> {
-        Self::check_status(req).await.map(|_| ())
+        self.check_status(req).await.map(|_| ())
     }
 
-    async fn check_status(req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+    async fn check_status(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let req = match &self.token {
+            Some(token) => req.bearer_auth(token),
+            None => req,
+        };
         let resp = req
             .send()
             .await

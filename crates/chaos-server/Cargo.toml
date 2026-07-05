@@ -25,3 +25,11 @@ uuid = { workspace = true, features = ["v7"] }
 scraper = "0.27.0"
 feed-rs = "2"
 sysinfo = { version = "0.35", default-features = false, features = ["system", "disk"] }
+argon2 = { version = "0.5", features = ["std"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+hex = "0.4"
+rpassword = "7"
+ical = "0.11"
+chrono-tz = "0.10"
+rrule = "0.14"

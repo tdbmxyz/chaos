@@ -1,5 +1,7 @@
 //! HTTP API (`/api/v1`) and static frontend serving.
 
+mod auth;
+mod calendar;
 mod collections;
 mod error;
 mod icons;
@@ -23,6 +25,20 @@ use crate::state::AppState;
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
+        .route("/auth/me", get(auth::me))
+        .route("/calendars", get(calendar::list).post(calendar::create))
+        .route(
+            "/calendars/{id}",
+            put(calendar::update).delete(calendar::delete),
+        )
+        .route("/calendar/events", get(calendar::events))
+        .route("/events", post(calendar::create_event))
+        .route(
+            "/events/{id}",
+            put(calendar::update_event).delete(calendar::delete_event),
+        )
         .route("/services", get(services))
         .route("/dashboard", get(dashboard))
         .route("/widgets/{id}", get(widget_data))

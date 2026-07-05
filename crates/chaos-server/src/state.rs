@@ -6,6 +6,7 @@ use tokio::sync::{Notify, RwLock};
 
 use crate::config::Config;
 use crate::db::Db;
+use crate::ics::FeedCache;
 use crate::widgets::WidgetHub;
 
 /// Shared application state, cheap to clone (all `Arc`s / pools inside).
@@ -21,6 +22,8 @@ pub struct AppState {
     pub statuses: Arc<RwLock<HashMap<String, ServiceStatus>>>,
     /// Resolved dashboard layout and widget data caches.
     pub widgets: Arc<WidgetHub>,
+    /// Parsed ICS calendar feeds, cached per calendar id.
+    pub ics: Arc<FeedCache>,
 }
 
 impl AppState {
@@ -33,6 +36,7 @@ impl AppState {
             archive_notify: Arc::new(Notify::new()),
             statuses: Arc::new(RwLock::new(HashMap::new())),
             widgets,
+            ics: Arc::new(FeedCache::default()),
         }
     }
 }

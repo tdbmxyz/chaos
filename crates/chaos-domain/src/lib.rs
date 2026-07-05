@@ -6,11 +6,15 @@
 //! no I/O, no async runtime, no framework dependencies.
 
 pub mod api;
+pub mod auth;
+pub mod calendar;
 pub mod dashboard;
 pub mod links;
 pub mod service;
 
 pub use api::*;
+pub use auth::*;
+pub use calendar::*;
 pub use dashboard::*;
 pub use links::*;
 pub use service::*;

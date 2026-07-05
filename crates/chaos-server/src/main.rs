@@ -1,7 +1,11 @@
 mod api;
 mod archiver;
+mod auth;
 mod config;
 mod db;
+mod db_auth;
+mod db_calendar;
+mod ics;
 mod import;
 mod metadata;
 mod monitor;
@@ -26,15 +30,28 @@ async fn main() -> anyhow::Result<()> {
 
     let state = state::AppState::new(config, db);
 
-    // One-shot CLI mode: `chaos-server import-linkwarden <export.json>`.
+    // One-shot CLI modes.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let [cmd, path] = args.as_slice()
-        && cmd == "import-linkwarden"
-    {
-        return import::linkwarden(&state, std::path::Path::new(path)).await;
-    }
-    if !args.is_empty() {
-        anyhow::bail!("unknown arguments {args:?}; usage: chaos-server [import-linkwarden <file>]");
+    match args.as_slice() {
+        [] => {}
+        [cmd, path] if cmd == "import-linkwarden" => {
+            return import::linkwarden(&state, std::path::Path::new(path)).await;
+        }
+        [cmd, rest @ ..] if cmd == "add-user" && !rest.is_empty() => {
+            let username = &rest[0];
+            let display_name = rest.get(1).cloned().unwrap_or_else(|| username.clone());
+            return add_user(&state, username, &display_name).await;
+        }
+        [cmd] if cmd == "list-users" => {
+            for user in state.db.list_users().await? {
+                println!("{}  {} ({})", user.id, user.username, user.display_name);
+            }
+            return Ok(());
+        }
+        _ => anyhow::bail!(
+            "unknown arguments {args:?}; usage: chaos-server \
+             [import-linkwarden <file> | add-user <username> [display name] | list-users]"
+        ),
     }
 
     monitor::spawn(state.clone());
@@ -49,6 +66,41 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    Ok(())
+}
+
+async fn add_user(
+    state: &state::AppState,
+    username: &str,
+    display_name: &str,
+) -> anyhow::Result<()> {
+    use std::io::{BufRead, IsTerminal};
+
+    // Interactive: hidden prompt with confirmation. Piped (scripts, tests):
+    // one password per line on stdin.
+    let (password, confirm) = if std::io::stdin().is_terminal() {
+        (
+            rpassword::prompt_password("Password: ").context("reading password")?,
+            rpassword::prompt_password("Confirm password: ").context("reading password")?,
+        )
+    } else {
+        let mut line = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut line)
+            .context("reading password from stdin")?;
+        let pass = line.trim_end_matches(['\r', '\n']).to_string();
+        (pass.clone(), pass)
+    };
+    anyhow::ensure!(password == confirm, "passwords do not match");
+    anyhow::ensure!(
+        password.len() >= 8,
+        "password must be at least 8 characters"
+    );
+
+    let hash = auth::hash_password(&password)?;
+    let user = state.db.create_user(username, display_name, &hash).await?;
+    println!("created user {} ({})", user.username, user.id);
     Ok(())
 }
 
