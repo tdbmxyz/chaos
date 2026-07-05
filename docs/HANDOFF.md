@@ -1,4 +1,4 @@
-# chaos — session handoff (2026-07-05, evening)
+# chaos — session handoff (2026-07-05, night)
 
 Fresh-session primer. Everything below is committed on `main`; working tree
 clean. Companion project: [yomu](../../yomu) (manga app, own repo + HANDOFF).
@@ -6,9 +6,9 @@ clean. Companion project: [yomu](../../yomu) (manga app, own repo + HANDOFF).
 ## What chaos is
 
 Glance replacement (dashboard for local services) + Linkwarden replacement
-(links with archiving), one Rust workspace: Leptos 0.8 CSR (trunk) frontend
-served by an Axum server, Tauri v2 scaffold for later desktop use. All
-decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
+(links with archiving) + household calendar, one Rust workspace: Leptos 0.8
+CSR (trunk) frontend served by an Axum server, Tauri v2 scaffold for later
+desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
 
 ## State: what works today (all verified end-to-end)
 
@@ -43,6 +43,19 @@ decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   over extracted page text — searchbox matches archived content.
 - **Import**: `chaos-server import-linkwarden <export.json>` (collections
   incl. nesting, links, tags).
+- **Auth**: users (`chaos-server add-user <name>`, argon2id) + sessions
+  (opaque token, sha256 at rest, 90d; HttpOnly cookie for web, bearer for
+  native). Logged-off works everywhere except calendars. authentik/OIDC is
+  the planned next identity source — see docs/adr/0004-auth-and-calendar.md
+  for the exact seam.
+- **Calendar section**: `/calendar` tab (also via the dashboard calendar
+  widget title). Per-user calendars: `local` (event CRUD in SQLite) and
+  `ics` feed subscriptions (Google secret address / Proton share link),
+  server-cached 10min with RRULE expansion (rrule crate). Merged range view
+  `GET /api/v1/calendar/events?start&end`; broken feeds degrade to a
+  warning. All-day events = symbolic UTC dates.
+- **Mobile**: usable at phone widths (topbar wraps, single-column dashboard,
+  calendar chips become dots, links stack) — verified via 390px screenshots.
 - **Nix**: `nix build .#chaos-server` / `.#chaos-web` both green (trunk runs
   in the sandbox with the lock-pinned wasm-bindgen-cli). NixOS module
   `services.chaos` eval-tested; deployment recipe in `docs/deployment.md`.
@@ -66,12 +79,16 @@ decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
 1. **Deploy on zeus** (user action + assist): wire `nixosModules.chaos` into
    the system flake per docs/deployment.md, port the glance servicesList
    mapping, run alongside glance, then retire glance.
-2. Phase 4 leftover: custom-api widget (user template) — low priority now
-   that the systemd manager covers the real use case. Editable bookmarks
-   still an open question.
-3. Links polish: pagination UI (API supports limit/offset), FTS5 for
+2. authentik integration when the user deploys it: OIDC redirect flow +
+   `sub`→user mapping; session layer unchanged (ADR 0004). Until then:
+   `chaos-server add-user tibo` / `add-user so` on zeus.
+3. Calendar polish: event description shown in day panel (stored but not
+   displayed), week view(?), feed refresh button. Editable bookmarks still
+   an open question.
+4. Links polish: pagination UI (API supports limit/offset), FTS5 for
    titles/descriptions too, link icons/favicons, bulk actions.
-4. Desktop (deferred until user has computer access): server URL picker,
-   `cargo tauri icon` + bundle, flake package.
-5. Auth story if ever exposed beyond LAN (axum middleware + token in
-   chaos-client is the planned seam).
+5. Desktop (deferred until user has computer access): server URL picker +
+   stored bearer token (`ChaosClient::with_token` is ready), `cargo tauri
+   icon` + bundle, flake package.
+6. If ever exposed beyond the LAN: put the remaining public routes behind
+   `AuthUser` (one-line per route) and front with authentik.

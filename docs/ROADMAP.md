@@ -51,12 +51,28 @@ server-side, one instance id per widget (`GET /api/v1/widgets/{id}`).
       plain RSS via hnrss.org / lobste.rs/rss)
 - [x] GitHub releases watcher (`releases.atom`, no API token needed)
 - [x] Server stats (host metrics via sysinfo; optional `mounts` filter)
-- [x] Calendar (static month view, client-side)
+- [x] Calendar (static month view, client-side; title links to the full
+      calendar section)
 - [x] Systemd services manager (native replacement for the glance
       custom-api + webservice workaround: unit states + start/stop/restart,
       config allowlist, polkit rule via `services.chaos.systemdControl`)
-- [ ] Custom API widget (user-defined template like glance's custom-api) —
-      lower priority now that the main custom-api use case is native
+- ~~Custom API widget~~ — dropped: needed custom widgets become native
+      instead (like the systemd manager)
+
+## Phase 6 — Users & calendar section ✅
+
+- [x] Users + sessions (argon2id passwords, opaque tokens sha256-hashed,
+      cookie for web / bearer for native, `chaos-server add-user` CLI)
+- [x] Logged-off as a first-class state (dashboard/links stay public;
+      calendars per-user) — see docs/adr/0004-auth-and-calendar.md
+- [x] Calendar section (`/calendar`, also via the widget title): month view,
+      day panel, event create/edit/delete on local calendars
+- [x] ICS feed subscriptions (Google secret address, Proton share link),
+      server-cached, RRULE expansion
+- [x] Mobile/vertical layout pass (topbar, dashboard, links, calendar)
+- [ ] authentik (OIDC) as external identity provider — session layer is
+      ready, needs the redirect flow + user mapping when authentik is up
+- [ ] CalDAV two-way sync if writing to external calendars is ever needed
 
 ## Phase 5 — Deployment
 
