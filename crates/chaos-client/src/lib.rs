@@ -5,8 +5,9 @@
 //! the API surface is exercised from exactly one place.
 
 use chaos_domain::{
-    ApiErrorBody, Collection, CollectionRequest, CreateLinkRequest, DashboardConfig,
+    ApiErrorBody, Collection, CollectionRequest, CreateLinkRequest, DashboardLayout,
     HealthResponse, Link, LinkPage, LinkQuery, ServiceWithStatus, TagWithCount, UpdateLinkRequest,
+    WidgetData,
 };
 use url::Url;
 use uuid::Uuid;
@@ -54,8 +55,13 @@ impl ChaosClient {
         self.get("api/v1/services").await
     }
 
-    pub async fn dashboard(&self) -> Result<DashboardConfig> {
+    pub async fn dashboard(&self) -> Result<DashboardLayout> {
         self.get("api/v1/dashboard").await
+    }
+
+    /// Live payload of a data widget from the layout (weather, feeds…).
+    pub async fn widget_data(&self, id: &str) -> Result<WidgetData> {
+        self.get(&format!("api/v1/widgets/{id}")).await
     }
 
     /// Server-cached icon for a `di:`/`si:`/`sh:` spec; direct URLs pass

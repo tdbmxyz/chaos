@@ -1,0 +1,174 @@
+//! Weather provider backed by Open-Meteo (no API key required).
+//!
+//! The configured location string is geocoded once per process via the
+//! Open-Meteo geocoding API; forecasts then go through the regular forecast
+//! endpoint and are cached by the hub.
+
+use std::collections::HashMap;
+
+use chaos_domain::{DailyForecast, WeatherData, WidgetData};
+use serde::Deserialize;
+use tokio::sync::RwLock;
+
+#[derive(Debug, Clone)]
+pub struct Place {
+    pub name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+pub async fn fetch(
+    http: &reqwest::Client,
+    geocode_cache: &RwLock<HashMap<String, Place>>,
+    location: &str,
+) -> Result<WidgetData, String> {
+    let place = resolve(http, geocode_cache, location).await?;
+
+    let url = format!(
+        "https://api.open-meteo.com/v1/forecast\
+         ?latitude={lat}&longitude={lon}\
+         &current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m\
+         &daily=weather_code,temperature_2m_max,temperature_2m_min\
+         &timezone=auto&forecast_days=5",
+        lat = place.latitude,
+        lon = place.longitude,
+    );
+    let forecast: Forecast = get_json(http, &url).await?;
+
+    let daily = forecast
+        .daily
+        .time
+        .into_iter()
+        .zip(forecast.daily.temperature_2m_min)
+        .zip(forecast.daily.temperature_2m_max)
+        .zip(forecast.daily.weather_code)
+        .map(|(((date, min_c), max_c), weather_code)| DailyForecast {
+            date,
+            min_c,
+            max_c,
+            weather_code,
+        })
+        .collect();
+
+    let current = forecast.current;
+    Ok(WidgetData::Weather(WeatherData {
+        location: place.name,
+        temperature_c: current.temperature_2m,
+        apparent_c: current.apparent_temperature,
+        humidity_pct: current.relative_humidity_2m,
+        wind_kmh: current.wind_speed_10m,
+        weather_code: current.weather_code,
+        description: describe(current.weather_code).to_string(),
+        daily,
+    }))
+}
+
+async fn resolve(
+    http: &reqwest::Client,
+    cache: &RwLock<HashMap<String, Place>>,
+    location: &str,
+) -> Result<Place, String> {
+    if let Some(place) = cache.read().await.get(location) {
+        return Ok(place.clone());
+    }
+
+    let url = format!(
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json",
+        urlencoded(location)
+    );
+    let response: GeocodeResponse = get_json(http, &url).await?;
+    let hit = response
+        .results
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("location {location:?} not found by geocoding"))?;
+
+    let name = match &hit.country_code {
+        Some(cc) => format!("{}, {}", hit.name, cc),
+        None => hit.name.clone(),
+    };
+    let place = Place {
+        name,
+        latitude: hit.latitude,
+        longitude: hit.longitude,
+    };
+    cache
+        .write()
+        .await
+        .insert(location.to_string(), place.clone());
+    Ok(place)
+}
+
+async fn get_json<T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    url: &str,
+) -> Result<T, String> {
+    let resp = http.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("open-meteo returned {}", resp.status()));
+    }
+    resp.json::<T>().await.map_err(|e| e.to_string())
+}
+
+fn urlencoded(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// WMO weather interpretation codes (Open-Meteo docs).
+fn describe(code: i32) -> &'static str {
+    match code {
+        0 => "Clear sky",
+        1 => "Mainly clear",
+        2 => "Partly cloudy",
+        3 => "Overcast",
+        45 | 48 => "Fog",
+        51 | 53 | 55 => "Drizzle",
+        56 | 57 => "Freezing drizzle",
+        61 | 63 | 65 => "Rain",
+        66 | 67 => "Freezing rain",
+        71 | 73 | 75 => "Snow",
+        77 => "Snow grains",
+        80..=82 => "Rain showers",
+        85 | 86 => "Snow showers",
+        95 => "Thunderstorm",
+        96 | 99 => "Thunderstorm with hail",
+        _ => "Unknown",
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GeocodeResponse {
+    #[serde(default)]
+    results: Vec<GeocodeHit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeocodeHit {
+    name: String,
+    latitude: f64,
+    longitude: f64,
+    country_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Forecast {
+    current: CurrentWeather,
+    daily: DailySeries,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentWeather {
+    temperature_2m: f64,
+    apparent_temperature: f64,
+    relative_humidity_2m: Option<f64>,
+    weather_code: i32,
+    wind_speed_10m: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DailySeries {
+    time: Vec<chrono::NaiveDate>,
+    weather_code: Vec<i32>,
+    temperature_2m_max: Vec<f64>,
+    temperature_2m_min: Vec<f64>,
+}

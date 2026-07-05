@@ -8,7 +8,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use chaos_domain::{BookmarkGroup, ServiceDef};
+use chaos_domain::{BookmarkGroup, ColumnSize, ServiceDef, Widget};
 use figment::Figment;
 use figment::providers::{Env, Format, Serialized, Toml};
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,19 @@ pub struct Config {
     pub services: Vec<ServiceDef>,
     /// Static bookmark groups shown on the dashboard.
     pub bookmarks: Vec<BookmarkGroup>,
+    /// Dashboard layout: columns of widgets. When empty, a default single
+    /// column (search + services + bookmarks) is derived from the fields
+    /// above — see `widgets::resolve_layout`.
+    pub columns: Vec<ColumnConfig>,
+}
+
+/// One dashboard column as written in configuration. Widget instance ids are
+/// assigned by the server, so the config only lists widget definitions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColumnConfig {
+    pub size: ColumnSize,
+    pub widgets: Vec<Widget>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +97,7 @@ impl Default for Config {
             archive: ArchiveConfig::default(),
             services: Vec::new(),
             bookmarks: Vec::new(),
+            columns: Vec::new(),
         }
     }
 }

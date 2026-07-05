@@ -5,10 +5,10 @@ mod error;
 mod icons;
 mod links;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::routing::{get, put};
 use axum::{Json, Router};
-use chaos_domain::{DashboardConfig, HealthResponse, ServiceStatus, ServiceWithStatus};
+use chaos_domain::{DashboardLayout, HealthResponse, ServiceStatus, ServiceWithStatus, WidgetData};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -22,6 +22,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/services", get(services))
         .route("/dashboard", get(dashboard))
+        .route("/widgets/{id}", get(widget_data))
         .route("/icons/{spec}", get(icons::icon))
         .route("/links", get(links::list).post(links::create))
         .route(
@@ -67,11 +68,24 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-async fn dashboard(State(state): State<AppState>) -> Json<DashboardConfig> {
-    Json(DashboardConfig {
-        search_url: state.config.search_url.clone(),
-        bookmarks: state.config.bookmarks.clone(),
-    })
+async fn dashboard(State(state): State<AppState>) -> Json<DashboardLayout> {
+    Json(state.widgets.layout.clone())
+}
+
+async fn widget_data(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<WidgetData>, ApiError> {
+    use crate::widgets::WidgetError;
+    state
+        .widgets
+        .data(&id)
+        .await
+        .map(Json)
+        .map_err(|err| match err {
+            WidgetError::UnknownWidget => ApiError::NotFound,
+            WidgetError::Upstream(reason) => ApiError::BadGateway(reason),
+        })
 }
 
 async fn services(State(state): State<AppState>) -> Json<Vec<ServiceWithStatus>> {

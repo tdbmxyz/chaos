@@ -12,6 +12,8 @@ pub enum ApiError {
     NotFound,
     /// Client mistakes: bad references, empty names, cycles…
     Unprocessable(String),
+    /// An upstream service (widget provider) failed or timed out.
+    BadGateway(String),
     Internal(String),
 }
 
@@ -34,6 +36,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::Unprocessable(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+            ApiError::BadGateway(msg) => (StatusCode::BAD_GATEWAY, msg),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         (status, Json(ApiErrorBody { message })).into_response()

@@ -55,3 +55,45 @@ icon = "si:github"
 title = "Reddit"
 url = "https://reddit.com"
 icon = "si:reddit"
+
+# ---- layout (optional) ----
+# Without [[columns]] the dashboard is a single column: search bar, services,
+# bookmarks. With columns you place widgets explicitly; search/bookmarks
+# widgets fall back to the top-level `search_url` / `[[bookmarks]]` above.
+#
+# Widget types: search, services, bookmarks, weather, feed, releases,
+# server_stats. Data widgets are fetched and cached server-side.
+
+[[columns]]
+size = "full"
+
+[[columns.widgets]]
+type = "search"
+
+[[columns.widgets]]
+type = "services"
+
+[[columns.widgets]]
+type = "feed"
+title = "Hacker News"
+urls = ["https://hnrss.org/frontpage"]
+limit = 10
+
+[[columns.widgets]]
+type = "bookmarks"
+
+[[columns]]
+size = "small"
+
+[[columns.widgets]]
+type = "weather"
+location = "Paris"
+
+[[columns.widgets]]
+type = "releases"
+repos = ["leptos-rs/leptos", "tauri-apps/tauri", "Y2Z/monolith"]
+limit = 6
+
+[[columns.widgets]]
+type = "server_stats"
+# mounts = ["/", "/data"]   # limit the disk list; empty shows every filesystem

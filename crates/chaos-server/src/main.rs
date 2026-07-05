@@ -6,6 +6,7 @@ mod import;
 mod metadata;
 mod monitor;
 mod state;
+mod widgets;
 
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
