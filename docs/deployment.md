@@ -1,9 +1,11 @@
 # Deploying chaos on NixOS (replacing glance)
 
 The flake exposes packages (`chaos-server`, `chaos-web`) and a NixOS module
-(`nixosModules.chaos`). The module runs the server under a dynamic user with
-state in `/var/lib/chaos` (database, page archives, icon cache), serves the
-built frontend, and puts `monolith` on the service PATH for archiving.
+(`nixosModules.chaos`). The module runs the server as the static `chaos`
+system user with state in `/var/lib/chaos` (database, page archives, icon
+cache), serves the built frontend, puts `monolith` on the service PATH for
+archiving, and installs a `chaos-admin` host command for server-side
+administration (user accounts, imports).
 
 ## System flake wiring
 
@@ -69,6 +71,31 @@ Icon conventions are the glance ones: `di:` (dashboard-icons), `si:`
 caches them in `/var/lib/chaos/icons`, so browsers on the LAN never need
 internet access for icons.
 
+## Creating user accounts (calendar section)
+
+Calendars are per-user; the dashboard and links work logged off. Accounts
+are created on the host with `chaos-admin`, which wraps `chaos-server` with
+the service's config and runs it as the `chaos` user (run it as root; DB
+migrations apply automatically, and it is safe while the service runs):
+
+```console
+# chaos-admin add-user tibo Tibo      # prompts for the password twice
+# chaos-admin add-user so "SO"
+# chaos-admin list-users
+```
+
+Sign in from the web UI (topbar → Sign in). External calendars are added in
+the app itself (Calendar → Calendars → “Subscribe to an ICS feed”):
+
+- Google Calendar: Settings → your calendar → “Secret address in iCal
+  format”.
+- Proton Calendar: share the calendar with a link (read access) and use the
+  .ics URL.
+
+Password login is the only identity source today; the session layer is
+designed so authentik (OIDC) can be added later without schema changes —
+see docs/adr/0004-auth-and-calendar.md.
+
 ## Options summary
 
 | Option | Default | Purpose |
@@ -118,13 +145,13 @@ services.chaos = {
 };
 ```
 
-`systemdControl` swaps DynamicUser for a static `chaos` user and installs a
-polkit rule allowing exactly those units and verbs for that user — no sudo
-wrappers or sidecar webservices. The widget config is its own allowlist on
-top: the HTTP API refuses units (or actions on `controllable = false`
-units) that are not declared on the widget, so the reachable surface is
-the intersection of both lists. Without the polkit rule, actions fail with
-"interactive authentication required" while status display keeps working.
+`systemdControl` installs a polkit rule allowing exactly those units and
+verbs for the `chaos` service user — no sudo wrappers or sidecar
+webservices. The widget config is its own allowlist on top: the HTTP API
+refuses units (or actions on `controllable = false` units) that are not
+declared on the widget, so the reachable surface is the intersection of
+both lists. Without the polkit rule, actions fail with "interactive
+authentication required" while status display keeps working.
 
 ## Migrating Linkwarden data
 

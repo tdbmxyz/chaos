@@ -81,7 +81,8 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
    mapping, run alongside glance, then retire glance.
 2. authentik integration when the user deploys it: OIDC redirect flow +
    `sub`→user mapping; session layer unchanged (ADR 0004). Until then:
-   `chaos-server add-user tibo` / `add-user so` on zeus.
+   `chaos-admin add-user tibo` / `add-user so` on zeus (module wraps the
+   CLI with the service config + chaos user).
 3. Calendar polish: event description shown in day panel (stored but not
    displayed), week view(?), feed refresh button. Editable bookmarks still
    an open question.

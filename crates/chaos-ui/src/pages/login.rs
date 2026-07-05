@@ -76,7 +76,7 @@ pub fn Login() -> impl IntoView {
                     {move || if busy.get() { "Signing in…" } else { "Sign in" }}
                 </button>
                 <p class="muted login-hint">
-                    "Accounts are created on the server: chaos-server add-user <name>"
+                    "Accounts are created on the server: chaos-admin add-user <name>"
                 </p>
             </form>
         </div>

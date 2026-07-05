@@ -9,6 +9,19 @@ self: {
   cfg = config.services.chaos;
   settingsFormat = pkgs.formats.toml {};
   configFile = settingsFormat.generate "chaos.toml" cfg.settings;
+
+  # Host-side CLI against the service's config and state (add-user,
+  # list-users, import-linkwarden), dropping to the chaos user so the
+  # SQLite WAL sidecar files keep the right owner.
+  adminScript = pkgs.writeShellScriptBin "chaos-admin" ''
+    set -euo pipefail
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "chaos-admin must run as root (it re-executes as the chaos user)" >&2
+      exit 1
+    fi
+    exec ${pkgs.util-linux}/bin/runuser -u chaos -- \
+      env CHAOS_CONFIG=${configFile} ${lib.getExe cfg.package} "$@"
+  '';
 in {
   options.services.chaos = {
     enable = lib.mkEnableOption "chaos, the unified dashboard for local services";
@@ -126,11 +139,11 @@ in {
 
       serviceConfig = {
         ExecStart = lib.getExe cfg.package;
-        # polkit rules match on the user name, so unit control needs a
-        # static identity instead of a dynamic one.
-        DynamicUser = !cfg.systemdControl.enable;
-        User = lib.mkIf cfg.systemdControl.enable "chaos";
-        Group = lib.mkIf cfg.systemdControl.enable "chaos";
+        # Static identity (not DynamicUser): user accounts live in the DB
+        # and `chaos-admin` must reach it as the same unix user, and the
+        # systemdControl polkit rule matches on the user name.
+        User = "chaos";
+        Group = "chaos";
         StateDirectory = "chaos";
         WorkingDirectory = "/var/lib/chaos";
         Restart = "on-failure";
@@ -148,11 +161,16 @@ in {
       };
     };
 
-    users.users.chaos = lib.mkIf cfg.systemdControl.enable {
+    users.users.chaos = {
       isSystemUser = true;
       group = "chaos";
     };
-    users.groups.chaos = lib.mkIf cfg.systemdControl.enable {};
+    users.groups.chaos = {};
+
+    environment.systemPackages = [adminScript];
+
+    # So chaos-admin works even before the service's first start.
+    systemd.tmpfiles.rules = ["d /var/lib/chaos 0750 chaos chaos -"];
 
     # systemctl authorizes non-root callers through polkit; allow exactly
     # the configured units and verbs for the chaos user.
