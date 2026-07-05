@@ -6,8 +6,8 @@
 
 use chaos_domain::{
     ApiErrorBody, Collection, CollectionRequest, CreateLinkRequest, DashboardLayout,
-    HealthResponse, Link, LinkPage, LinkQuery, ServiceWithStatus, TagWithCount, UpdateLinkRequest,
-    WidgetData,
+    HealthResponse, Link, LinkPage, LinkQuery, ServiceWithStatus, SystemdActionRequest,
+    TagWithCount, UpdateLinkRequest, WidgetData,
 };
 use url::Url;
 use uuid::Uuid;
@@ -62,6 +62,16 @@ impl ChaosClient {
     /// Live payload of a data widget from the layout (weather, feeds…).
     pub async fn widget_data(&self, id: &str) -> Result<WidgetData> {
         self.get(&format!("api/v1/widgets/{id}")).await
+    }
+
+    /// Start/stop/restart a unit of a systemd widget; returns the refreshed
+    /// unit states of that widget.
+    pub async fn systemd_action(&self, id: &str, req: &SystemdActionRequest) -> Result<WidgetData> {
+        let req = self
+            .http
+            .post(self.url(&format!("api/v1/widgets/{id}/systemd"))?)
+            .json(req);
+        self.send(req).await
     }
 
     /// Server-cached icon for a `di:`/`si:`/`sh:` spec; direct URLs pass

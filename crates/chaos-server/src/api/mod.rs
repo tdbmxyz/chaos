@@ -6,9 +6,12 @@ mod icons;
 mod links;
 
 use axum::extract::{Path, State};
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use chaos_domain::{DashboardLayout, HealthResponse, ServiceStatus, ServiceWithStatus, WidgetData};
+use chaos_domain::{
+    DashboardLayout, HealthResponse, ServiceStatus, ServiceWithStatus, SystemdActionRequest,
+    WidgetData,
+};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -23,6 +26,7 @@ pub fn router(state: AppState) -> Router {
         .route("/services", get(services))
         .route("/dashboard", get(dashboard))
         .route("/widgets/{id}", get(widget_data))
+        .route("/widgets/{id}/systemd", post(widget_systemd))
         .route("/icons/{spec}", get(icons::icon))
         .route("/links", get(links::list).post(links::create))
         .route(
@@ -76,16 +80,20 @@ async fn widget_data(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<WidgetData>, ApiError> {
-    use crate::widgets::WidgetError;
+    state.widgets.data(&id).await.map(Json).map_err(Into::into)
+}
+
+async fn widget_systemd(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<SystemdActionRequest>,
+) -> Result<Json<WidgetData>, ApiError> {
     state
         .widgets
-        .data(&id)
+        .systemd_action(&id, &req)
         .await
         .map(Json)
-        .map_err(|err| match err {
-            WidgetError::UnknownWidget => ApiError::NotFound,
-            WidgetError::Upstream(reason) => ApiError::BadGateway(reason),
-        })
+        .map_err(Into::into)
 }
 
 async fn services(State(state): State<AppState>) -> Json<Vec<ServiceWithStatus>> {

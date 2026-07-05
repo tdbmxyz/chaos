@@ -71,6 +71,33 @@ pub enum Widget {
         #[serde(default)]
         mounts: Vec<String>,
     },
+    /// Static month view, rendered entirely client-side.
+    Calendar,
+    /// State (and optional control) of systemd units on the server host.
+    /// Only the units listed here can ever be touched; control actions go
+    /// through `POST /api/v1/widgets/{id}/systemd`.
+    Systemd {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        units: Vec<SystemdUnitDef>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemdUnitDef {
+    /// Full unit name, e.g. `"stirling-pdf.service"`.
+    pub unit: String,
+    /// Display name; defaults to the unit name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether start/stop/restart buttons are offered (status is always
+    /// shown). Defaults to true — listing a unit is already an opt-in.
+    #[serde(default = "default_true")]
+    pub controllable: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_feed_limit() -> u32 {
@@ -90,6 +117,7 @@ impl Widget {
                 | Widget::Feed { .. }
                 | Widget::Releases { .. }
                 | Widget::ServerStats { .. }
+                | Widget::Systemd { .. }
         )
     }
 }
@@ -135,6 +163,18 @@ pub enum WidgetData {
     Feed { items: Vec<FeedItem> },
     Releases { items: Vec<ReleaseItem> },
     ServerStats(ServerStats),
+    Systemd { units: Vec<SystemdUnitStatus> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemdUnitStatus {
+    pub unit: String,
+    pub title: String,
+    /// systemd ActiveState (`active`, `inactive`, `failed`, `activating`,
+    /// `deactivating`, `reloading`) or `not-found` for unknown units.
+    pub active_state: String,
+    pub sub_state: String,
+    pub controllable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

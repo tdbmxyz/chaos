@@ -17,6 +17,17 @@ pub enum ApiError {
     Internal(String),
 }
 
+impl From<crate::widgets::WidgetError> for ApiError {
+    fn from(err: crate::widgets::WidgetError) -> Self {
+        use crate::widgets::WidgetError;
+        match err {
+            WidgetError::UnknownWidget => ApiError::NotFound,
+            WidgetError::Rejected(msg) => ApiError::Unprocessable(msg),
+            WidgetError::Upstream(reason) => ApiError::BadGateway(reason),
+        }
+    }
+}
+
 impl From<DbError> for ApiError {
     fn from(err: DbError) -> Self {
         match err {

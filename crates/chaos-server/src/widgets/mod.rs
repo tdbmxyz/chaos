@@ -11,6 +11,7 @@
 mod feed;
 mod releases;
 mod stats;
+mod systemd;
 mod weather;
 
 use std::collections::HashMap;
@@ -43,6 +44,9 @@ struct CacheEntry {
 #[derive(Debug)]
 pub enum WidgetError {
     UnknownWidget,
+    /// The request is well-formed but not allowed by the widget's config
+    /// (e.g. controlling a unit that is not on the allowlist).
+    Rejected(String),
     Upstream(String),
 }
 
@@ -104,11 +108,52 @@ impl WidgetHub {
             Widget::Feed { urls, limit, .. } => feed::fetch(&self.http, urls, *limit).await,
             Widget::Releases { repos, limit } => releases::fetch(&self.http, repos, *limit).await,
             Widget::ServerStats { mounts } => stats::collect(mounts.clone()).await,
+            Widget::Systemd { units, .. } => systemd::fetch(units).await,
             // Static widgets are never registered in `entries`.
-            Widget::Search { .. } | Widget::Services | Widget::Bookmarks { .. } => {
-                Err("widget has no data endpoint".into())
-            }
+            Widget::Search { .. }
+            | Widget::Services
+            | Widget::Bookmarks { .. }
+            | Widget::Calendar => Err("widget has no data endpoint".into()),
         }
+    }
+
+    /// Start/stop/restart one systemd unit of a systemd widget, then return
+    /// (and cache) the refreshed unit states. The unit must be configured on
+    /// that widget instance and marked controllable.
+    pub async fn systemd_action(
+        &self,
+        id: &str,
+        req: &chaos_domain::SystemdActionRequest,
+    ) -> Result<WidgetData, WidgetError> {
+        let widget = self.entries.get(id).ok_or(WidgetError::UnknownWidget)?;
+        let Widget::Systemd { units, .. } = widget else {
+            return Err(WidgetError::Rejected("not a systemd widget".into()));
+        };
+        let def = units
+            .iter()
+            .find(|u| u.unit == req.unit)
+            .ok_or_else(|| WidgetError::Rejected(format!("unit {:?} not configured", req.unit)))?;
+        if !def.controllable {
+            return Err(WidgetError::Rejected(format!(
+                "unit {:?} is not controllable",
+                req.unit
+            )));
+        }
+
+        tracing::info!(unit = def.unit, verb = req.action.verb(), "systemd action");
+        systemd::act(&def.unit, req.action)
+            .await
+            .map_err(WidgetError::Upstream)?;
+
+        let data = self.fetch(widget).await.map_err(WidgetError::Upstream)?;
+        self.cache.write().await.insert(
+            id.to_string(),
+            CacheEntry {
+                fetched: Instant::now(),
+                data: data.clone(),
+            },
+        );
+        Ok(data)
     }
 }
 
@@ -119,7 +164,10 @@ fn ttl(widget: &Widget) -> Duration {
         Widget::Feed { .. } => Duration::from_secs(300),
         Widget::Releases { .. } => Duration::from_secs(1800),
         Widget::ServerStats { .. } => Duration::from_secs(10),
-        Widget::Search { .. } | Widget::Services | Widget::Bookmarks { .. } => Duration::ZERO,
+        Widget::Systemd { .. } => Duration::from_secs(5),
+        Widget::Search { .. } | Widget::Services | Widget::Bookmarks { .. } | Widget::Calendar => {
+            Duration::ZERO
+        }
     }
 }
 
@@ -241,6 +289,48 @@ mod tests {
             Widget::Search {
                 search_url: Some(_)
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn systemd_action_enforces_the_allowlist() {
+        use chaos_domain::{SystemdAction, SystemdActionRequest, SystemdUnitDef};
+
+        let mut config = base_config();
+        config.columns = vec![ColumnConfig {
+            size: ColumnSize::Full,
+            widgets: vec![
+                Widget::Services,
+                Widget::Systemd {
+                    title: None,
+                    units: vec![SystemdUnitDef {
+                        unit: "locked.service".into(),
+                        title: None,
+                        controllable: false,
+                    }],
+                },
+            ],
+        }];
+        let hub = WidgetHub::new(&config);
+
+        let req = |unit: &str| SystemdActionRequest {
+            unit: unit.into(),
+            action: SystemdAction::Restart,
+        };
+        // Unknown widget id, widget without units, unit not configured, and
+        // a non-controllable unit must all be refused before any systemctl
+        // call happens.
+        assert!(matches!(
+            hub.systemd_action("nope", &req("locked.service")).await,
+            Err(WidgetError::UnknownWidget)
+        ));
+        assert!(matches!(
+            hub.systemd_action("w0-1", &req("other.service")).await,
+            Err(WidgetError::Rejected(_))
+        ));
+        assert!(matches!(
+            hub.systemd_action("w0-1", &req("locked.service")).await,
+            Err(WidgetError::Rejected(_))
         ));
     }
 

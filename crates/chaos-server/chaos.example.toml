@@ -62,7 +62,8 @@ icon = "si:reddit"
 # widgets fall back to the top-level `search_url` / `[[bookmarks]]` above.
 #
 # Widget types: search, services, bookmarks, weather, feed, releases,
-# server_stats. Data widgets are fetched and cached server-side.
+# server_stats, calendar, systemd. Data widgets are fetched and cached
+# server-side.
 
 [[columns]]
 size = "full"
@@ -88,6 +89,22 @@ size = "small"
 [[columns.widgets]]
 type = "weather"
 location = "Paris"
+
+[[columns.widgets]]
+type = "calendar"
+
+# Systemd services manager: shows unit state and offers start/stop/restart.
+# Only units listed here can ever be touched; the server user needs polkit
+# rights for them (services.chaos.systemdControl on NixOS, see
+# docs/deployment.md).
+# [[columns.widgets]]
+# type = "systemd"
+# title = "Machines"
+# units = [
+#   { unit = "stirling-pdf.service", title = "Stirling PDF" },
+#   { unit = "sunshine.service", title = "Remote desktop" },
+#   { unit = "sshd.service", title = "SSH", controllable = false },
+# ]
 
 [[columns.widgets]]
 type = "releases"

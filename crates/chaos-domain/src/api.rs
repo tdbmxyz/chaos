@@ -71,6 +71,35 @@ pub struct LinkPage {
     pub total: u64,
 }
 
+// ---- widgets ----
+
+/// Body of `POST /api/v1/widgets/{id}/systemd`. The unit must be one of the
+/// units configured on that widget instance (and marked controllable).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemdActionRequest {
+    pub unit: String,
+    pub action: SystemdAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemdAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl SystemdAction {
+    /// The systemctl verb.
+    pub fn verb(self) -> &'static str {
+        match self {
+            SystemdAction::Start => "start",
+            SystemdAction::Stop => "stop",
+            SystemdAction::Restart => "restart",
+        }
+    }
+}
+
 // ---- collections ----
 
 /// Shared by create and update (update = full replacement).
