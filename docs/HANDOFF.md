@@ -93,10 +93,14 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   LinkPage.total) and per-site favicons (`fav:<host>` icon kind →
   DuckDuckGo ip3, cached like other icons; empty upstream bodies 404
   instead of being cached).
-- **Themes**: five selectable looks (midnight/daylight/sidebar/glass/
-  terminal) as `body[data-theme]` CSS blocks, picker in the topbar,
-  persisted as `chaos-theme` in localStorage. Sidebar theme = left rail on
-  desktop, bottom tabs on phone. Pick one, then prune.
+- **Design (decided 2026-07-06)**: the sidebar layout IS the app — fixed
+  left nav rail (Settings + account pinned to the bottom) that becomes a
+  bottom tab bar on phones; the alternative layouts (columns/hub/bento)
+  were pruned after comparison. Palettes live on `/settings` (radio list
+  with swatches, applied as `body[data-theme]`, persisted per device):
+  Campbell (Windows Terminal scheme, the default), GitHub Dark, Midnight,
+  Daylight, Glass, Terminal. Per-kind widget classes
+  (`widget-services`, …) remain for styling hooks.
 - **Nix**: `nix build .#chaos-server` / `.#chaos-web` / `.#chaos-desktop`
   green (trunk runs in the sandbox with the lock-pinned wasm-bindgen-cli).
   NixOS module `services.chaos` eval-tested; deployment recipe in

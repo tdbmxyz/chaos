@@ -27,44 +27,83 @@ pub struct AppConfig {
 const TOKEN_KEY: &str = "chaos-token";
 const API_BASE_KEY: &str = "chaos-api-base";
 const THEME_KEY: &str = "chaos-theme";
-const LAYOUT_KEY: &str = "chaos-layout";
 
-/// (id, label) of every selectable palette (colors/typography only —
-/// structure is the orthogonal [`LAYOUTS`] setting). Pure CSS under
-/// `body[data-theme="…"]`; the first one is the default.
-pub const THEMES: &[(&str, &str)] = &[
-    ("midnight", "Midnight"),
-    ("daylight", "Daylight"),
-    ("glass", "Glass"),
-    ("terminal", "Terminal"),
+/// Every selectable theme: (id, name, one-line description, swatches).
+/// Pure CSS under `body[data-theme="…"]`; the first one is the default.
+/// Chosen on the settings page, persisted per device.
+pub const THEMES: &[Theme] = &[
+    Theme {
+        id: "campbell",
+        name: "Campbell",
+        description: "The Windows Terminal scheme: near-black, primary colors.",
+        swatches: ["#0c0c0c", "#171717", "#3b78ff"],
+    },
+    Theme {
+        id: "github",
+        name: "GitHub Dark",
+        description: "GitHub's dark mode: blue-tinted greys.",
+        swatches: ["#0d1117", "#161b22", "#58a6ff"],
+    },
+    Theme {
+        id: "midnight",
+        name: "Midnight",
+        description: "The original chaos look: slate blue-grey.",
+        swatches: ["#14161c", "#1c1f27", "#7c9aff"],
+    },
+    Theme {
+        id: "daylight",
+        name: "Daylight",
+        description: "Light mode for bright rooms.",
+        swatches: ["#f3f4f8", "#ffffff", "#3b5bdb"],
+    },
+    Theme {
+        id: "glass",
+        name: "Glass",
+        description: "Gradient backdrop, translucent cards, violet accent.",
+        swatches: ["#101223", "#2a2440", "#b28dff"],
+    },
+    Theme {
+        id: "terminal",
+        name: "Terminal",
+        description: "Flat monospace, green on black, dense.",
+        swatches: ["#0b0e0b", "#10140f", "#6fdd8b"],
+    },
 ];
 
-/// (id, label) of every structural layout — navigation position, widget
-/// arrangement, density — under `body[data-layout="…"]`. Combines freely
-/// with any palette.
-pub const LAYOUTS: &[(&str, &str)] = &[
-    ("columns", "Columns"),
-    ("sidebar", "Sidebar"),
-    ("hub", "Hub"),
-    ("bento", "Bento"),
-];
-
-fn stored_setting(key: &str, options: &[(&str, &str)]) -> String {
-    local_storage()
-        .and_then(|s| s.get_item(key).ok().flatten())
-        .filter(|v| options.iter().any(|(id, _)| id == v))
-        .unwrap_or_else(|| options[0].0.to_string())
+#[derive(Clone, Copy)]
+pub struct Theme {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    /// Background / surface / accent preview dots.
+    pub swatches: [&'static str; 3],
 }
 
-fn apply_setting(attr: &str, key: &str, value: &str) {
+/// The active theme id, provided as context so the settings page can
+/// change it from anywhere.
+#[derive(Clone, Copy)]
+pub struct ThemeSetting(pub RwSignal<String>);
+
+pub fn use_theme() -> ThemeSetting {
+    use_context::<ThemeSetting>().expect("ThemeSetting provided by App")
+}
+
+fn stored_theme() -> String {
+    local_storage()
+        .and_then(|s| s.get_item(THEME_KEY).ok().flatten())
+        .filter(|v| THEMES.iter().any(|t| t.id == v))
+        .unwrap_or_else(|| THEMES[0].id.to_string())
+}
+
+fn apply_theme(value: &str) {
     if let Some(body) = web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.body())
     {
-        let _ = body.set_attribute(attr, value);
+        let _ = body.set_attribute("data-theme", value);
     }
     if let Some(storage) = local_storage() {
-        let _ = storage.set_item(key, value);
+        let _ = storage.set_item(THEME_KEY, value);
     }
 }
 
@@ -121,12 +160,11 @@ pub fn App(config: AppConfig) -> impl IntoView {
         }
     });
 
-    // Palette + structural layout: applied as `data-theme` / `data-layout`
-    // on <body>, persisted, all-CSS.
-    let theme = RwSignal::new(stored_setting(THEME_KEY, THEMES));
-    Effect::new(move |_| apply_setting("data-theme", THEME_KEY, &theme.get()));
-    let layout = RwSignal::new(stored_setting(LAYOUT_KEY, LAYOUTS));
-    Effect::new(move |_| apply_setting("data-layout", LAYOUT_KEY, &layout.get()));
+    // Theme: applied as `data-theme` on <body>, persisted, all-CSS.
+    // Changed from the settings page via the ThemeSetting context.
+    let theme = ThemeSetting(RwSignal::new(stored_theme()));
+    provide_context(theme);
+    Effect::new(move |_| apply_theme(&theme.0.get()));
 
     let logout = Callback::new({
         let client = use_client();
@@ -149,27 +187,26 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <A href="/">"Dashboard"</A>
                 <A href="/links">"Links"</A>
                 <A href="/calendar">"Calendar"</A>
-                <span class="pickers">
-                    <SettingPicker signal=layout options=LAYOUTS title="Layout"/>
-                    <SettingPicker signal=theme options=THEMES title="Theme"/>
-                </span>
-                <span class="topbar-account">
-                    {move || match session.0.get() {
-                        Some(user) => {
-                            view! {
-                                <span class="topbar-user">{user.display_name}</span>
-                                <button
-                                    class="topbar-logout"
-                                    title="Sign out"
-                                    on:click=move |ev| logout.run(ev)
-                                >
-                                    "Sign out"
-                                </button>
+                <span class="topbar-foot">
+                    <A href="/settings">"Settings"</A>
+                    <span class="topbar-account">
+                        {move || match session.0.get() {
+                            Some(user) => {
+                                view! {
+                                    <span class="topbar-user">{user.display_name}</span>
+                                    <button
+                                        class="topbar-logout"
+                                        title="Sign out"
+                                        on:click=move |ev| logout.run(ev)
+                                    >
+                                        "Sign out"
+                                    </button>
+                                }
+                                    .into_any()
                             }
-                                .into_any()
-                        }
-                        None => view! { <A href="/login">"Sign in"</A> }.into_any(),
-                    }}
+                            None => view! { <A href="/login">"Sign in"</A> }.into_any(),
+                        }}
+                    </span>
                 </span>
             </nav>
             <main>
@@ -178,38 +215,11 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     <Route path=path!("/links") view=pages::Links/>
                     <Route path=path!("/calendar") view=pages::CalendarPage/>
                     <Route path=path!("/login") view=pages::Login/>
+                    <Route path=path!("/settings") view=pages::Settings/>
                 </Routes>
             </main>
         </Router>
         </ServerGate>
-    }
-}
-
-/// One topbar dropdown for a persisted look setting (layout or palette).
-#[component]
-fn SettingPicker(
-    signal: RwSignal<String>,
-    options: &'static [(&'static str, &'static str)],
-    title: &'static str,
-) -> impl IntoView {
-    view! {
-        <select
-            class="theme-picker"
-            title=title
-            on:change=move |ev| signal.set(event_target_value(&ev))
-        >
-            {options
-                .iter()
-                .map(|(id, label)| {
-                    let id = *id;
-                    view! {
-                        <option value=id selected=move || signal.get() == id>
-                            {*label}
-                        </option>
-                    }
-                })
-                .collect_view()}
-        </select>
     }
 }
 

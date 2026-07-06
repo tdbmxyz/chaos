@@ -98,8 +98,10 @@ cross-origin (bearer instead of the cookie).
       DMABUF workaround, deb + AppImage bundles (`just bundle`)
 - [x] Android shell: `nix develop .#android` + `just apk` (signed release,
       keystore in ~/.config/chaos, gen/android committed)
-- [x] Selectable themes (palette + nav layout, `data-theme` CSS): midnight,
-      daylight, sidebar, glass, terminal — pick one, then prune the rest
+- [x] Design decision: sidebar rail layout adopted as the base (bottom
+      tabs on phone) after comparing columns/sidebar/hub/bento; palettes
+      moved to a `/settings` page — Campbell default, GitHub Dark,
+      Midnight, Daylight, Glass, Terminal
 
 ## Phase 8 — Candidates (in rough value order)
 

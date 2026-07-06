@@ -24,33 +24,42 @@ body {
 }
 
 .topbar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 12rem;
   display: flex;
-  align-items: center;
-  gap: 1.25rem;
-  padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  padding: 1.25rem 1rem;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  z-index: 10;
 }
 
 .topbar a {
   color: var(--muted);
   text-decoration: none;
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.4rem;
 }
 
 .topbar a[aria-current] {
-  color: var(--text);
+  background: var(--bg);
+  color: var(--accent);
 }
 
 .brand {
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--accent);
-  margin-right: 1rem;
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
 }
 
 main {
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 1.5rem;
+  margin-left: 12rem;
+  padding: 1.5rem 2rem;
 }
 
 .muted {
@@ -845,11 +854,18 @@ button.primary {
 
 /* ---- account / login ---- */
 
-.topbar-account {
-  margin-left: auto;
+.topbar-foot {
+  margin-top: auto;
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.topbar-account {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
 }
 
 .topbar-user {
@@ -1144,14 +1160,42 @@ button.primary {
 /* ---- small screens (phone) ---- */
 
 @media (max-width: 40rem) {
-  .topbar {
+  .feed-list li {
     flex-wrap: wrap;
-    gap: 0.6rem 1rem;
-    padding: 0.6rem 1rem;
+  }
+
+  .feed-list a {
+    flex: 1 1 100%;
+    white-space: normal;
+  }
+
+  .topbar {
+    inset: auto 0 0 0;
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-around;
+    gap: 0;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .brand,
+  .topbar-user {
+    display: none;
+  }
+
+  .topbar-foot,
+  .topbar-account {
+    display: contents;
   }
 
   main {
-    padding: 1rem;
+    margin-left: 0;
+    padding: 1rem 1rem 4.5rem;
   }
 
   .service-grid,
@@ -1192,29 +1236,35 @@ button.primary {
   }
 }
 
-/* ---- palettes (data-theme) + structural layouts (data-layout) ----
-   Two orthogonal settings from the topbar pickers. Palettes change colors
-   and typography ("midnight" is the base, no overrides needed); layouts
-   change navigation position, widget arrangement and density ("columns"
-   is the base two-column arrangement). */
+/* ---- palettes (data-theme) ----
+   Selected on the settings page, applied on <body>, persisted per device.
+   Campbell (Windows Terminal default scheme) is the default; the :root
+   fallback above only shows before the app mounts. */
 
-.pickers {
-  margin-left: auto;
-  display: flex;
-  gap: 0.4rem;
+body[data-theme="campbell"] {
+  --bg: #0c0c0c;
+  --surface: #171717;
+  --border: #2e2e2e;
+  --text: #cccccc;
+  --muted: #767676;
+  --accent: #3b78ff;
+  --up: #16c60c;
+  --degraded: #f9f1a5;
+  --down: #e74856;
+  --unknown: #767676;
 }
 
-.theme-picker {
-  background: var(--surface);
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: 0.4rem;
-  padding: 0.2rem 0.4rem;
-  font-size: 0.8rem;
-}
-
-.topbar-account {
-  margin-left: 0;
+body[data-theme="github"] {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --up: #3fb950;
+  --degraded: #d29922;
+  --down: #f85149;
+  --unknown: #6e7681;
 }
 
 /* -- daylight: light palette, same layout -- */
@@ -1232,83 +1282,6 @@ body[data-theme="daylight"] {
   --unknown: #9ca3af;
 }
 
-/* -- sidebar: nav as a fixed left rail (desktop), bottom tabs (phone) -- */
-
-body[data-layout="sidebar"] .topbar {
-  position: fixed;
-  inset: 0 auto 0 0;
-  width: 12rem;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.4rem;
-  padding: 1.25rem 1rem;
-  border-bottom: none;
-  border-right: 1px solid var(--border);
-  background: var(--surface);
-  z-index: 10;
-}
-
-body[data-layout="sidebar"] .topbar a {
-  padding: 0.45rem 0.6rem;
-  border-radius: 0.4rem;
-}
-
-body[data-layout="sidebar"] .topbar a[aria-current] {
-  background: var(--bg);
-  color: var(--accent);
-}
-
-body[data-layout="sidebar"] .brand {
-  margin: 0 0 1rem;
-  font-size: 1.1rem;
-}
-
-body[data-layout="sidebar"] .pickers {
-  flex-direction: column;
-  margin: auto 0 0.6rem;
-}
-
-body[data-layout="sidebar"] .topbar-account {
-  flex-direction: column;
-  align-items: stretch;
-  display: flex;
-  gap: 0.4rem;
-}
-
-body[data-layout="sidebar"] main {
-  margin-left: 12rem;
-  max-width: none;
-  padding: 1.5rem 2rem;
-}
-
-@media (max-width: 40rem) {
-  body[data-layout="sidebar"] .topbar {
-    inset: auto 0 0 0;
-    width: auto;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-around;
-    padding: 0.5rem 0.75rem;
-    border-right: none;
-    border-top: 1px solid var(--border);
-  }
-
-  body[data-layout="sidebar"] .brand,
-  body[data-layout="sidebar"] .pickers,
-  body[data-layout="sidebar"] .topbar-user {
-    display: none;
-  }
-
-  body[data-layout="sidebar"] .topbar-account {
-    flex-direction: row;
-  }
-
-  body[data-layout="sidebar"] main {
-    margin-left: 0;
-    padding: 1rem 1rem 4.5rem;
-  }
-}
-
 /* -- glass: gradient backdrop, translucent cards, floating pill nav -- */
 
 body[data-theme="glass"] {
@@ -1319,16 +1292,6 @@ body[data-theme="glass"] {
   --muted: #9a9ab0;
   --accent: #b28dff;
   background: fixed linear-gradient(135deg, #131029 0%, #101223 45%, #0d1f2d 100%);
-}
-
-body[data-theme="glass"] .topbar {
-  margin: 1rem auto 0;
-  width: min(72rem, calc(100% - 2rem));
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  backdrop-filter: blur(12px);
-  padding: 0.6rem 1.4rem;
 }
 
 body[data-theme="glass"] .service-card,
@@ -1469,131 +1432,64 @@ body[data-theme="terminal"] .widget h2 {
   color: var(--accent);
 }
 
-/* -- layout: hub — centered single flow, search as the hero (start page) -- */
 
-body[data-layout="hub"] main {
-  max-width: 46rem;
+/* ---- settings page ---- */
+
+.settings-page {
+  max-width: 34rem;
 }
 
-body[data-layout="hub"] .dashboard-columns {
+.settings-page h2 {
+  margin: 0 0 0.25rem;
+}
+
+.settings-page > .muted {
+  margin: 0 0 1.25rem;
+}
+
+.theme-options {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 0;
+  gap: 0.5rem;
 }
 
-/* Columns dissolve; widgets become one ordered flow. */
-body[data-layout="hub"] .dashboard-column,
-body[data-layout="hub"] .dashboard-column.small {
-  display: contents;
-}
-
-body[data-layout="hub"] .widget,
-body[data-layout="hub"] .dashboard-search {
-  order: 10;
-}
-
-body[data-layout="hub"] .dashboard-search {
-  order: 0;
-  margin: 2.5rem 0 2rem;
-}
-
-body[data-layout="hub"] .dashboard-search input {
-  font-size: 1.15rem;
-  padding: 0.9rem 1.2rem;
-  border-radius: 999px;
-  text-align: center;
-}
-
-body[data-layout="hub"] .widget-services {
-  order: 1;
-}
-
-body[data-layout="hub"] .widget-weather {
-  order: 2;
-}
-
-body[data-layout="hub"] .widget-calendar {
-  order: 3;
-}
-
-body[data-layout="hub"] .widget-bookmarks {
-  order: 4;
-}
-
-body[data-layout="hub"] .dashboard-head {
-  order: 20;
-}
-
-/* -- layout: bento — dense uniform card grid (homelab dashboard) -- */
-
-body[data-layout="bento"] main {
-  max-width: 100rem;
-}
-
-body[data-layout="bento"] .dashboard-columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
-  gap: 1rem;
-  align-items: start;
-}
-
-body[data-layout="bento"] .dashboard-column,
-body[data-layout="bento"] .dashboard-column.small {
-  display: contents;
-}
-
-body[data-layout="bento"] .widget {
-  margin: 0;
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.9rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 0.7rem;
-  padding: 0.9rem 1rem;
-  max-height: 26rem;
-  overflow-y: auto;
-  min-width: 0;
+  border-radius: 0.5rem;
+  cursor: pointer;
 }
 
-body[data-layout="bento"] .widget h2 {
-  position: sticky;
-  top: 0;
-  background: inherit;
+.theme-option.active {
+  border-color: var(--accent);
 }
 
-body[data-layout="bento"] .dashboard-search {
-  grid-column: 1 / -1;
+.theme-option input {
+  accent-color: var(--accent);
 }
 
-body[data-layout="bento"] .widget-services,
-body[data-layout="bento"] .widget-hacker-news,
-body[data-layout="bento"] .widget-lobsters,
-body[data-layout="bento"] .widget-feed {
-  grid-column: span 2;
+.theme-option-name {
+  font-weight: 500;
 }
 
-/* Cards inside cards flatten: services/bookmark tiles inherit the ground. */
-body[data-layout="bento"] .service-card,
-body[data-layout="bento"] .weather-now,
-body[data-layout="bento"] .bookmark-group {
-  background: var(--bg);
+.theme-option-desc {
+  font-size: 0.8rem;
 }
 
-@media (max-width: 44rem) {
-  body[data-layout="bento"] .dashboard-columns {
-    grid-template-columns: 1fr;
-  }
-
-  body[data-layout="bento"] .widget-services,
-  body[data-layout="bento"] .widget-hacker-news,
-  body[data-layout="bento"] .widget-lobsters,
-  body[data-layout="bento"] .widget-feed {
-    grid-column: auto;
-  }
+.theme-swatches {
+  margin-left: auto;
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
 }
 
-/* Palette/layout combos: the sidebar rail overrides glass's pill topbar. */
-body[data-layout="sidebar"] .topbar {
-  border-radius: 0;
-  margin: 0;
-  backdrop-filter: none;
+.theme-swatches span {
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
 }
