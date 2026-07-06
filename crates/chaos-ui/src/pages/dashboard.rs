@@ -124,7 +124,7 @@ fn ServicesWidget() -> impl IntoView {
     });
 
     view! {
-        <section class="widget">
+        <section class="widget widget-services">
             <h2>"Services"</h2>
             {move || match services.get() {
                 None => view! { <p class="muted">"Checking services…"</p> }.into_any(),
@@ -149,6 +149,16 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         on_cleanup(move || handle.clear());
     }
 
+    // Kind class so layout variants can reorder/span widgets in CSS.
+    let kind = match &widget {
+        Widget::Weather { .. } => "weather",
+        Widget::Feed { .. } => "feed",
+        Widget::HackerNews { .. } => "hacker-news",
+        Widget::Lobsters { .. } => "lobsters",
+        Widget::Releases { .. } => "releases",
+        Widget::ServerStats { .. } => "server-stats",
+        _ => "data",
+    };
     let title = match &widget {
         Widget::Weather { .. } => "Weather".to_string(),
         Widget::Feed { title, .. } => title.clone().unwrap_or_else(|| "Feed".into()),
@@ -170,7 +180,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     });
 
     view! {
-        <section class="widget">
+        <section class=format!("widget widget-{kind}")>
             <h2>{title}</h2>
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
@@ -276,7 +286,7 @@ fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
     });
 
     view! {
-        <section class="widget">
+        <section class="widget widget-systemd">
             <h2>{title}</h2>
             {move || action_error.get().map(|err| view! { <p class="error">{err}</p> })}
             {move || match data.get() {
@@ -380,7 +390,7 @@ fn CalendarWidget() -> impl IntoView {
     };
 
     view! {
-        <section class="widget">
+        <section class="widget widget-calendar">
             <div class="calendar-head">
                 <h2>
                     // Clicking the title opens the full calendar section.
@@ -717,7 +727,7 @@ fn Bookmarks(groups: Vec<BookmarkGroup>) -> impl IntoView {
     let client = use_client();
 
     view! {
-        <section class="widget">
+        <section class="widget widget-bookmarks">
             <h2>"Bookmarks"</h2>
             <div class="bookmark-groups">
                 {groups

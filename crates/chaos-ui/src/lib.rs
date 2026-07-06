@@ -27,34 +27,44 @@ pub struct AppConfig {
 const TOKEN_KEY: &str = "chaos-token";
 const API_BASE_KEY: &str = "chaos-api-base";
 const THEME_KEY: &str = "chaos-theme";
+const LAYOUT_KEY: &str = "chaos-layout";
 
-/// (id, label) of every selectable theme. Themes are whole looks — palette
-/// AND layout (nav position, density) — implemented purely in CSS under
+/// (id, label) of every selectable palette (colors/typography only —
+/// structure is the orthogonal [`LAYOUTS`] setting). Pure CSS under
 /// `body[data-theme="…"]`; the first one is the default.
 pub const THEMES: &[(&str, &str)] = &[
     ("midnight", "Midnight"),
     ("daylight", "Daylight"),
-    ("sidebar", "Sidebar"),
     ("glass", "Glass"),
     ("terminal", "Terminal"),
 ];
 
-fn stored_theme() -> String {
+/// (id, label) of every structural layout — navigation position, widget
+/// arrangement, density — under `body[data-layout="…"]`. Combines freely
+/// with any palette.
+pub const LAYOUTS: &[(&str, &str)] = &[
+    ("columns", "Columns"),
+    ("sidebar", "Sidebar"),
+    ("hub", "Hub"),
+    ("bento", "Bento"),
+];
+
+fn stored_setting(key: &str, options: &[(&str, &str)]) -> String {
     local_storage()
-        .and_then(|s| s.get_item(THEME_KEY).ok().flatten())
-        .filter(|t| THEMES.iter().any(|(id, _)| id == t))
-        .unwrap_or_else(|| THEMES[0].0.to_string())
+        .and_then(|s| s.get_item(key).ok().flatten())
+        .filter(|v| options.iter().any(|(id, _)| id == v))
+        .unwrap_or_else(|| options[0].0.to_string())
 }
 
-fn apply_theme(theme: &str) {
+fn apply_setting(attr: &str, key: &str, value: &str) {
     if let Some(body) = web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.body())
     {
-        let _ = body.set_attribute("data-theme", theme);
+        let _ = body.set_attribute(attr, value);
     }
     if let Some(storage) = local_storage() {
-        let _ = storage.set_item(THEME_KEY, theme);
+        let _ = storage.set_item(key, value);
     }
 }
 
@@ -111,9 +121,12 @@ pub fn App(config: AppConfig) -> impl IntoView {
         }
     });
 
-    // Theme: applied as `data-theme` on <body>, persisted, all-CSS.
-    let theme = RwSignal::new(stored_theme());
-    Effect::new(move |_| apply_theme(&theme.get()));
+    // Palette + structural layout: applied as `data-theme` / `data-layout`
+    // on <body>, persisted, all-CSS.
+    let theme = RwSignal::new(stored_setting(THEME_KEY, THEMES));
+    Effect::new(move |_| apply_setting("data-theme", THEME_KEY, &theme.get()));
+    let layout = RwSignal::new(stored_setting(LAYOUT_KEY, LAYOUTS));
+    Effect::new(move |_| apply_setting("data-layout", LAYOUT_KEY, &layout.get()));
 
     let logout = Callback::new({
         let client = use_client();
@@ -136,23 +149,10 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <A href="/">"Dashboard"</A>
                 <A href="/links">"Links"</A>
                 <A href="/calendar">"Calendar"</A>
-                <select
-                    class="theme-picker"
-                    title="Theme"
-                    on:change=move |ev| theme.set(event_target_value(&ev))
-                >
-                    {THEMES
-                        .iter()
-                        .map(|(id, label)| {
-                            let id = *id;
-                            view! {
-                                <option value=id selected=move || theme.get() == id>
-                                    {*label}
-                                </option>
-                            }
-                        })
-                        .collect_view()}
-                </select>
+                <span class="pickers">
+                    <SettingPicker signal=layout options=LAYOUTS title="Layout"/>
+                    <SettingPicker signal=theme options=THEMES title="Theme"/>
+                </span>
                 <span class="topbar-account">
                     {move || match session.0.get() {
                         Some(user) => {
@@ -182,6 +182,34 @@ pub fn App(config: AppConfig) -> impl IntoView {
             </main>
         </Router>
         </ServerGate>
+    }
+}
+
+/// One topbar dropdown for a persisted look setting (layout or palette).
+#[component]
+fn SettingPicker(
+    signal: RwSignal<String>,
+    options: &'static [(&'static str, &'static str)],
+    title: &'static str,
+) -> impl IntoView {
+    view! {
+        <select
+            class="theme-picker"
+            title=title
+            on:change=move |ev| signal.set(event_target_value(&ev))
+        >
+            {options
+                .iter()
+                .map(|(id, label)| {
+                    let id = *id;
+                    view! {
+                        <option value=id selected=move || signal.get() == id>
+                            {*label}
+                        </option>
+                    }
+                })
+                .collect_view()}
+        </select>
     }
 }
 

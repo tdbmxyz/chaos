@@ -1192,13 +1192,19 @@ button.primary {
   }
 }
 
-/* ---- themes ----
-   Whole looks (palette + nav position + density), selected from the topbar
-   picker and applied as data-theme on <body>. "midnight" is the base look
-   defined above and needs no overrides. */
+/* ---- palettes (data-theme) + structural layouts (data-layout) ----
+   Two orthogonal settings from the topbar pickers. Palettes change colors
+   and typography ("midnight" is the base, no overrides needed); layouts
+   change navigation position, widget arrangement and density ("columns"
+   is the base two-column arrangement). */
+
+.pickers {
+  margin-left: auto;
+  display: flex;
+  gap: 0.4rem;
+}
 
 .theme-picker {
-  margin-left: auto;
   background: var(--surface);
   color: var(--muted);
   border: 1px solid var(--border);
@@ -1228,7 +1234,7 @@ body[data-theme="daylight"] {
 
 /* -- sidebar: nav as a fixed left rail (desktop), bottom tabs (phone) -- */
 
-body[data-theme="sidebar"] .topbar {
+body[data-layout="sidebar"] .topbar {
   position: fixed;
   inset: 0 auto 0 0;
   width: 12rem;
@@ -1242,40 +1248,41 @@ body[data-theme="sidebar"] .topbar {
   z-index: 10;
 }
 
-body[data-theme="sidebar"] .topbar a {
+body[data-layout="sidebar"] .topbar a {
   padding: 0.45rem 0.6rem;
   border-radius: 0.4rem;
 }
 
-body[data-theme="sidebar"] .topbar a[aria-current] {
+body[data-layout="sidebar"] .topbar a[aria-current] {
   background: var(--bg);
   color: var(--accent);
 }
 
-body[data-theme="sidebar"] .brand {
+body[data-layout="sidebar"] .brand {
   margin: 0 0 1rem;
   font-size: 1.1rem;
 }
 
-body[data-theme="sidebar"] .theme-picker {
+body[data-layout="sidebar"] .pickers {
+  flex-direction: column;
   margin: auto 0 0.6rem;
 }
 
-body[data-theme="sidebar"] .topbar-account {
+body[data-layout="sidebar"] .topbar-account {
   flex-direction: column;
   align-items: stretch;
   display: flex;
   gap: 0.4rem;
 }
 
-body[data-theme="sidebar"] main {
+body[data-layout="sidebar"] main {
   margin-left: 12rem;
   max-width: none;
   padding: 1.5rem 2rem;
 }
 
 @media (max-width: 40rem) {
-  body[data-theme="sidebar"] .topbar {
+  body[data-layout="sidebar"] .topbar {
     inset: auto 0 0 0;
     width: auto;
     flex-direction: row;
@@ -1286,17 +1293,17 @@ body[data-theme="sidebar"] main {
     border-top: 1px solid var(--border);
   }
 
-  body[data-theme="sidebar"] .brand,
-  body[data-theme="sidebar"] .theme-picker,
-  body[data-theme="sidebar"] .topbar-user {
+  body[data-layout="sidebar"] .brand,
+  body[data-layout="sidebar"] .pickers,
+  body[data-layout="sidebar"] .topbar-user {
     display: none;
   }
 
-  body[data-theme="sidebar"] .topbar-account {
+  body[data-layout="sidebar"] .topbar-account {
     flex-direction: row;
   }
 
-  body[data-theme="sidebar"] main {
+  body[data-layout="sidebar"] main {
     margin-left: 0;
     padding: 1rem 1rem 4.5rem;
   }
@@ -1460,4 +1467,133 @@ body[data-theme="terminal"] .widget h2 {
 
 .feed-list .feed-meta a.feed-source:hover {
   color: var(--accent);
+}
+
+/* -- layout: hub — centered single flow, search as the hero (start page) -- */
+
+body[data-layout="hub"] main {
+  max-width: 46rem;
+}
+
+body[data-layout="hub"] .dashboard-columns {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* Columns dissolve; widgets become one ordered flow. */
+body[data-layout="hub"] .dashboard-column,
+body[data-layout="hub"] .dashboard-column.small {
+  display: contents;
+}
+
+body[data-layout="hub"] .widget,
+body[data-layout="hub"] .dashboard-search {
+  order: 10;
+}
+
+body[data-layout="hub"] .dashboard-search {
+  order: 0;
+  margin: 2.5rem 0 2rem;
+}
+
+body[data-layout="hub"] .dashboard-search input {
+  font-size: 1.15rem;
+  padding: 0.9rem 1.2rem;
+  border-radius: 999px;
+  text-align: center;
+}
+
+body[data-layout="hub"] .widget-services {
+  order: 1;
+}
+
+body[data-layout="hub"] .widget-weather {
+  order: 2;
+}
+
+body[data-layout="hub"] .widget-calendar {
+  order: 3;
+}
+
+body[data-layout="hub"] .widget-bookmarks {
+  order: 4;
+}
+
+body[data-layout="hub"] .dashboard-head {
+  order: 20;
+}
+
+/* -- layout: bento — dense uniform card grid (homelab dashboard) -- */
+
+body[data-layout="bento"] main {
+  max-width: 100rem;
+}
+
+body[data-layout="bento"] .dashboard-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+body[data-layout="bento"] .dashboard-column,
+body[data-layout="bento"] .dashboard-column.small {
+  display: contents;
+}
+
+body[data-layout="bento"] .widget {
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  padding: 0.9rem 1rem;
+  max-height: 26rem;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+body[data-layout="bento"] .widget h2 {
+  position: sticky;
+  top: 0;
+  background: inherit;
+}
+
+body[data-layout="bento"] .dashboard-search {
+  grid-column: 1 / -1;
+}
+
+body[data-layout="bento"] .widget-services,
+body[data-layout="bento"] .widget-hacker-news,
+body[data-layout="bento"] .widget-lobsters,
+body[data-layout="bento"] .widget-feed {
+  grid-column: span 2;
+}
+
+/* Cards inside cards flatten: services/bookmark tiles inherit the ground. */
+body[data-layout="bento"] .service-card,
+body[data-layout="bento"] .weather-now,
+body[data-layout="bento"] .bookmark-group {
+  background: var(--bg);
+}
+
+@media (max-width: 44rem) {
+  body[data-layout="bento"] .dashboard-columns {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-layout="bento"] .widget-services,
+  body[data-layout="bento"] .widget-hacker-news,
+  body[data-layout="bento"] .widget-lobsters,
+  body[data-layout="bento"] .widget-feed {
+    grid-column: auto;
+  }
+}
+
+/* Palette/layout combos: the sidebar rail overrides glass's pill topbar. */
+body[data-layout="sidebar"] .topbar {
+  border-radius: 0;
+  margin: 0;
+  backdrop-filter: none;
 }
