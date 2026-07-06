@@ -47,8 +47,10 @@ Widgets are declared in config columns; data is fetched and cached
 server-side, one instance id per widget (`GET /api/v1/widgets/{id}`).
 
 - [x] Weather (Open-Meteo, geocoded location, 5-day forecast)
-- [x] RSS/Hacker News/Lobsters feeds (one `feed` widget; HN/lobsters are
-      plain RSS via hnrss.org / lobste.rs/rss)
+- [x] RSS/Atom feeds (`feed` widget)
+- [x] Native Hacker News + Lobsters widgets (official APIs: live
+      front-page/hottest ranking, points, comment counts, source label
+      links to the discussion — RSS carries none of that)
 - [x] GitHub releases watcher (`releases.atom`, no API token needed)
 - [x] Server stats (host metrics via sysinfo; optional `mounts` filter)
 - [x] Calendar (static month view, client-side; title links to the full

@@ -1450,3 +1450,14 @@ body[data-theme="terminal"] .widget h2 {
   vertical-align: -0.12rem;
   margin-right: 0.35rem;
 }
+
+/* aggregator meta (HN / lobsters): source label links to the discussion */
+
+.feed-list .feed-meta a.feed-source {
+  flex: none;
+  color: inherit;
+}
+
+.feed-list .feed-meta a.feed-source:hover {
+  color: var(--accent);
+}

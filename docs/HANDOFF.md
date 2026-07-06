@@ -18,8 +18,10 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   manual refresh button.
 - **Layout & widgets**: `[[columns]]` in config place widgets explicitly
   (sizes `full`/`small`; no columns ⇒ legacy single-column synthesized).
-  Data widgets — weather (Open-Meteo, geocoded), feed (RSS/Atom, covers
-  HN/lobsters), releases (GitHub `releases.atom`), server_stats (sysinfo,
+  Data widgets — weather (Open-Meteo, geocoded), feed (RSS/Atom),
+  hacker_news (Firebase topstories = live front-page rank, points +
+  comment counts, source label → discussion), lobsters (hottest.json,
+  same shape), releases (GitHub `releases.atom`), server_stats (sysinfo,
   optional `mounts` filter) — are served per instance id from
   `GET /api/v1/widgets/{id}`, cached server-side with per-kind TTLs
   (10min/5min/30min/10s), stale payload on upstream failure. See

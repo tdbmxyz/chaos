@@ -61,9 +61,9 @@ icon = "si:reddit"
 # bookmarks. With columns you place widgets explicitly; search/bookmarks
 # widgets fall back to the top-level `search_url` / `[[bookmarks]]` above.
 #
-# Widget types: search, services, bookmarks, weather, feed, releases,
-# server_stats, calendar, systemd. Data widgets are fetched and cached
-# server-side.
+# Widget types: search, services, bookmarks, weather, feed, hacker_news,
+# lobsters, releases, server_stats, calendar, systemd. Data widgets are
+# fetched and cached server-side.
 
 [[columns]]
 size = "full"
@@ -74,10 +74,14 @@ type = "search"
 [[columns.widgets]]
 type = "services"
 
+# Hacker News front page (live "trending" ranking via the official API)
+# with points and comment counts; the source label links to the discussion.
 [[columns.widgets]]
-type = "feed"
-title = "Hacker News"
-urls = ["https://hnrss.org/frontpage"]
+type = "hacker_news"
+limit = 10
+
+[[columns.widgets]]
+type = "lobsters"
 limit = 10
 
 [[columns.widgets]]

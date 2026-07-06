@@ -9,6 +9,7 @@
 //! refresh fails.
 
 mod feed;
+mod posts;
 mod releases;
 mod stats;
 mod systemd;
@@ -114,6 +115,8 @@ impl WidgetHub {
                 weather::fetch(&self.http, &self.geocode, location).await
             }
             Widget::Feed { urls, limit, .. } => feed::fetch(&self.http, urls, *limit).await,
+            Widget::HackerNews { limit, .. } => posts::hacker_news(&self.http, *limit).await,
+            Widget::Lobsters { limit, .. } => posts::lobsters(&self.http, *limit).await,
             Widget::Releases { repos, limit } => releases::fetch(&self.http, repos, *limit).await,
             Widget::ServerStats { mounts } => {
                 let history = self
@@ -183,6 +186,7 @@ fn ttl(widget: &Widget) -> Duration {
     match widget {
         Widget::Weather { .. } => Duration::from_secs(600),
         Widget::Feed { .. } => Duration::from_secs(300),
+        Widget::HackerNews { .. } | Widget::Lobsters { .. } => Duration::from_secs(300),
         Widget::Releases { .. } => Duration::from_secs(1800),
         Widget::ServerStats { .. } => Duration::from_secs(10),
         Widget::Systemd { .. } => Duration::from_secs(5),

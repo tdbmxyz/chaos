@@ -58,6 +58,21 @@ pub enum Widget {
         #[serde(default = "default_feed_limit")]
         limit: u32,
     },
+    /// Hacker News front page — the live ranking from the official API,
+    /// with points and comment counts (the RSS feed has neither).
+    HackerNews {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default = "default_posts_limit")]
+        limit: u32,
+    },
+    /// Lobsters hottest posts (lobste.rs JSON API), same shape as HN.
+    Lobsters {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default = "default_posts_limit")]
+        limit: u32,
+    },
     /// Latest GitHub release per repository (`owner/name`).
     Releases {
         repos: Vec<String>,
@@ -104,6 +119,10 @@ fn default_feed_limit() -> u32 {
     15
 }
 
+fn default_posts_limit() -> u32 {
+    10
+}
+
 fn default_releases_limit() -> u32 {
     10
 }
@@ -115,6 +134,8 @@ impl Widget {
             self,
             Widget::Weather { .. }
                 | Widget::Feed { .. }
+                | Widget::HackerNews { .. }
+                | Widget::Lobsters { .. }
                 | Widget::Releases { .. }
                 | Widget::ServerStats { .. }
                 | Widget::Systemd { .. }
@@ -210,6 +231,14 @@ pub struct FeedItem {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published: Option<DateTime<Utc>>,
+    /// Upvotes/points on link-aggregator sources (HN, lobsters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<u64>,
+    /// The discussion page; the source label links here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments_url: Option<Url>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

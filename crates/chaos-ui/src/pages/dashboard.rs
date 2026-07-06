@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use chaos_domain::{
-    BookmarkGroup, ColumnSize, DashboardLayout, ServerStats, SystemdAction, SystemdActionRequest,
-    SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
+    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, ServerStats, SystemdAction,
+    SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
 };
 use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Utc};
 use leptos::prelude::*;
@@ -152,6 +152,8 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     let title = match &widget {
         Widget::Weather { .. } => "Weather".to_string(),
         Widget::Feed { title, .. } => title.clone().unwrap_or_else(|| "Feed".into()),
+        Widget::HackerNews { title, .. } => title.clone().unwrap_or_else(|| "Hacker News".into()),
+        Widget::Lobsters { title, .. } => title.clone().unwrap_or_else(|| "Lobsters".into()),
         Widget::Releases { .. } => "Releases".to_string(),
         Widget::ServerStats { .. } => "Server".to_string(),
         _ => String::new(),
@@ -178,31 +180,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 Some(Ok(WidgetData::Feed { items })) => {
                     view! {
                         <ul class="feed-list">
-                            {items
-                                .into_iter()
-                                .map(|item| {
-                                    let meta = [
-                                        item.source.clone().unwrap_or_default(),
-                                        item.published.map(rel_time).unwrap_or_default(),
-                                    ]
-                                    .into_iter()
-                                    .filter(|part| !part.is_empty())
-                                    .collect::<Vec<_>>()
-                                    .join(" · ");
-                                    view! {
-                                        <li>
-                                            <a
-                                                href=item.url.map(|u| u.to_string()).unwrap_or_default()
-                                                target="_blank"
-                                                rel="noreferrer"
-                                            >
-                                                {item.title}
-                                            </a>
-                                            <span class="muted">{meta}</span>
-                                        </li>
-                                    }
-                                })
-                                .collect_view()}
+                            {items.into_iter().map(feed_item_view).collect_view()}
                         </ul>
                     }
                         .into_any()
@@ -560,6 +538,54 @@ fn ServerStatsView(stats: ServerStats) -> impl IntoView {
                 })
                 .collect_view()}
         </div>
+    }
+}
+
+/// One feed/aggregator entry: title → article, source label → discussion
+/// page (HN/lobsters), plus points, comment count and age when available.
+fn feed_item_view(item: FeedItem) -> impl IntoView {
+    let source = item
+        .source
+        .filter(|s| !s.is_empty())
+        .map(|s| match &item.comments_url {
+            Some(url) => view! {
+                <a class="feed-source" href=url.to_string() target="_blank" rel="noreferrer">
+                    {s}
+                </a>
+            }
+            .into_any(),
+            None => view! { <span>{s}</span> }.into_any(),
+        });
+
+    let mut tail: Vec<String> = Vec::new();
+    if let Some(score) = item.score {
+        tail.push(format!("▲ {score}"));
+    }
+    if let Some(comments) = item.comments {
+        tail.push(format!(
+            "{comments} comment{}",
+            if comments == 1 { "" } else { "s" }
+        ));
+    }
+    if let Some(published) = item.published {
+        tail.push(rel_time(published));
+    }
+    let mut tail = tail.join(" · ");
+    if source.is_some() && !tail.is_empty() {
+        tail = format!(" · {tail}");
+    }
+
+    view! {
+        <li>
+            <a
+                href=item.url.map(|u| u.to_string()).unwrap_or_default()
+                target="_blank"
+                rel="noreferrer"
+            >
+                {item.title}
+            </a>
+            <span class="muted feed-meta">{source}{tail}</span>
+        </li>
     }
 }
 

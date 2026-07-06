@@ -58,6 +58,9 @@ async fn fetch_one(http: &reqwest::Client, url: Url) -> Result<Vec<FeedItem>, St
             url: entry.links.first().and_then(|l| l.href.parse().ok()),
             source: source.clone(),
             published: entry.published.or(entry.updated),
+            score: None,
+            comments: None,
+            comments_url: None,
         })
         .collect())
 }
