@@ -106,13 +106,16 @@ cross-origin (bearer instead of the cookie).
 - [ ] Notifications: service down / calendar reminders via ntfy or web push
 - [ ] Dashboard editing in-app (add/move/remove widgets, persisted
       server-side) instead of TOML-only layout
-- [ ] Quick-add from phone: PWA share-target + Android share intent so
-      links can be saved from any app
-- [ ] Calendar polish: week/agenda view, event descriptions in the day
-      panel, feed refresh button, per-calendar colors in the picker
-- [ ] Links polish: pagination UI, favicons, bulk actions, FTS over
-      titles/descriptions
-- [ ] Server stats history (small ring buffer + sparklines)
+- [x] Quick-add from phone: Android share intent → `/?share=` →
+      `/links?add=` auto quick-add (PWA share-target can reuse the seam)
+- [x] Calendar polish: event descriptions in the day panel, feed refresh
+      button — week/agenda view and per-calendar colors still open
+- [x] Links polish: pagination UI (50/page), site favicons (`fav:` icon
+      kind via DuckDuckGo, server-cached) — bulk actions still open
+- [x] Server stats: ZFS-aware disks (statvfs per dataset lies about
+      totals; datasets aggregate into per-pool rows, filtered datasets show
+      own usage vs pool capacity, multi-mounts deduped) + 1h CPU/memory
+      sparklines (30s sampler, only spawned when the widget exists)
 - [ ] Todo/groceries widget (shared household lists, pairs with calendar)
 - [ ] Global quick-search across services, links and events (Ctrl-K)
 - [ ] Scheduled SQLite backup/export

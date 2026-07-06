@@ -71,6 +71,26 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   committed with yomu's keystore-signing + cleartext-release edits;
   keystore + keystore.properties in `~/.config/chaos` (gitignored copy at
   gen/android/keystore.properties).
+- **Server stats**: ZFS-aware — statvfs on a dataset reports
+  `own usage + pool free` as "total", so datasets are aggregated into one
+  row per pool (dedup by dataset name: zeus mounts each dataset twice,
+  zfs mountpoint + /data bind). Datasets named in `mounts` show own usage
+  against pool capacity; pool names work in `mounts` too. Snapshot usage
+  is invisible to statvfs (few % under `zpool list`), accepted. Plus 1h
+  CPU/mem sparklines: 30s sampler task (spawned only when a server_stats
+  widget exists), history rides in the widget payload (`serde default`).
+- **Share target (Android)**: share sheet → MainActivity loads
+  `/?share=<text>` (only root resolves in the asset protocol) →
+  ShareRedirect forwards to `/links?add=` → AddLinkForm extracts the first
+  http(s) URL and saves immediately (no URL ⇒ prefill only). Web-tested
+  e2e; needs one on-device check after the next APK build.
+- **Calendar polish**: event descriptions shown in the day panel (also
+  parsed from ICS DESCRIPTION), ↻ toolbar button → POST
+  /api/v1/calendar/refresh invalidates the user's feed caches.
+- **Links polish**: pagination (50/page, filters reset to page 1, uses
+  LinkPage.total) and per-site favicons (`fav:<host>` icon kind →
+  DuckDuckGo ip3, cached like other icons; empty upstream bodies 404
+  instead of being cached).
 - **Themes**: five selectable looks (midnight/daylight/sidebar/glass/
   terminal) as `body[data-theme]` CSS blocks, picker in the topbar,
   persisted as `chaos-theme` in localStorage. Sidebar theme = left rail on
