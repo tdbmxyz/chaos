@@ -19,6 +19,11 @@ pub struct Link {
     /// Collection the link belongs to; `None` means "unsorted".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection_id: Option<Uuid>,
+    /// Who added this link, for attribution only — every user can still see
+    /// and edit any link. `None` when added anonymously (no session, or by
+    /// a tool that didn't attribute it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
     #[serde(default)]
     pub tags: Vec<Tag>,
     pub archive: ArchiveState,

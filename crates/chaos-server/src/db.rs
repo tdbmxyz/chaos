@@ -214,8 +214,15 @@ impl Db {
     // ---- links ----
 
     /// `archive` decides the initial archive state: `true` enqueues the link
-    /// for the archiver (the caller must wake it up afterwards).
-    pub async fn create_link(&self, req: &CreateLinkRequest, archive: bool) -> Result<Link> {
+    /// for the archiver (the caller must wake it up afterwards). `created_by`
+    /// is attribution only (see migrations/0004_links_created_by.sql) — it
+    /// never restricts who can see or edit the link.
+    pub async fn create_link(
+        &self,
+        req: &CreateLinkRequest,
+        archive: bool,
+        created_by: Option<Uuid>,
+    ) -> Result<Link> {
         let id = Uuid::now_v7();
         let now = Utc::now();
         let title = req
@@ -230,8 +237,8 @@ impl Db {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO links (id, url, title, description, collection_id,
-                                archive_state, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                archive_state, created_by, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(req.url.as_str())
@@ -244,6 +251,7 @@ impl Db {
         )
         .bind(req.collection_id.map(|c| c.to_string()))
         .bind(if archive { "pending" } else { "none" })
+        .bind(created_by.map(|u| u.to_string()))
         .bind(now)
         .bind(now)
         .execute(&mut *tx)
@@ -633,6 +641,7 @@ struct LinkRow {
     title: String,
     description: Option<String>,
     collection_id: Option<String>,
+    created_by: Option<String>,
     archive_state: String,
     archived_at: Option<DateTime<Utc>>,
     archive_size_bytes: Option<i64>,
@@ -668,6 +677,7 @@ impl TryFrom<LinkRow> for Link {
             title: row.title,
             description: row.description,
             collection_id: row.collection_id.map(parse_uuid).transpose()?,
+            created_by: row.created_by.map(parse_uuid).transpose()?,
             tags: Vec::new(), // filled by the caller
             archive,
             created_at: row.created_at,
@@ -755,6 +765,7 @@ mod tests {
             .create_link(
                 &link_req("https://blog.rust-lang.org/post", &["rust", "blog"]),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -769,6 +780,7 @@ mod tests {
             .create_link(
                 &link_req("https://example.com", &["Rust", " rust ", ""]),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -826,7 +838,7 @@ mod tests {
 
         // Created with archiving enabled -> pending.
         let link = db
-            .create_link(&link_req("https://example.com/article", &[]), true)
+            .create_link(&link_req("https://example.com/article", &[]), true, None)
             .await
             .unwrap();
         assert_eq!(link.archive, ArchiveState::Pending);
@@ -960,6 +972,7 @@ mod tests {
                 tags: vec!["rust".into(), "web".into()],
             },
             false,
+            None,
         )
         .await
         .unwrap();
@@ -972,12 +985,17 @@ mod tests {
                 tags: vec!["rust".into()],
             },
             false,
+            None,
         )
         .await
         .unwrap();
-        db.create_link(&link_req("https://news.ycombinator.com", &["news"]), false)
-            .await
-            .unwrap();
+        db.create_link(
+            &link_req("https://news.ycombinator.com", &["news"]),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         let all = db.list_links(&LinkQuery::default()).await.unwrap();
         assert_eq!(all.total, 3);

@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chaos_domain::{
     ArchiveState, CreateLinkRequest, Link, LinkPage, LinkQuery, TagWithCount, UpdateLinkRequest,
@@ -31,6 +31,7 @@ pub async fn get_one(
 
 pub async fn create(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(mut req): Json<CreateLinkRequest>,
 ) -> Result<(StatusCode, Json<Link>), ApiError> {
     // Fill missing title/description from the page itself. Best-effort:
@@ -45,8 +46,9 @@ pub async fn create(
         }
     }
 
+    let created_by = crate::auth::optional_user_id(&state, &headers).await;
     let auto_archive = state.config.archive.enabled && state.config.archive.auto;
-    let link = state.db.create_link(&req, auto_archive).await?;
+    let link = state.db.create_link(&req, auto_archive, created_by).await?;
     if auto_archive {
         state.archive_notify.notify_one();
     }

@@ -1,5 +1,5 @@
 //! One-shot importer for Linkwarden JSON backups
-//! (`chaos-server import-linkwarden <export.json>`).
+//! (`chaos-server import-linkwarden <export.json> [owner-username]`).
 //!
 //! Format: the export produced by Linkwarden's "Export Data" — a user object
 //! with `collections[]`, each carrying its `links[]` (with `tags[]`) plus
@@ -55,10 +55,28 @@ struct BackupTag {
     name: String,
 }
 
-pub async fn linkwarden(state: &AppState, path: &Path) -> anyhow::Result<()> {
+pub async fn linkwarden(
+    state: &AppState,
+    path: &Path,
+    owner_username: Option<&str>,
+) -> anyhow::Result<()> {
     let raw =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let backup: Backup = serde_json::from_str(&raw).context("parsing Linkwarden export")?;
+
+    // Attribution only (migrations/0004_links_created_by.sql) — every
+    // imported link is still visible/editable by any user.
+    let owner_id = match owner_username {
+        Some(username) => Some(
+            state
+                .db
+                .user_by_username(username)
+                .await
+                .with_context(|| format!("looking up user {username:?}"))?
+                .id,
+        ),
+        None => None,
+    };
 
     let archive = state.config.archive.enabled && state.config.archive.auto;
     let mut collections = 0usize;
@@ -100,6 +118,7 @@ pub async fn linkwarden(state: &AppState, path: &Path) -> anyhow::Result<()> {
                         tags: l.tags.iter().map(|t| t.name.clone()).collect(),
                     },
                     archive,
+                    owner_id,
                 )
                 .await
                 .with_context(|| format!("importing link {:?}", l.url))?;

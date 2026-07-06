@@ -43,8 +43,9 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   snapshots at `archives/<link-id>.html`, served CSP-sandboxed at
   `GET /api/v1/links/{id}/archive`; failures carry reasons; FTS5 (porter)
   over extracted page text — searchbox matches archived content.
-- **Import**: `chaos-server import-linkwarden <export.json>` (collections
-  incl. nesting, links, tags).
+- **Import**: `chaos-server import-linkwarden <export.json> [owner-username]`
+  (collections incl. nesting, links, tags; optional owner attributes every
+  imported link via `links.created_by`, attribution only).
 - **Auth**: users (`chaos-server add-user <name>`, argon2id) + sessions
   (opaque token, sha256 at rest, 90d; HttpOnly cookie for web, bearer for
   native). Logged-off works everywhere except calendars. authentik/OIDC is

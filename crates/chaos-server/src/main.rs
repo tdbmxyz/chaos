@@ -34,8 +34,11 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [] => {}
+        [cmd, path, owner] if cmd == "import-linkwarden" => {
+            return import::linkwarden(&state, std::path::Path::new(path), Some(owner)).await;
+        }
         [cmd, path] if cmd == "import-linkwarden" => {
-            return import::linkwarden(&state, std::path::Path::new(path)).await;
+            return import::linkwarden(&state, std::path::Path::new(path), None).await;
         }
         [cmd, rest @ ..] if cmd == "add-user" && !rest.is_empty() => {
             let username = &rest[0];
@@ -50,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => anyhow::bail!(
             "unknown arguments {args:?}; usage: chaos-server \
-             [import-linkwarden <file> | add-user <username> [display name] | list-users]"
+             [import-linkwarden <file> [owner-username] | add-user <username> [display name] | list-users]"
         ),
     }
 

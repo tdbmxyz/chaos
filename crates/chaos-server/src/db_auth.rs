@@ -51,6 +51,16 @@ impl Db {
         row.try_into()
     }
 
+    pub async fn user_by_username(&self, username: &str) -> Result<User> {
+        let row =
+            sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE username = ? COLLATE NOCASE")
+                .bind(username.trim())
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or(DbError::NotFound)?;
+        row.try_into()
+    }
+
     /// User plus stored password hash, for login verification.
     pub async fn user_with_password(&self, username: &str) -> Result<(User, String)> {
         let row =

@@ -182,8 +182,10 @@ On the server, with the service stopped or against a copy of the DB:
 
 ```console
 $ export CHAOS_CONFIG=/nix/store/…-chaos.toml   # or matching CHAOS_* env vars
-$ chaos-server import-linkwarden ./linkwarden-export.json
+$ chaos-server import-linkwarden ./linkwarden-export.json [owner-username]
 ```
 
 The export file comes from Linkwarden → Settings → Data → Export. Links are
-queued for archiving automatically when `[archive] auto` is on.
+queued for archiving automatically when `[archive] auto` is on. The optional
+`owner-username` attributes every imported link to that user (`created_by`);
+attribution only — every user can still see and edit any link.

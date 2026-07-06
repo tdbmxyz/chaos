@@ -70,6 +70,19 @@ pub fn request_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|(_, value)| value.to_string())
 }
 
+/// Best-effort session lookup for handlers that attribute rather than
+/// gate — link creation doesn't require auth yet (see ROADMAP), so a
+/// missing/invalid session just means "unattributed", not a rejection.
+pub async fn optional_user_id(state: &AppState, headers: &axum::http::HeaderMap) -> Option<Uuid> {
+    let token = request_token(headers)?;
+    state
+        .db
+        .user_by_session(&token_hash(&token))
+        .await
+        .ok()
+        .map(|user| user.id)
+}
+
 /// Extractor for handlers that require a signed-in user.
 pub struct AuthUser(pub User);
 
