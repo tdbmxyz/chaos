@@ -566,6 +566,7 @@ dependencies = [
  "chaos-client",
  "chaos-domain",
  "chrono",
+ "js-sys",
  "leptos",
  "leptos_router",
  "url",

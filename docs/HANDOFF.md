@@ -93,6 +93,19 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   LinkPage.total) and per-site favicons (`fav:<host>` icon kind →
   DuckDuckGo ip3, cached like other icons; empty upstream bodies 404
   instead of being cached).
+- **Device preferences** (`/settings`, localStorage): theme, weather
+  location (sent as `?location=` widget override, geocoded + cached per
+  place server-side) and °C/°F (pure display conversion, wire stays
+  metric).
+- **Companion apps ("plugins")**: `[[apps]]` config entries
+  (id/title/url/android_package) → `GET /api/v1/apps` → sidebar items.
+  Web/desktop embed the app at `/apps/{id}` in an iframe with
+  `?chaos-theme=` forwarded (yomu maps it to its own themes — Campbell/
+  GitHub added there, rest mapped to nearest). Android shell exposes
+  `window.ChaosAndroid.openApp(pkg, url)` (launch intent, URL fallback;
+  manifest `<queries>` for package visibility). Empty apps config =
+  nothing rendered anywhere. NOTE: production yomu on zeus needs a
+  redeploy to pick up the chaos-theme handling.
 - **Design (decided 2026-07-06)**: the sidebar layout IS the app — fixed
   left nav rail (Settings + account pinned to the bottom) that becomes a
   bottom tab bar on phones; the alternative layouts (columns/hub/bento)
@@ -115,7 +128,11 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
 - DB: UUIDs as hyphenated TEXT (v7), RFC3339 timestamps, embedded
   migrations, row↔domain mapping only in `db.rs`, in-memory sqlite tests.
 - Dev: `nix develop`; `just server` (:4600) + `just web` (:8080, proxies
-  /api); `just check` before committing. Commits: `--no-gpg-sign`, grouped.
+  /api); `just check` before committing. Commits: signed (GPG works
+  again since 2026-07-06), grouped; remote git@github.com:tdbmxyz/chaos.
+- Careful on this machine: it IS zeus — production `services.yomu`
+  listens on 4700 (user yomu, untouchable); use another port for dev
+  instances.
 - Gotchas: git-add before nix commands (flake sees tracked files only);
   wasm-bindgen version change ⇒ refresh two hashes in flake.nix;
   cargo check of chaos-desktop needs `crates/chaos-web/dist/index.html`.

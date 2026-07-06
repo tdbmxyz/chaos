@@ -1493,3 +1493,43 @@ body[data-theme="terminal"] .widget h2 {
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.15);
 }
+
+.settings-weather {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.settings-weather label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  flex: 1;
+  min-width: 12rem;
+}
+
+.settings-hint {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  margin: 0;
+}
+
+/* embedded companion apps */
+
+.app-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 3.5rem);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+}
+
+@media (max-width: 40rem) {
+  .app-frame {
+    height: calc(100vh - 7.5rem);
+  }
+}
