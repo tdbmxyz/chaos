@@ -27,6 +27,18 @@ apk:
     cd crates/chaos-web && trunk build --release
     nix develop .#android --command sh -c 'cd crates/chaos-desktop && cargo tauri android build --apk --target aarch64'
 
+# Build the signed APK and attach it to the GitHub release of the
+# current workspace version. Runs locally because the release keystore
+# never leaves this machine (CI only publishes the nix-built artifacts).
+release-apk: apk
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+    cp crates/chaos-desktop/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+       "chaos-${version}.apk"
+    gh release upload "v${version}" "chaos-${version}.apk" --clobber
+    rm "chaos-${version}.apk"
+
 # Build the production frontend bundle
 build-web:
     cd crates/chaos-web && trunk build --release

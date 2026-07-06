@@ -4,8 +4,10 @@
 #
 # NixOS deployments (the normal path) consume the flake directly and
 # don't need these artifacts; they exist for non-Nix hosts and as a
-# frozen record of what the tag shipped. The desktop bundle and Android
-# APK stay local builds (`just bundle` / `just apk`).
+# frozen record of what the tag shipped. The desktop bundle stays a
+# local build (`just bundle`), and the signed Android APK is attached
+# to the release afterwards with `just release-apk` — the keystore
+# never leaves the dev machine.
 name: release
 
 on:
