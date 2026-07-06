@@ -906,6 +906,39 @@ button.primary {
   margin: 0;
 }
 
+/* ---- server gate (shell connect screen) ---- */
+
+.gate-msg {
+  text-align: center;
+  padding-top: 4rem;
+}
+
+.server-gate {
+  margin: 4rem auto 0;
+  width: min(26rem, calc(100% - 2rem));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.server-gate h2 {
+  margin: 0;
+}
+
+.server-gate p {
+  margin: 0;
+}
+
+.gate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
 /* ---- generic dialog forms (calendar) ---- */
 
 .stack {
@@ -1157,4 +1190,197 @@ button.primary {
   .links-toolbar {
     flex-wrap: wrap;
   }
+}
+
+/* ---- themes ----
+   Whole looks (palette + nav position + density), selected from the topbar
+   picker and applied as data-theme on <body>. "midnight" is the base look
+   defined above and needs no overrides. */
+
+.theme-picker {
+  margin-left: auto;
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+.topbar-account {
+  margin-left: 0;
+}
+
+/* -- daylight: light palette, same layout -- */
+
+body[data-theme="daylight"] {
+  --bg: #f3f4f8;
+  --surface: #ffffff;
+  --border: #d8dce6;
+  --text: #23262f;
+  --muted: #6b7280;
+  --accent: #3b5bdb;
+  --up: #16a34a;
+  --degraded: #d97706;
+  --down: #dc2626;
+  --unknown: #9ca3af;
+}
+
+/* -- sidebar: nav as a fixed left rail (desktop), bottom tabs (phone) -- */
+
+body[data-theme="sidebar"] .topbar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 12rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  padding: 1.25rem 1rem;
+  border-bottom: none;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  z-index: 10;
+}
+
+body[data-theme="sidebar"] .topbar a {
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.4rem;
+}
+
+body[data-theme="sidebar"] .topbar a[aria-current] {
+  background: var(--bg);
+  color: var(--accent);
+}
+
+body[data-theme="sidebar"] .brand {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+}
+
+body[data-theme="sidebar"] .theme-picker {
+  margin: auto 0 0.6rem;
+}
+
+body[data-theme="sidebar"] .topbar-account {
+  flex-direction: column;
+  align-items: stretch;
+  display: flex;
+  gap: 0.4rem;
+}
+
+body[data-theme="sidebar"] main {
+  margin-left: 12rem;
+  max-width: none;
+  padding: 1.5rem 2rem;
+}
+
+@media (max-width: 40rem) {
+  body[data-theme="sidebar"] .topbar {
+    inset: auto 0 0 0;
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0.5rem 0.75rem;
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+
+  body[data-theme="sidebar"] .brand,
+  body[data-theme="sidebar"] .theme-picker,
+  body[data-theme="sidebar"] .topbar-user {
+    display: none;
+  }
+
+  body[data-theme="sidebar"] .topbar-account {
+    flex-direction: row;
+  }
+
+  body[data-theme="sidebar"] main {
+    margin-left: 0;
+    padding: 1rem 1rem 4.5rem;
+  }
+}
+
+/* -- glass: gradient backdrop, translucent cards, floating pill nav -- */
+
+body[data-theme="glass"] {
+  --bg: #101223;
+  --surface: rgba(255, 255, 255, 0.055);
+  --border: rgba(255, 255, 255, 0.14);
+  --text: #e6e6f0;
+  --muted: #9a9ab0;
+  --accent: #b28dff;
+  background: fixed linear-gradient(135deg, #131029 0%, #101223 45%, #0d1f2d 100%);
+}
+
+body[data-theme="glass"] .topbar {
+  margin: 1rem auto 0;
+  width: min(72rem, calc(100% - 2rem));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  backdrop-filter: blur(12px);
+  padding: 0.6rem 1.4rem;
+}
+
+body[data-theme="glass"] .service-card,
+body[data-theme="glass"] .weather-now,
+body[data-theme="glass"] .login-card,
+body[data-theme="glass"] .server-gate {
+  backdrop-filter: blur(12px);
+  border-radius: 0.9rem;
+}
+
+body[data-theme="glass"] .service-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* -- terminal: flat monospace, sharp corners, dense -- */
+
+body[data-theme="terminal"] {
+  --bg: #0b0e0b;
+  --surface: #10140f;
+  --border: #263322;
+  --text: #c9d6c4;
+  --muted: #6f8468;
+  --accent: #6fdd8b;
+  --up: #6fdd8b;
+  --degraded: #e0c368;
+  --down: #e06c6c;
+  --unknown: #5a675a;
+  font-family: ui-monospace, "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.92em;
+}
+
+body[data-theme="terminal"] * {
+  border-radius: 0 !important;
+}
+
+body[data-theme="terminal"] .topbar {
+  padding: 0.5rem 1rem;
+}
+
+body[data-theme="terminal"] .topbar a {
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+}
+
+body[data-theme="terminal"] .topbar a[aria-current] {
+  color: var(--accent);
+}
+
+body[data-theme="terminal"] .brand::before {
+  content: "> ";
+}
+
+body[data-theme="terminal"] .widget h2 {
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
 }
