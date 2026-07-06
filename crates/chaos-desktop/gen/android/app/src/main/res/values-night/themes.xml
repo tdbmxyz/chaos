@@ -1,6 +1,9 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
+    <!-- The window background matches the default (Campbell) web UI background so
+         the inset padding around the webview blends in; light status-bar
+         icons on the dark background. -->
     <style name="Theme.chaos_desktop" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <item name="android:windowBackground">#FF0C0C0C</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

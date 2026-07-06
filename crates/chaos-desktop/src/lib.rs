@@ -25,6 +25,49 @@ fn dirs_config() -> Option<std::path::PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
 }
 
+/// Open a link with the system handler — the default browser, or whatever
+/// app registered the URL. Outbound links must not navigate the webview.
+/// (Android doesn't route through here: the Kotlin `ChaosAndroid.openUrl`
+/// bridge fires a VIEW intent instead.)
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("only http(s) links open externally".into());
+    }
+    open_with_system(&url).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn open_with_system(url: &str) -> std::io::Result<()> {
+    std::process::Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(target_os = "macos")]
+fn open_with_system(url: &str) -> std::io::Result<()> {
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(windows)]
+fn open_with_system(url: &str) -> std::io::Result<()> {
+    // ShellExecute semantics without `cmd /C start`'s quoting pitfalls.
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url])
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn open_with_system(_url: &str) -> std::io::Result<()> {
+    Err(std::io::Error::other("no system opener on this platform"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK's DMABUF renderer draws a blank window on the NVIDIA
@@ -37,6 +80,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![open_external])
         .setup(|app| {
             let platform = if cfg!(target_os = "android") {
                 "android"

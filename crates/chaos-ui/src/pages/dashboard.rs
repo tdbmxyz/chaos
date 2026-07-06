@@ -718,7 +718,10 @@ fn SearchBar(template: String) -> impl IntoView {
         }
         let encoded: String = url::form_urlencoded::byte_serialize(q.as_bytes()).collect();
         let target = template.replace("{}", &encoded);
-        let _ = window().open_with_url_and_target(&target, "_blank");
+        // shells: system browser; plain web: a normal new tab
+        if !crate::open_external(&target) {
+            let _ = window().open_with_url_and_target(&target, "_blank");
+        }
         query.set(String::new());
     };
 

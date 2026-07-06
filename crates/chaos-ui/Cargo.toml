@@ -14,6 +14,7 @@ url.workspace = true
 uuid.workspace = true
 js-sys.workspace = true
 web-sys = { workspace = true, features = [
+    "HtmlAnchorElement",
     "Window",
     "Location",
     "Storage",

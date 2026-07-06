@@ -181,7 +181,42 @@ fn open_app_native(package: &str, url: &str) {
         let _ = f.call2(&bridge, &package.into(), &url.into());
         return;
     }
-    let _ = window.open_with_url_and_target(url, "_blank");
+    // desktop shell: system opener; plain browser: a normal new tab
+    if !open_external(url) {
+        let _ = window.open_with_url_and_target(url, "_blank");
+    }
+}
+
+/// Open a URL outside the webview. In the Android shell that is a VIEW
+/// intent (an installed app that registered the URL claims it, the default
+/// browser otherwise); in the desktop shell it is the `open_external`
+/// command (xdg-open and friends). Returns false in a plain browser, where
+/// the anchor's own `target="_blank"` is already the right behavior.
+pub(crate) fn open_external(url: &str) -> bool {
+    use leptos::wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    if let Ok(bridge) = js_sys::Reflect::get(&window, &"ChaosAndroid".into())
+        && !bridge.is_undefined()
+        && let Ok(f) = js_sys::Reflect::get(&bridge, &"openUrl".into())
+        && let Ok(f) = f.dyn_into::<js_sys::Function>()
+    {
+        let _ = f.call1(&bridge, &url.into());
+        return true;
+    }
+    if let Ok(tauri) = js_sys::Reflect::get(&window, &"__TAURI__".into())
+        && !tauri.is_undefined()
+        && let Ok(core) = js_sys::Reflect::get(&tauri, &"core".into())
+        && let Ok(invoke) = js_sys::Reflect::get(&core, &"invoke".into())
+        && let Ok(invoke) = invoke.dyn_into::<js_sys::Function>()
+    {
+        let args = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&args, &"url".into(), &url.into());
+        let _ = invoke.call2(&core, &"open_external".into(), &args);
+        return true;
+    }
+    false
 }
 
 /// True inside the Android shell (it injects `window.CHAOS_PLATFORM`).
@@ -234,6 +269,33 @@ pub fn App(config: AppConfig) -> impl IntoView {
     let theme = ThemeSetting(RwSignal::new(stored_theme()));
     provide_context(theme);
     Effect::new(move |_| apply_theme(&theme.0.get()));
+
+    // Inside a shell, clicking an outbound link must not navigate the
+    // webview: one document-level interceptor reroutes every external
+    // http(s) anchor through the system opener (covers all target="_blank"
+    // links at once). Same-origin anchors — the SPA's own routes — pass
+    // through untouched, as does everything in a plain browser.
+    let external_clicks = window_event_listener(leptos::ev::click, |ev| {
+        use leptos::wasm_bindgen::JsCast;
+        let Some(target) = ev.target() else { return };
+        let Ok(el) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
+        let Ok(Some(anchor)) = el.closest("a[href]") else {
+            return;
+        };
+        let Ok(anchor) = anchor.dyn_into::<web_sys::HtmlAnchorElement>() else {
+            return;
+        };
+        let href = anchor.href();
+        let origin = window().location().origin().unwrap_or_default();
+        let external = (href.starts_with("http://") || href.starts_with("https://"))
+            && !href.starts_with(&origin);
+        if external && open_external(&href) {
+            ev.prevent_default();
+        }
+    });
+    on_cleanup(move || external_clicks.remove());
 
     let logout = Callback::new({
         let client = use_client();
