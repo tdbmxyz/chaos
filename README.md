@@ -41,6 +41,16 @@ First checkout only: `Cargo.lock` drives the pinned `wasm-bindgen-cli` in the fl
 If the lock file is missing, enter the shell, run `cargo generate-lockfile`,
 `git add Cargo.lock`, and re-enter the shell.
 
+### Branches & releases
+
+Git flow: `main` is protected and only moves by release, `develop` is the
+integration branch, and work happens on feature branches merged into
+`develop` by PR. CI (fmt, clippy, tests, nix build of the deployable
+packages) gates every PR and both long-lived branches. A release is a PR
+from `develop` to `main` that bumps the workspace version, followed by a
+matching `v*` tag — the release workflow then builds the artifacts and
+publishes the GitHub Release.
+
 ## Deployment
 
 ```console

@@ -1,0 +1,44 @@
+# CI: format, lint, and test on every push/PR to the long-lived
+# branches (Git flow: develop = integration, main = releases).
+#
+# Both jobs are required status checks on main, so a PR only merges
+# once the workspace is clean and the deployable nix packages build —
+# the same artifacts a `nixos-rebuild` on the server consumes.
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      # fmt + clippy (native and wasm targets), same as local `just check`
+      - name: just check
+        run: nix develop -c just check
+
+      - name: cargo test
+        run: nix develop -c cargo test --workspace
+
+  # The packages the server deployment actually uses (the Android APK
+  # and desktop bundle are built locally, not here).
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: nix build chaos-server + chaos-web
+        run: nix build .#chaos-server .#chaos-web --no-link
