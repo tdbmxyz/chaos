@@ -34,6 +34,7 @@ pub fn router(state: AppState) -> Router {
             put(calendar::update).delete(calendar::delete),
         )
         .route("/calendar/events", get(calendar::events))
+        .route("/calendar/refresh", post(calendar::refresh))
         .route("/events", post(calendar::create_event))
         .route(
             "/events/{id}",

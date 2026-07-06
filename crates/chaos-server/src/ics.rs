@@ -24,6 +24,7 @@ const MAX_OCCURRENCES: u16 = 400;
 #[derive(Debug, Clone)]
 struct RawEvent {
     title: String,
+    description: Option<String>,
     location: Option<String>,
     starts_at: DateTime<Utc>,
     ends_at: DateTime<Utc>,
@@ -37,6 +38,7 @@ struct RawEvent {
 #[derive(Debug, Clone)]
 pub struct FeedEvent {
     pub title: String,
+    pub description: Option<String>,
     pub location: Option<String>,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
@@ -165,6 +167,7 @@ fn raw_event(vevent: &ical::parser::ical::component::IcalEvent) -> Option<RawEve
 
     Some(RawEvent {
         title: value("SUMMARY").unwrap_or_else(|| "(untitled)".into()),
+        description: value("DESCRIPTION").filter(|s| !s.is_empty()),
         location: value("LOCATION").filter(|s| !s.is_empty()),
         starts_at,
         ends_at,
@@ -275,6 +278,7 @@ fn expand(event: &RawEvent, start: DateTime<Utc>, end: DateTime<Utc>, out: &mut 
 fn occurrence(event: &RawEvent, starts_at: DateTime<Utc>, duration: chrono::Duration) -> FeedEvent {
     FeedEvent {
         title: event.title.clone(),
+        description: event.description.clone(),
         location: event.location.clone(),
         starts_at,
         ends_at: starts_at + duration,
@@ -288,7 +292,7 @@ mod tests {
 
     const SAMPLE: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
 BEGIN:VEVENT\r\nSUMMARY:Bastille Day\r\nDTSTART;VALUE=DATE:20260714\r\nDTEND;VALUE=DATE:20260715\r\nEND:VEVENT\r\n\
-BEGIN:VEVENT\r\nSUMMARY:Standup\r\nLOCATION:Meet\r\nDTSTART;TZID=Europe/Paris:20260701T093000\r\nDTEND;TZID=Europe/Paris:20260701T094500\r\nRRULE:FREQ=WEEKLY;BYDAY=WE\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nSUMMARY:Standup\r\nLOCATION:Meet\r\nDESCRIPTION:Daily sync\r\nDTSTART;TZID=Europe/Paris:20260701T093000\r\nDTEND;TZID=Europe/Paris:20260701T094500\r\nRRULE:FREQ=WEEKLY;BYDAY=WE\r\nEND:VEVENT\r\n\
 BEGIN:VEVENT\r\nSUMMARY:One-off\r\nDTSTART:20260710T120000Z\r\nEND:VEVENT\r\n\
 END:VCALENDAR\r\n";
 
@@ -341,5 +345,6 @@ END:VCALENDAR\r\n";
         // Only the standup recurs into September (Wed Sep 2).
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].title, "Standup");
+        assert_eq!(out[0].description.as_deref(), Some("Daily sync"));
     }
 }

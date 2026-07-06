@@ -71,6 +71,7 @@ pub async fn events(
             calendar_name,
             color,
             title: event.title,
+            description: event.description,
             location: event.location,
             starts_at: event.starts_at,
             ends_at: event.ends_at,
@@ -96,6 +97,7 @@ pub async fn events(
                 calendar_name: calendar.name.clone(),
                 color: calendar.color.clone(),
                 title: event.title,
+                description: event.description,
                 location: event.location,
                 starts_at: event.starts_at,
                 ends_at: event.ends_at,
@@ -109,6 +111,20 @@ pub async fn events(
 
     out.sort_by_key(|event| event.starts_at);
     Ok(Json(out))
+}
+
+/// Drop the cached copy of every ICS feed the user subscribes to, so the
+/// next range query hits the upstream again ("refresh" button).
+pub async fn refresh(
+    AuthUser(user): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    for calendar in state.db.list_calendars(user.id).await? {
+        if calendar.kind == CalendarKind::Ics {
+            state.ics.invalidate(calendar.id).await;
+        }
+    }
+    Ok(Json(serde_json::json!({})))
 }
 
 pub async fn create_event(

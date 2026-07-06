@@ -220,6 +220,12 @@ impl ChaosClient {
         self.send_no_content(req).await
     }
 
+    /// Drop the server's cached ICS feeds so the next query refetches.
+    pub async fn refresh_calendars(&self) -> Result<()> {
+        let req = self.http.post(self.url("api/v1/calendar/refresh")?);
+        self.send_no_content(req).await
+    }
+
     /// Merged events (local + feeds) across all the user's calendars.
     pub async fn calendar_events(&self, query: &EventQuery) -> Result<Vec<CalendarEvent>> {
         let req = self

@@ -169,6 +169,22 @@ fn CalendarView() -> impl IntoView {
                 </div>
                 <div class="calendar-actions">
                     <button
+                        title="Refetch calendar feeds"
+                        on:click={
+                            let client = client.clone();
+                            move |_| {
+                                let client = client.clone();
+                                spawn_local(async move {
+                                    if client.refresh_calendars().await.is_ok() {
+                                        version.update(|n| *n += 1);
+                                    }
+                                });
+                            }
+                        }
+                    >
+                        "↻"
+                    </button>
+                    <button
                         class="primary"
                         on:click=move |_| {
                             dialog.set(Some(EventDraft::new_on(selected.get().unwrap_or(today))));
@@ -413,11 +429,17 @@ fn DayPanel(
                                 let editable = event.id;
                                 let edit_event = event.clone();
                                 let client = client.clone();
+                                let description = event
+                                    .description
+                                    .clone()
+                                    .filter(|d| !d.trim().is_empty())
+                                    .map(|d| view! { <p class="event-desc muted">{d}</p> });
                                 view! {
                                     <li>
                                         <span class="event-time muted">{time}</span>
                                         <span class="event-title">{event.title.clone()}</span>
                                         <span class="muted event-meta">{meta}</span>
+                                        {description}
                                         {editable
                                             .map(|id| {
                                                 view! {
