@@ -512,6 +512,7 @@ version = "0.1.0"
 dependencies = [
  "tauri",
  "tauri-build",
+ "url",
 ]
 
 [[package]]
@@ -569,6 +570,7 @@ dependencies = [
  "leptos_router",
  "url",
  "uuid",
+ "web-sys",
 ]
 
 [[package]]
@@ -577,6 +579,7 @@ version = "0.1.0"
 dependencies = [
  "chaos-ui",
  "console_error_panic_hook",
+ "js-sys",
  "leptos",
  "url",
  "web-sys",

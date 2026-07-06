@@ -4,26 +4,24 @@
   "version": "0.1.0",
   "identifier": "dev.tibo.chaos",
   "build": {
-    "beforeDevCommand": "cd ../chaos-web && trunk serve",
-    "devUrl": "http://localhost:8080",
-    "beforeBuildCommand": "cd ../chaos-web && trunk build --release",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
     "frontendDist": "../chaos-web/dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "chaos",
-        "width": 1280,
-        "height": 800
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
-    "icon": []
+    "active": true,
+    "targets": ["deb"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ]
   }
 }

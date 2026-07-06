@@ -12,3 +12,12 @@ leptos_router.workspace = true
 chrono.workspace = true
 url.workspace = true
 uuid.workspace = true
+web-sys = { workspace = true, features = [
+    "Window",
+    "Location",
+    "Storage",
+    "Navigator",
+    "Document",
+    "Element",
+    "HtmlElement",
+] }

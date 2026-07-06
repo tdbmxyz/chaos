@@ -9,4 +9,5 @@ chaos-ui.workspace = true
 console_error_panic_hook.workspace = true
 leptos.workspace = true
 url.workspace = true
-web-sys = { workspace = true, features = ["Window", "Location"] }
+web-sys = { workspace = true, features = ["Window", "Location", "Storage"] }
+js-sys.workspace = true

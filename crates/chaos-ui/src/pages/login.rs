@@ -36,6 +36,9 @@ pub fn Login() -> impl IntoView {
                 .await
             {
                 Ok(resp) => {
+                    if crate::persist_token() {
+                        crate::store_token(Some(&resp.token));
+                    }
                     session.0.set(Some(resp.user));
                     navigate("/", Default::default());
                 }

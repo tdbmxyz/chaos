@@ -17,8 +17,20 @@
     pkgs = import nixpkgs {
       inherit system;
       overlays = [rust-overlay.overlays.default];
+      # Android SDK/NDK for the mobile shell
+      config.allowUnfree = true;
+      config.android_sdk.accept_license = true;
     };
     inherit (pkgs) lib;
+
+    androidNdkVersion = "27.0.12077973";
+    androidComposition = pkgs.androidenv.composeAndroidPackages {
+      # what the tauri-generated gradle project compiles against
+      platformVersions = ["34" "36"];
+      buildToolsVersions = ["34.0.0" "35.0.0"];
+      includeNDK = true;
+      ndkVersion = androidNdkVersion;
+    };
 
     version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
 
@@ -125,9 +137,53 @@
 
       meta.description = "chaos web frontend (static trunk dist)";
     };
+    # Desktop shell. generate_context! bakes the web dist into the binary at
+    # compile time, so the chaos-web output is copied in place before cargo
+    # runs. wrapGAppsHook3 wires GSettings schemas + TLS (glib-networking),
+    # without which WebKitGTK apps crash or fail https at runtime.
+    chaos-desktop = rustPlatform.buildRustPackage {
+      pname = "chaos-desktop";
+      inherit version;
+      src = self;
+
+      cargoLock.lockFile = ./Cargo.lock;
+
+      cargoBuildFlags = ["-p" "chaos-desktop"];
+      cargoTestFlags = ["-p" "chaos-desktop"];
+
+      nativeBuildInputs = with pkgs; [pkg-config wrapGAppsHook3];
+      buildInputs = tauriLibs ++ [pkgs.glib-networking];
+
+      preBuild = ''
+        rm -rf crates/chaos-web/dist
+        cp -r ${chaos-web} crates/chaos-web/dist
+      '';
+
+      postInstall = ''
+        install -Dm644 crates/chaos-desktop/icons/128x128.png \
+          $out/share/icons/hicolor/128x128/apps/chaos.png
+        install -Dm644 crates/chaos-desktop/icons/32x32.png \
+          $out/share/icons/hicolor/32x32/apps/chaos.png
+        mkdir -p $out/share/applications
+        cat > $out/share/applications/chaos.desktop <<INI
+        [Desktop Entry]
+        Name=chaos
+        Comment=Dashboard, links and calendar for local services
+        Exec=chaos-desktop
+        Icon=chaos
+        Type=Application
+        Categories=Utility;
+        INI
+      '';
+
+      meta = {
+        description = "chaos desktop shell (Tauri)";
+        mainProgram = "chaos-desktop";
+      };
+    };
   in {
     packages.${system} = {
-      inherit chaos-server chaos-web;
+      inherit chaos-server chaos-web chaos-desktop;
       default = chaos-server;
     };
 
@@ -136,29 +192,65 @@
       default = self.nixosModules.chaos;
     };
 
-    devShells.${system}.default = pkgs.mkShell {
-      name = "chaos";
+    devShells.${system} = {
+      default = pkgs.mkShell {
+        name = "chaos";
 
-      nativeBuildInputs = with pkgs; [
-        pkg-config
-        gobject-introspection
-      ];
+        nativeBuildInputs = with pkgs; [
+          pkg-config
+          gobject-introspection
+        ];
 
-      buildInputs = tauriLibs;
+        buildInputs = tauriLibs;
 
-      packages = with pkgs;
-        [
-          rustToolchain
-          trunk
-          binaryen # wasm-opt, used by trunk release builds
-          cargo-tauri
-          just
-          monolith # page snapshots for the link archiver
-        ]
-        ++ lib.optional hasCargoLock wasm-bindgen-cli;
+        packages = with pkgs;
+          [
+            rustToolchain
+            trunk
+            binaryen # wasm-opt, used by trunk release builds
+            cargo-tauri
+            just
+            monolith # page snapshots for the link archiver
+          ]
+          ++ lib.optional hasCargoLock wasm-bindgen-cli;
 
-      # Some webkit/nvidia combinations render a blank Tauri window without it.
-      env.WEBKIT_DISABLE_DMABUF_RENDERER = "1";
+        # Some webkit/nvidia combinations render a blank Tauri window without it.
+        env.WEBKIT_DISABLE_DMABUF_RENDERER = "1";
+      };
+
+      # Android build of the shell: `nix develop .#android`, then `just apk`
+      # (or `cargo tauri android build --apk --target aarch64` in
+      # crates/chaos-desktop).
+      android = pkgs.mkShell {
+        name = "chaos-android";
+
+        packages = with pkgs;
+          [
+            rustToolchain
+            trunk
+            binaryen
+            just
+            cargo-tauri
+            jdk17
+            androidComposition.androidsdk
+          ]
+          ++ lib.optional hasCargoLock wasm-bindgen-cli;
+
+        env = rec {
+          JAVA_HOME = pkgs.jdk17.home;
+          ANDROID_HOME = "${androidComposition.androidsdk}/libexec/android-sdk";
+          NDK_HOME = "${ANDROID_HOME}/ndk/${androidNdkVersion}";
+        };
+
+        # The tauri CLI insists on `rustup target add`; the rust-overlay
+        # toolchain already ships every Android target, so a no-op is honest.
+        shellHook = ''
+          shim_dir=$(mktemp -d)
+          printf '#!/bin/sh\nexit 0\n' > "$shim_dir/rustup"
+          chmod +x "$shim_dir/rustup"
+          export PATH="$shim_dir:$PATH"
+        '';
+      };
     };
 
     formatter.${system} = pkgs.alejandra;

@@ -11,9 +11,20 @@ server:
 web:
     cd crates/chaos-web && trunk serve
 
-# Run the desktop app in dev mode (starts trunk itself via beforeDevCommand)
-desktop:
-    cd crates/chaos-desktop && cargo tauri dev
+# Run the desktop shell against a server (rebuilds the web dist first)
+desktop server="http://127.0.0.1:4600":
+    cd crates/chaos-web && trunk build
+    CHAOS_SERVER={{server}} cargo run -p chaos-desktop
+
+# Build the desktop bundle (deb; NixOS installs use the flake package)
+bundle:
+    cd crates/chaos-web && trunk build --release
+    cd crates/chaos-desktop && cargo tauri build
+
+# Build the Android APK (run inside `nix develop .#android`)
+apk:
+    cd crates/chaos-web && trunk build --release
+    cd crates/chaos-desktop && cargo tauri android build --apk --target aarch64
 
 # Build the production frontend bundle
 build-web:

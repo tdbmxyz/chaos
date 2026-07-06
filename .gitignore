@@ -1,5 +1,6 @@
 inspirations/
 /target
+/icons/
 /crates/chaos-web/dist
 /result
 .direnv/
