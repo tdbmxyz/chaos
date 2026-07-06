@@ -213,25 +213,26 @@ pub fn use_apps() -> Apps {
     use_context::<Apps>().expect("Apps provided by App")
 }
 
-/// Try the Android shell's native bridge (launches the app when installed,
-/// otherwise views the URL); falls back to a plain window.open elsewhere.
-fn open_app_native(package: &str, url: &str) {
+/// Ask the Android shell to launch a companion app natively. True only when
+/// the app is installed and claimed the tap; false (not installed, or no
+/// bridge) means the caller should show the embedded view instead.
+fn open_app_native(package: &str) -> bool {
     use leptos::wasm_bindgen::JsCast;
     let Some(window) = web_sys::window() else {
-        return;
+        return false;
     };
     if let Ok(bridge) = js_sys::Reflect::get(&window, &"ChaosAndroid".into())
         && !bridge.is_undefined()
         && let Ok(f) = js_sys::Reflect::get(&bridge, &"openApp".into())
         && let Ok(f) = f.dyn_into::<js_sys::Function>()
     {
-        let _ = f.call2(&bridge, &package.into(), &url.into());
-        return;
+        return f
+            .call1(&bridge, &package.into())
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
     }
-    // desktop shell: system opener; plain browser: a normal new tab
-    if !open_external(url) {
-        let _ = window.open_with_url_and_target(url, "_blank");
-    }
+    false
 }
 
 /// Open a URL outside the webview. In the Android shell that is a VIEW
@@ -410,19 +411,24 @@ pub fn App(config: AppConfig) -> impl IntoView {
 }
 
 /// Sidebar entry for a companion app. Inside the Android shell (with a
-/// configured package) it launches the native app / URL through the
-/// bridge; everywhere else it routes to the embedded view.
+/// configured package) it prefers the native app; when that isn't
+/// installed — and everywhere else — it routes to the embedded view.
 #[component]
 fn AppNavEntry(app: AppLink) -> impl IntoView {
+    let route = format!("/apps/{}", app.id);
     match (on_android(), app.android_package) {
         (true, Some(package)) => {
-            let url = app.url.to_string();
+            // Client-side navigation, not the anchor's own: only the root
+            // path resolves in the shell's asset protocol.
+            let navigate = leptos_router::hooks::use_navigate();
             view! {
                 <a
-                    href="#"
+                    href=route.clone()
                     on:click=move |ev| {
                         ev.prevent_default();
-                        open_app_native(&package, &url);
+                        if !open_app_native(&package) {
+                            navigate(&route, Default::default());
+                        }
                     }
                 >
                     {app.title}
@@ -430,7 +436,7 @@ fn AppNavEntry(app: AppLink) -> impl IntoView {
             }
             .into_any()
         }
-        _ => view! { <A href=format!("/apps/{}", app.id)>{app.title}</A> }.into_any(),
+        _ => view! { <A href=route>{app.title}</A> }.into_any(),
     }
 }
 

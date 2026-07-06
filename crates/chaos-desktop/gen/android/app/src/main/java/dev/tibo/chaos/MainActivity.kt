@@ -40,19 +40,21 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
     // Companion apps ("plugins" like yomu): the web UI calls
-    // window.ChaosAndroid.openApp(package, fallbackUrl).
+    // window.ChaosAndroid.openApp(package) and embeds the app itself
+    // when that returns false.
     webView.addJavascriptInterface(AppBridge(), "ChaosAndroid")
     pendingShare?.let { deliver(it) }
     pendingShare = null
   }
 
   inner class AppBridge {
+    // True when the native app claimed the tap; false (not installed) tells
+    // the web UI to show its embedded view inside chaos instead.
     @JavascriptInterface
-    fun openApp(pkg: String, url: String) {
-      runOnUiThread {
-        val launch = packageManager.getLaunchIntentForPackage(pkg)
-        startActivity(launch ?: Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-      }
+    fun openApp(pkg: String): Boolean {
+      val launch = packageManager.getLaunchIntentForPackage(pkg) ?: return false
+      runOnUiThread { startActivity(launch) }
+      return true
     }
 
     // Outbound links leave the webview through a VIEW intent, so an

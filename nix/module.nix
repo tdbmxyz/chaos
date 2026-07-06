@@ -149,6 +149,11 @@ in {
         Restart = "on-failure";
         RestartSec = 5;
 
+        # A privileged port (e.g. 80) needs the bind capability; the
+        # service user is not root.
+        AmbientCapabilities = lib.mkIf (cfg.port < 1024) ["CAP_NET_BIND_SERVICE"];
+        CapabilityBoundingSet = lib.mkIf (cfg.port < 1024) ["CAP_NET_BIND_SERVICE"];
+
         # Hardening (the service only needs its state dir and the network).
         NoNewPrivileges = true;
         PrivateTmp = true;
