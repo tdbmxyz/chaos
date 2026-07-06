@@ -165,8 +165,9 @@ wrap the same bundle for app-like use:
   remembers the address.
 - **Desktop (other Linux)**: `just bundle` produces a .deb under
   `target/release/bundle/deb/`.
-- **Android**: `nix develop .#android` then `just apk`; the signed APK
-  lands under `crates/chaos-desktop/gen/android/app/build/outputs/apk/`.
+- **Android**: `just apk` (it enters the `.#android` dev shell itself —
+  no Android Studio / ~/Android setup needed); the signed APK lands
+  under `crates/chaos-desktop/gen/android/app/build/outputs/apk/`.
   On first launch the connect screen asks for the server address. Release
   signing reads `gen/android/keystore.properties` (see the .sample; the
   real keystore lives in `~/.config/chaos/`).

@@ -21,10 +21,11 @@ bundle:
     cd crates/chaos-web && trunk build --release
     cd crates/chaos-desktop && cargo tauri build
 
-# Build the Android APK (run inside `nix develop .#android`)
+# Build the signed Android APK. Enters the .#android dev shell itself
+# (Android SDK/NDK + JDK come from nix, not ~/Android).
 apk:
     cd crates/chaos-web && trunk build --release
-    cd crates/chaos-desktop && cargo tauri android build --apk --target aarch64
+    nix develop .#android --command sh -c 'cd crates/chaos-desktop && cargo tauri android build --apk --target aarch64'
 
 # Build the production frontend bundle
 build-web:
