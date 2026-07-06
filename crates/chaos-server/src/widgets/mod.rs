@@ -77,20 +77,32 @@ impl WidgetHub {
 
     /// Payload for one widget instance, served from cache within the TTL.
     /// On upstream failure a stale cached payload is preferred over an error.
-    pub async fn data(&self, id: &str) -> Result<WidgetData, WidgetError> {
+    ///
+    /// `location` is a device preference: weather widgets fetch that place
+    /// instead of the configured one (each place cached separately); other
+    /// widget kinds ignore it.
+    pub async fn data(&self, id: &str, location: Option<&str>) -> Result<WidgetData, WidgetError> {
         let widget = self.entries.get(id).ok_or(WidgetError::UnknownWidget)?;
         let ttl = ttl(widget);
 
-        if let Some(entry) = self.cache.read().await.get(id)
+        let location = location
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && l.len() <= 64 && matches!(widget, Widget::Weather { .. }));
+        let cache_key = match location {
+            Some(place) => format!("{id}@{place}"),
+            None => id.to_string(),
+        };
+
+        if let Some(entry) = self.cache.read().await.get(&cache_key)
             && entry.fetched.elapsed() < ttl
         {
             return Ok(entry.data.clone());
         }
 
-        match self.fetch(widget).await {
+        match self.fetch(widget, location).await {
             Ok(data) => {
                 self.cache.write().await.insert(
-                    id.to_string(),
+                    cache_key,
                     CacheEntry {
                         fetched: Instant::now(),
                         data: data.clone(),
@@ -99,7 +111,7 @@ impl WidgetHub {
                 Ok(data)
             }
             Err(reason) => {
-                if let Some(entry) = self.cache.read().await.get(id) {
+                if let Some(entry) = self.cache.read().await.get(&cache_key) {
                     tracing::warn!(id, reason, "widget refresh failed, serving stale data");
                     return Ok(entry.data.clone());
                 }
@@ -109,11 +121,11 @@ impl WidgetHub {
         }
     }
 
-    async fn fetch(&self, widget: &Widget) -> Result<WidgetData, String> {
+    async fn fetch(&self, widget: &Widget, location: Option<&str>) -> Result<WidgetData, String> {
         match widget {
-            Widget::Weather { location } => {
-                weather::fetch(&self.http, &self.geocode, location).await
-            }
+            Widget::Weather {
+                location: configured,
+            } => weather::fetch(&self.http, &self.geocode, location.unwrap_or(configured)).await,
             Widget::Feed { urls, limit, .. } => feed::fetch(&self.http, urls, *limit).await,
             Widget::HackerNews { limit, .. } => posts::hacker_news(&self.http, *limit).await,
             Widget::Lobsters { limit, .. } => posts::lobsters(&self.http, *limit).await,
@@ -169,7 +181,10 @@ impl WidgetHub {
             .await
             .map_err(WidgetError::Upstream)?;
 
-        let data = self.fetch(widget).await.map_err(WidgetError::Upstream)?;
+        let data = self
+            .fetch(widget, None)
+            .await
+            .map_err(WidgetError::Upstream)?;
         self.cache.write().await.insert(
             id.to_string(),
             CacheEntry {

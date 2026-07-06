@@ -169,6 +169,9 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => String::new(),
     };
 
+    // Device preference: weather follows the location set on /settings.
+    let weather_location =
+        matches!(widget, Widget::Weather { .. }).then(|| crate::pref(crate::WEATHER_LOCATION_KEY));
     let data = LocalResource::new(move || {
         tick.track();
         if let Some(RefreshTick(refresh)) = refresh {
@@ -176,7 +179,8 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         }
         let client = client.clone();
         let id = id.clone();
-        async move { client.widget_data(&id).await }
+        let location = weather_location.clone().flatten();
+        async move { client.widget_data(&id, location.as_deref()).await }
     });
 
     view! {
@@ -264,7 +268,7 @@ fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
             }
             let client = client.clone();
             let id = id.clone();
-            async move { client.widget_data(&id).await }
+            async move { client.widget_data(&id, None).await }
         }
     });
 
@@ -451,10 +455,19 @@ fn calendar_cells((year, month): (i32, u32), today: NaiveDate) -> impl IntoView 
 
 #[component]
 fn WeatherView(weather: WeatherData) -> impl IntoView {
+    // °F is a device display preference (/settings); the wire stays metric.
+    let fahrenheit = crate::pref(crate::WEATHER_UNITS_KEY).as_deref() == Some("fahrenheit");
+    let temp = move |celsius: f64| {
+        if fahrenheit {
+            format!("{:.0}°", celsius * 9.0 / 5.0 + 32.0)
+        } else {
+            format!("{celsius:.0}°")
+        }
+    };
     let details = format!(
-        "{} · feels {:.0}° · wind {:.0} km/h{}",
+        "{} · feels {} · wind {:.0} km/h{}",
         weather.location,
-        weather.apparent_c,
+        temp(weather.apparent_c),
         weather.wind_kmh,
         weather
             .humidity_pct
@@ -465,7 +478,7 @@ fn WeatherView(weather: WeatherData) -> impl IntoView {
         <div class="weather">
             <div class="weather-now">
                 <span class="weather-emoji">{weather_emoji(weather.weather_code)}</span>
-                <span class="weather-temp">{format!("{:.0}°", weather.temperature_c)}</span>
+                <span class="weather-temp">{temp(weather.temperature_c)}</span>
                 <div class="weather-desc">
                     <div>{weather.description}</div>
                     <div class="muted">{details}</div>
@@ -480,8 +493,8 @@ fn WeatherView(weather: WeatherData) -> impl IntoView {
                             <div class="weather-day">
                                 <span class="muted">{day.date.format("%a").to_string()}</span>
                                 <span>{weather_emoji(day.weather_code)}</span>
-                                <span>{format!("{:.0}°", day.max_c)}</span>
-                                <span class="muted">{format!("{:.0}°", day.min_c)}</span>
+                                <span>{temp(day.max_c)}</span>
+                                <span class="muted">{temp(day.min_c)}</span>
                             </div>
                         }
                     })

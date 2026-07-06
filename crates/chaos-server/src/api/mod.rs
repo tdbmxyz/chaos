@@ -7,7 +7,7 @@ mod error;
 mod icons;
 mod links;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chaos_domain::{
@@ -40,6 +40,7 @@ pub fn router(state: AppState) -> Router {
             "/events/{id}",
             put(calendar::update_event).delete(calendar::delete_event),
         )
+        .route("/apps", get(apps))
         .route("/services", get(services))
         .route("/dashboard", get(dashboard))
         .route("/widgets/{id}", get(widget_data))
@@ -93,11 +94,24 @@ async fn dashboard(State(state): State<AppState>) -> Json<DashboardLayout> {
     Json(state.widgets.layout.clone())
 }
 
+#[derive(serde::Deserialize)]
+struct WidgetQuery {
+    /// Device preference: weather widgets fetch this location instead of
+    /// the configured one.
+    location: Option<String>,
+}
+
 async fn widget_data(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<WidgetQuery>,
 ) -> Result<Json<WidgetData>, ApiError> {
-    state.widgets.data(&id).await.map(Json).map_err(Into::into)
+    state
+        .widgets
+        .data(&id, query.location.as_deref())
+        .await
+        .map(Json)
+        .map_err(Into::into)
 }
 
 async fn widget_systemd(
@@ -111,6 +125,10 @@ async fn widget_systemd(
         .await
         .map(Json)
         .map_err(Into::into)
+}
+
+async fn apps(State(state): State<AppState>) -> Json<Vec<chaos_domain::AppLink>> {
+    Json(state.config.apps.clone())
 }
 
 async fn services(State(state): State<AppState>) -> Json<Vec<ServiceWithStatus>> {

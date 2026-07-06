@@ -77,3 +77,24 @@ pub struct ServiceWithStatus {
     pub def: ServiceDef,
     pub status: ServiceStatus,
 }
+
+/// A companion application integrated into chaos ("plugin", e.g. yomu).
+/// Configured server-side; clients only see apps the admin activated, so
+/// nothing shows up otherwise. Web/desktop embed the app's UI; the Android
+/// shell launches the native app when `android_package` is installed and
+/// falls back to the URL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppLink {
+    /// Stable identifier (slug), e.g. `"yomu"`.
+    pub id: String,
+    /// Sidebar label, e.g. `"Yomu"`.
+    pub title: String,
+    /// Where the app's web UI lives, e.g. `"http://zeus:4700"`.
+    pub url: Url,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Android application id to launch instead of the URL, e.g.
+    /// `"xyz.tdbm.yomu"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub android_package: Option<String>,
+}

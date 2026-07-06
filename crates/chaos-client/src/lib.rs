@@ -5,7 +5,7 @@
 //! the API surface is exercised from exactly one place.
 
 use chaos_domain::{
-    ApiErrorBody, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
+    ApiErrorBody, AppLink, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
     CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse, Link,
     LinkPage, LinkQuery, LoginRequest, LoginResponse, ServiceWithStatus, SystemdActionRequest,
     TagWithCount, UpdateLinkRequest, User, WidgetData,
@@ -77,9 +77,20 @@ impl ChaosClient {
         self.get("api/v1/dashboard").await
     }
 
+    /// Companion apps activated in the server config (empty = none).
+    pub async fn apps(&self) -> Result<Vec<AppLink>> {
+        self.get("api/v1/apps").await
+    }
+
     /// Live payload of a data widget from the layout (weather, feeds…).
-    pub async fn widget_data(&self, id: &str) -> Result<WidgetData> {
-        self.get(&format!("api/v1/widgets/{id}")).await
+    /// `location` is the device's weather-location preference; ignored by
+    /// every widget kind except weather.
+    pub async fn widget_data(&self, id: &str, location: Option<&str>) -> Result<WidgetData> {
+        let mut req = self.http.get(self.url(&format!("api/v1/widgets/{id}"))?);
+        if let Some(location) = location {
+            req = req.query(&[("location", location)]);
+        }
+        self.send(req).await
     }
 
     /// Start/stop/restart a unit of a systemd widget; returns the refreshed
