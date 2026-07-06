@@ -153,6 +153,28 @@ declared on the widget, so the reachable surface is the intersection of
 both lists. Without the polkit rule, actions fail with "interactive
 authentication required" while status display keeps working.
 
+## Desktop and phone apps
+
+The web UI served by the server is the primary interface; the Tauri shells
+wrap the same bundle for app-like use:
+
+- **Desktop (NixOS)**: `nix build .#chaos-desktop` (or add the package to
+  the system flake) — installs a desktop entry. Point it at the server
+  once with `echo http://zeus:4600 > ~/.config/chaos/server` (or the
+  `CHAOS_SERVER` env var); without it the app shows a connect screen and
+  remembers the address.
+- **Desktop (other Linux)**: `just bundle` produces a .deb under
+  `target/release/bundle/deb/`.
+- **Android**: `nix develop .#android` then `just apk`; the signed APK
+  lands under `crates/chaos-desktop/gen/android/app/build/outputs/apk/`.
+  On first launch the connect screen asks for the server address. Release
+  signing reads `gen/android/keystore.properties` (see the .sample; the
+  real keystore lives in `~/.config/chaos/`).
+
+Shells talk to the server cross-origin, so they sign in with a bearer
+token stored on the device instead of the browser cookie; nothing needs
+configuring server-side (CORS is already open — LAN posture).
+
 ## Migrating Linkwarden data
 
 On the server, with the service stopped or against a copy of the DB:

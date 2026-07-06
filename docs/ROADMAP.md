@@ -78,15 +78,47 @@ server-side, one instance id per widget (`GET /api/v1/widgets/{id}`).
 
 - [x] Flake packages: `chaos-server`, `chaos-web` (trunk dist built in nix)
 - [x] NixOS module `services.chaos` (freeform TOML settings, monolith on PATH,
-      DynamicUser + /var/lib/chaos state) — see docs/deployment.md
+      static chaos user + /var/lib/chaos state, `chaos-admin` host command)
+      — see docs/deployment.md
 - [ ] Replace glance in the system flake (host-side change; recipe in
       docs/deployment.md)
-- [ ] Desktop bundle with icons (`cargo tauri icon`, `bundle.active = true`)
+
+## Phase 7 — Shells & themes
+
+Same shell pattern as yomu (yomu-shell): the web bundle runs inside Tauri,
+the shell only injects `window.CHAOS_API_BASE`, the UI has a ServerGate
+connect screen and keeps the session token in localStorage when the API is
+cross-origin (bearer instead of the cookie).
+
+- [x] API-base resolution seam (injected global → localStorage override →
+      origin → fallback; `tauri.localhost` never trusted as API)
+- [x] Desktop shell: `CHAOS_SERVER` env / `~/.config/chaos/server`, NVIDIA
+      DMABUF workaround, deb + AppImage bundles (`just bundle`)
+- [x] Android shell: `nix develop .#android` + `just apk` (signed release,
+      keystore in ~/.config/chaos, gen/android committed)
+- [x] Selectable themes (palette + nav layout, `data-theme` CSS): midnight,
+      daylight, sidebar, glass, terminal — pick one, then prune the rest
+
+## Phase 8 — Candidates (in rough value order)
+
+- [ ] Deploy on zeus, retire glance (recipe ready in docs/deployment.md)
+- [ ] authentik (OIDC) sign-in once deployed (seam in ADR 0004)
+- [ ] Notifications: service down / calendar reminders via ntfy or web push
+- [ ] Dashboard editing in-app (add/move/remove widgets, persisted
+      server-side) instead of TOML-only layout
+- [ ] Quick-add from phone: PWA share-target + Android share intent so
+      links can be saved from any app
+- [ ] Calendar polish: week/agenda view, event descriptions in the day
+      panel, feed refresh button, per-calendar colors in the picker
+- [ ] Links polish: pagination UI, favicons, bulk actions, FTS over
+      titles/descriptions
+- [ ] Server stats history (small ring buffer + sparklines)
+- [ ] Todo/groceries widget (shared household lists, pairs with calendar)
+- [ ] Global quick-search across services, links and events (Ctrl-K)
+- [ ] Scheduled SQLite backup/export
 
 ## Deferred / explicitly out of scope
 
-- **Auth** — LAN-only posture for now; revisit if exposed beyond the LAN
-  (axum middleware + token in chaos-client is the planned seam).
-- **Manga/webtoon reader** — separate application, see [manga-app.md](manga-app.md).
-- **Mobile** — Tauri v2 supports Android/iOS; the chaos-ui/shell split keeps the
-  door open, but the manga app is the one that really needs mobile.
+- **Manga/webtoon reader** — separate application: [yomu](../../yomu).
+- **CalDAV two-way sync** — only if writing to external calendars is ever
+  needed; ICS read + local write covers the household case.

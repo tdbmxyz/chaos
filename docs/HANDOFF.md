@@ -1,4 +1,4 @@
-# chaos — session handoff (2026-07-05, night)
+# chaos — session handoff (2026-07-06)
 
 Fresh-session primer. Everything below is committed on `main`; working tree
 clean. Companion project: [yomu](../../yomu) (manga app, own repo + HANDOFF).
@@ -56,9 +56,29 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   warning. All-day events = symbolic UTC dates.
 - **Mobile**: usable at phone widths (topbar wraps, single-column dashboard,
   calendar chips become dots, links stack) — verified via 390px screenshots.
-- **Nix**: `nix build .#chaos-server` / `.#chaos-web` both green (trunk runs
-  in the sandbox with the lock-pinned wasm-bindgen-cli). NixOS module
-  `services.chaos` eval-tested; deployment recipe in `docs/deployment.md`.
+- **Shells (Tauri v2, crates/chaos-desktop)**: same pattern as yomu-shell.
+  The web bundle resolves its API base `window.CHAOS_API_BASE` →
+  `localStorage["chaos-api-base"]` → page origin (`tauri.localhost` never
+  trusted) → `127.0.0.1:4600`; a ServerGate health-check shows a connect
+  form when unreachable. Cross-origin API ⇒ the session token is kept in
+  localStorage and sent as bearer (`AppConfig.persist_token`); same-origin
+  web keeps the HttpOnly cookie. Desktop: `just desktop [server]`,
+  `CHAOS_SERVER` env / `~/.config/chaos/server`, NVIDIA DMABUF workaround,
+  `just bundle` (deb) or `nix build .#chaos-desktop` (desktop entry +
+  icons; AppImage dropped — linuxdeploy doesn't run on NixOS). Verified
+  e2e: shell against a live server requested health/me/dashboard/icons/
+  widgets. Android: `nix develop .#android` + `just apk`; gen/android
+  committed with yomu's keystore-signing + cleartext-release edits;
+  keystore + keystore.properties in `~/.config/chaos` (gitignored copy at
+  gen/android/keystore.properties).
+- **Themes**: five selectable looks (midnight/daylight/sidebar/glass/
+  terminal) as `body[data-theme]` CSS blocks, picker in the topbar,
+  persisted as `chaos-theme` in localStorage. Sidebar theme = left rail on
+  desktop, bottom tabs on phone. Pick one, then prune.
+- **Nix**: `nix build .#chaos-server` / `.#chaos-web` / `.#chaos-desktop`
+  green (trunk runs in the sandbox with the lock-pinned wasm-bindgen-cli).
+  NixOS module `services.chaos` eval-tested; deployment recipe in
+  `docs/deployment.md`.
 
 ## Conventions (also apply to yomu)
 
@@ -74,22 +94,19 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   wasm-bindgen version change ⇒ refresh two hashes in flake.nix;
   cargo check of chaos-desktop needs `crates/chaos-web/dist/index.html`.
 
-## Next steps (in rough value order)
+## Next steps (in rough value order — full list in ROADMAP phase 8)
 
-1. **Deploy on zeus** (user action + assist): wire `nixosModules.chaos` into
+1. **Theme decision** (user): pick from the five; make it the default and
+   prune the rest (delete their CSS blocks + THEMES entries).
+2. **Deploy on zeus** (user action + assist): wire `nixosModules.chaos` into
    the system flake per docs/deployment.md, port the glance servicesList
-   mapping, run alongside glance, then retire glance.
-2. authentik integration when the user deploys it: OIDC redirect flow +
+   mapping, run alongside glance, then retire glance. Install the phone
+   APK / `nix build .#chaos-desktop` on the desktop.
+3. authentik integration when the user deploys it: OIDC redirect flow +
    `sub`→user mapping; session layer unchanged (ADR 0004). Until then:
-   `chaos-admin add-user tibo` / `add-user so` on zeus (module wraps the
-   CLI with the service config + chaos user).
-3. Calendar polish: event description shown in day panel (stored but not
-   displayed), week view(?), feed refresh button. Editable bookmarks still
-   an open question.
-4. Links polish: pagination UI (API supports limit/offset), FTS5 for
-   titles/descriptions too, link icons/favicons, bulk actions.
-5. Desktop (deferred until user has computer access): server URL picker +
-   stored bearer token (`ChaosClient::with_token` is ready), `cargo tauri
-   icon` + bundle, flake package.
-6. If ever exposed beyond the LAN: put the remaining public routes behind
+   `chaos-admin add-user tibo` / `add-user so` on zeus.
+4. Notifications (service down, calendar reminders) via ntfy or web push.
+5. Dashboard editing in-app; quick-add share target on Android.
+6. Calendar/links polish (ROADMAP phase 8 has the itemized list).
+7. If ever exposed beyond the LAN: put the remaining public routes behind
    `AuthUser` (one-line per route) and front with authentik.
