@@ -38,6 +38,9 @@ pub struct Config {
     /// column (search + services + bookmarks) is derived from the fields
     /// above — see `widgets::resolve_layout`.
     pub columns: Vec<ColumnConfig>,
+    /// Companion applications ("plugins", e.g. yomu). Empty = feature off,
+    /// nothing rendered anywhere.
+    pub apps: Vec<chaos_domain::AppLink>,
 }
 
 /// One dashboard column as written in configuration. Widget instance ids are
@@ -98,6 +101,7 @@ impl Default for Config {
             services: Vec::new(),
             bookmarks: Vec::new(),
             columns: Vec::new(),
+            apps: Vec::new(),
         }
     }
 }

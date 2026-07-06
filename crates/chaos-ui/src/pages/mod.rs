@@ -1,9 +1,11 @@
+mod app;
 mod calendar;
 mod dashboard;
 mod links;
 mod login;
 mod settings;
 
+pub use app::AppPage;
 pub use calendar::CalendarPage;
 pub use dashboard::Dashboard;
 pub use links::Links;

@@ -3,6 +3,7 @@ package dev.tibo.chaos
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
@@ -25,8 +26,21 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
+    // Companion apps ("plugins" like yomu): the web UI calls
+    // window.ChaosAndroid.openApp(package, fallbackUrl).
+    webView.addJavascriptInterface(AppBridge(), "ChaosAndroid")
     pendingShare?.let { deliver(it) }
     pendingShare = null
+  }
+
+  inner class AppBridge {
+    @JavascriptInterface
+    fun openApp(pkg: String, url: String) {
+      runOnUiThread {
+        val launch = packageManager.getLaunchIntentForPackage(pkg)
+        startActivity(launch ?: Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+      }
+    }
   }
 
   private fun sharedText(intent: Intent?): String? =

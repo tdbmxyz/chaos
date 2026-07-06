@@ -38,10 +38,16 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
+            let platform = if cfg!(target_os = "android") {
+                "android"
+            } else {
+                "desktop"
+            };
             let mut window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("chaos")
-                    .inner_size(1280.0, 800.0);
+                    .inner_size(1280.0, 800.0)
+                    .initialization_script(format!("window.CHAOS_PLATFORM = '{platform}';"));
             if let Some(server) = configured_server().filter(|s| url::Url::parse(s).is_ok()) {
                 // The URL was just validated; escape quotes anyway.
                 let escaped = server.replace('\\', "\\\\").replace('\'', "\\'");

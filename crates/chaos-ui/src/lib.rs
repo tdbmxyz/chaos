@@ -6,7 +6,7 @@ mod components;
 mod pages;
 
 use chaos_client::ChaosClient;
-use chaos_domain::User;
+use chaos_domain::{AppLink, User};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::{A, Route, Router, Routes};
@@ -130,10 +130,67 @@ pub(crate) fn persist_token() -> bool {
     use_context::<AppConfig>().is_some_and(|config| config.persist_token)
 }
 
+// ---- device preferences (settings page) ----
+
+pub(crate) const WEATHER_LOCATION_KEY: &str = "chaos-weather-location";
+pub(crate) const WEATHER_UNITS_KEY: &str = "chaos-weather-units";
+
+/// A device preference; `None`/empty means "server default".
+pub(crate) fn pref(key: &str) -> Option<String> {
+    local_storage()?
+        .get_item(key)
+        .ok()?
+        .filter(|v| !v.trim().is_empty())
+}
+
+pub(crate) fn set_pref(key: &str, value: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = if value.trim().is_empty() {
+            storage.remove_item(key)
+        } else {
+            storage.set_item(key, value.trim())
+        };
+    }
+}
+
 /// Who is signed in, if anyone. `None` is a first-class state: everything
 /// except calendars works logged off.
 #[derive(Clone, Copy)]
 pub struct Session(pub RwSignal<Option<User>>);
+
+/// Companion apps activated on the server (empty when the feature is off).
+#[derive(Clone, Copy)]
+pub struct Apps(pub RwSignal<Vec<AppLink>>);
+
+pub fn use_apps() -> Apps {
+    use_context::<Apps>().expect("Apps provided by App")
+}
+
+/// Try the Android shell's native bridge (launches the app when installed,
+/// otherwise views the URL); falls back to a plain window.open elsewhere.
+fn open_app_native(package: &str, url: &str) {
+    use leptos::wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    if let Ok(bridge) = js_sys::Reflect::get(&window, &"ChaosAndroid".into())
+        && !bridge.is_undefined()
+        && let Ok(f) = js_sys::Reflect::get(&bridge, &"openApp".into())
+        && let Ok(f) = f.dyn_into::<js_sys::Function>()
+    {
+        let _ = f.call2(&bridge, &package.into(), &url.into());
+        return;
+    }
+    let _ = window.open_with_url_and_target(url, "_blank");
+}
+
+/// True inside the Android shell (it injects `window.CHAOS_PLATFORM`).
+fn on_android() -> bool {
+    web_sys::window()
+        .and_then(|w| js_sys::Reflect::get(&w, &"CHAOS_PLATFORM".into()).ok())
+        .and_then(|v| v.as_string())
+        .is_some_and(|p| p == "android")
+}
 
 pub fn use_client() -> ChaosClient {
     let config = use_context::<AppConfig>().expect("AppConfig provided by the shell");
@@ -157,6 +214,18 @@ pub fn App(config: AppConfig) -> impl IntoView {
     spawn_local(async move {
         if let Ok(user) = client.me().await {
             session.0.set(Some(user));
+        }
+    });
+
+    // Companion apps: only rendered once the server says they exist.
+    let apps = Apps(RwSignal::new(Vec::new()));
+    provide_context(apps);
+    spawn_local({
+        let client = use_client();
+        async move {
+            if let Ok(list) = client.apps().await {
+                apps.0.set(list);
+            }
         }
     });
 
@@ -187,6 +256,13 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <A href="/">"Dashboard"</A>
                 <A href="/links">"Links"</A>
                 <A href="/calendar">"Calendar"</A>
+                {move || {
+                    apps.0
+                        .get()
+                        .into_iter()
+                        .map(|app| view! { <AppNavEntry app/> })
+                        .collect_view()
+                }}
                 <span class="topbar-foot">
                     <A href="/settings">"Settings"</A>
                     <span class="topbar-account">
@@ -216,10 +292,36 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     <Route path=path!("/calendar") view=pages::CalendarPage/>
                     <Route path=path!("/login") view=pages::Login/>
                     <Route path=path!("/settings") view=pages::Settings/>
+                    <Route path=path!("/apps/:id") view=pages::AppPage/>
                 </Routes>
             </main>
         </Router>
         </ServerGate>
+    }
+}
+
+/// Sidebar entry for a companion app. Inside the Android shell (with a
+/// configured package) it launches the native app / URL through the
+/// bridge; everywhere else it routes to the embedded view.
+#[component]
+fn AppNavEntry(app: AppLink) -> impl IntoView {
+    match (on_android(), app.android_package) {
+        (true, Some(package)) => {
+            let url = app.url.to_string();
+            view! {
+                <a
+                    href="#"
+                    on:click=move |ev| {
+                        ev.prevent_default();
+                        open_app_native(&package, &url);
+                    }
+                >
+                    {app.title}
+                </a>
+            }
+            .into_any()
+        }
+        _ => view! { <A href=format!("/apps/{}", app.id)>{app.title}</A> }.into_any(),
     }
 }
 
