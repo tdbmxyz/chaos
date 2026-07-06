@@ -33,6 +33,9 @@ pub struct WidgetHub {
     cache: RwLock<HashMap<String, CacheEntry>>,
     /// Geocoded weather locations, cached for the process lifetime.
     geocode: RwLock<HashMap<String, weather::Place>>,
+    /// CPU/memory sparkline samples; the sampler task only runs when the
+    /// layout actually has a server_stats widget.
+    stats_history: Option<stats::History>,
     http: reqwest::Client,
 }
 
@@ -53,11 +56,16 @@ pub enum WidgetError {
 impl WidgetHub {
     pub fn new(config: &Config) -> Self {
         let (layout, entries) = resolve_layout(config);
+        let stats_history = entries
+            .values()
+            .any(|w| matches!(w, Widget::ServerStats { .. }))
+            .then(stats::spawn_sampler);
         Self {
             layout,
             entries,
             cache: RwLock::new(HashMap::new()),
             geocode: RwLock::new(HashMap::new()),
+            stats_history,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .user_agent(concat!("chaos/", env!("CARGO_PKG_VERSION")))
@@ -107,7 +115,20 @@ impl WidgetHub {
             }
             Widget::Feed { urls, limit, .. } => feed::fetch(&self.http, urls, *limit).await,
             Widget::Releases { repos, limit } => releases::fetch(&self.http, repos, *limit).await,
-            Widget::ServerStats { mounts } => stats::collect(mounts.clone()).await,
+            Widget::ServerStats { mounts } => {
+                let history = self
+                    .stats_history
+                    .as_ref()
+                    .map(|h| {
+                        h.lock()
+                            .expect("stats history lock")
+                            .iter()
+                            .copied()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                stats::collect(mounts.clone(), history).await
+            }
             Widget::Systemd { units, .. } => systemd::fetch(units).await,
             // Static widgets are never registered in `entries`.
             Widget::Search { .. }

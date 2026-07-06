@@ -6,3 +6,4 @@ inspirations/
 .direnv/
 *.db
 *.db-*
+/archives/

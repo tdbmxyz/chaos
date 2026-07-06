@@ -520,9 +520,33 @@ fn ServerStatsView(stats: ServerStats) -> impl IntoView {
         stats.load_avg[2],
     );
 
+    let sparks = (!stats.history.is_empty()).then(|| {
+        let cpu: Vec<f32> = stats.history.iter().map(|p| p.cpu_pct / 100.0).collect();
+        let mem: Vec<f32> = stats
+            .history
+            .iter()
+            .map(|p| p.mem_used_bytes as f32 / stats.mem_total_bytes.max(1) as f32)
+            .collect();
+        let cpu_now = format!("{:.0}%", stats.history.last().map_or(0.0, |p| p.cpu_pct));
+        let minutes = stats.history.len() as u64 * ServerStats::HISTORY_INTERVAL_SECS / 60;
+        view! {
+            <div class="spark-row">
+                <div class="spark">
+                    <span class="spark-head muted">"cpu " {cpu_now} " · " {minutes} "m"</span>
+                    <Sparkline values=cpu/>
+                </div>
+                <div class="spark">
+                    <span class="spark-head muted">"memory"</span>
+                    <Sparkline values=mem/>
+                </div>
+            </div>
+        }
+    });
+
     view! {
         <div class="server-stats">
             <p class="muted">{head}</p>
+            {sparks}
             <Meter
                 label="memory".to_string()
                 used=stats.mem_used_bytes
@@ -536,6 +560,33 @@ fn ServerStatsView(stats: ServerStats) -> impl IntoView {
                 })
                 .collect_view()}
         </div>
+    }
+}
+
+/// Tiny history graph (values normalized to 0..=1, oldest first). Drawn as
+/// an area + line in a stretched SVG so it costs nothing to render.
+#[component]
+fn Sparkline(values: Vec<f32>) -> impl IntoView {
+    let n = values.len();
+    let points: String = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let x = if n > 1 {
+                i as f32 / (n - 1) as f32
+            } else {
+                0.5
+            } * 100.0;
+            let y = 100.0 - v.clamp(0.0, 1.0) * 100.0;
+            format!("{x:.1},{y:.1} ")
+        })
+        .collect();
+    let area = format!("0,100 {points}100,100");
+    view! {
+        <svg class="sparkline" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <polygon class="sparkline-area" points=area></polygon>
+            <polyline class="sparkline-line" points=points></polyline>
+        </svg>
     }
 }
 

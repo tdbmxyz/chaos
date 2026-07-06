@@ -233,6 +233,23 @@ pub struct ServerStats {
     pub mem_total_bytes: u64,
     pub mem_used_bytes: u64,
     pub disks: Vec<DiskUsage>,
+    /// Oldest-first samples taken every [`ServerStats::HISTORY_INTERVAL_SECS`]
+    /// seconds, capped at [`ServerStats::HISTORY_LEN`] (≈ 1 hour).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<StatPoint>,
+}
+
+impl ServerStats {
+    pub const HISTORY_INTERVAL_SECS: u64 = 30;
+    pub const HISTORY_LEN: usize = 120;
+}
+
+/// One sample of the stats history sparklines.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StatPoint {
+    /// Overall CPU utilisation since the previous sample, 0–100.
+    pub cpu_pct: f32,
+    pub mem_used_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
