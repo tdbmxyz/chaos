@@ -478,8 +478,9 @@ fn calendar_cells((year, month): (i32, u32), today: NaiveDate) -> impl IntoView 
 
 #[component]
 fn WeatherView(weather: WeatherData) -> impl IntoView {
-    // °F is a device display preference (/settings); the wire stays metric.
-    let fahrenheit = crate::pref(crate::WEATHER_UNITS_KEY).as_deref() == Some("fahrenheit");
+    // °F/°C is a device display preference (/settings), defaulting to what
+    // the system locale suggests; the wire stays metric.
+    let fahrenheit = crate::weather_fahrenheit();
     let temp = move |celsius: f64| {
         if fahrenheit {
             format!("{:.0}°", celsius * 9.0 / 5.0 + 32.0)
@@ -571,24 +572,32 @@ fn ServerStatsView(stats: ServerStats) -> impl IntoView {
         <div class="server-stats">
             <p class="muted">{head}</p>
             {sparks}
-            <Meter
-                label="memory".to_string()
-                used=stats.mem_used_bytes
-                total=stats.mem_total_bytes
-            />
-            {stats
-                .disks
-                .into_iter()
-                .map(|disk| {
-                    view! { <Meter label=disk.mount used=disk.used_bytes total=disk.total_bytes/> }
-                })
-                .collect_view()}
+            // One shared grid so labels/values form real columns and every
+            // bar has the same width regardless of the text around it.
+            <div class="meters">
+                <Meter
+                    label="memory".to_string()
+                    used=stats.mem_used_bytes
+                    total=stats.mem_total_bytes
+                />
+                {stats
+                    .disks
+                    .into_iter()
+                    .map(|disk| {
+                        view! {
+                            <Meter label=disk.mount used=disk.used_bytes total=disk.total_bytes/>
+                        }
+                    })
+                    .collect_view()}
+            </div>
         </div>
     }
 }
 
 /// One feed/aggregator entry: title → article, source label → discussion
 /// page (HN/lobsters), plus points, comment count and age when available.
+/// Each meta part is its own span so the aggregator widgets can align them
+/// as columns across rows (see `.feed-meta` in the stylesheet).
 fn feed_item_view(item: FeedItem) -> impl IntoView {
     let source = item
         .source
@@ -600,26 +609,13 @@ fn feed_item_view(item: FeedItem) -> impl IntoView {
                 </a>
             }
             .into_any(),
-            None => view! { <span>{s}</span> }.into_any(),
+            None => view! { <span class="feed-source">{s}</span> }.into_any(),
         });
-
-    let mut tail: Vec<String> = Vec::new();
-    if let Some(score) = item.score {
-        tail.push(format!("▲ {score}"));
-    }
-    if let Some(comments) = item.comments {
-        tail.push(format!(
-            "{comments} comment{}",
-            if comments == 1 { "" } else { "s" }
-        ));
-    }
-    if let Some(published) = item.published {
-        tail.push(rel_time(published));
-    }
-    let mut tail = tail.join(" · ");
-    if source.is_some() && !tail.is_empty() {
-        tail = format!(" · {tail}");
-    }
+    let score = item.score.map(|score| format!("▲ {score}"));
+    let comments = item
+        .comments
+        .map(|n| format!("{n} comment{}", if n == 1 { "" } else { "s" }));
+    let age = item.published.map(rel_time);
 
     view! {
         <li>
@@ -630,7 +626,12 @@ fn feed_item_view(item: FeedItem) -> impl IntoView {
             >
                 {item.title}
             </a>
-            <span class="muted feed-meta">{source}{tail}</span>
+            <span class="muted feed-meta">
+                {source}
+                <span class="feed-score">{score}</span>
+                <span class="feed-comments">{comments}</span>
+                <span class="feed-age">{age}</span>
+            </span>
         </li>
     }
 }

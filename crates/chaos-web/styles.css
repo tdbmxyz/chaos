@@ -21,6 +21,9 @@ body {
   font-family: system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
+  /* Native widgets (select popups, scrollbars, date pickers) follow the
+     theme instead of defaulting to the light UA palette. */
+  color-scheme: dark;
 }
 
 .topbar {
@@ -217,9 +220,15 @@ select {
   font: inherit;
 }
 
-input:focus {
+input:focus,
+select:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+select option {
+  background: var(--surface);
+  color: var(--text);
 }
 
 button {
@@ -691,6 +700,31 @@ button.primary {
   white-space: nowrap;
 }
 
+/* Meta parts (source · points · comments · age) sit in fixed columns so
+   they align across rows instead of raggedly following the title. */
+.feed-meta {
+  display: grid;
+  grid-template-columns: max-content 3.6rem 6.2rem 2.2rem;
+  gap: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.feed-score,
+.feed-comments,
+.feed-age {
+  text-align: right;
+}
+
+/* Plain feeds usually carry only some of the parts: collapse the empty
+   columns instead of reserving aggregator-sized space. */
+.widget-feed .feed-meta {
+  grid-template-columns: repeat(4, max-content);
+}
+
+.widget-feed .feed-meta span:empty {
+  display: none;
+}
+
 .release-repo {
   color: var(--muted);
 }
@@ -702,23 +736,28 @@ button.primary {
   font-size: 0.85rem;
 }
 
-.meter-row {
-  display: flex;
+/* One grid for all meters: the label/value columns size to their widest
+   entry, so every bar gets the same (maximal) width. */
+.meters {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  gap: 0.45rem 0.7rem;
   align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.45rem;
   font-size: 0.85rem;
 }
 
+.meter-row {
+  display: contents;
+}
+
 .meter-label {
-  flex: 0 0 6rem;
+  max-width: 9rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .meter {
-  flex: 1;
   height: 0.45rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -736,8 +775,9 @@ button.primary {
 }
 
 .meter-value {
-  flex: 0 0 auto;
   font-size: 0.75rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* systemd services manager */
@@ -1282,6 +1322,7 @@ body[data-theme="github"] {
 /* -- daylight: light palette, same layout -- */
 
 body[data-theme="daylight"] {
+  color-scheme: light;
   --bg: #f3f4f8;
   --surface: #ffffff;
   --border: #d8dce6;
@@ -1436,7 +1477,6 @@ body[data-theme="terminal"] .widget h2 {
 /* aggregator meta (HN / lobsters): source label links to the discussion */
 
 .feed-list .feed-meta a.feed-source {
-  flex: none;
   color: inherit;
 }
 
@@ -1504,6 +1544,18 @@ body[data-theme="terminal"] .widget h2 {
   height: 0.9rem;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.settings-server {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.settings-server input {
+  flex: 1 1 14rem;
+  min-width: 0;
 }
 
 .settings-weather {

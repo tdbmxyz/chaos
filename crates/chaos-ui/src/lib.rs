@@ -135,6 +135,32 @@ pub(crate) fn persist_token() -> bool {
 pub(crate) const WEATHER_LOCATION_KEY: &str = "chaos-weather-location";
 pub(crate) const WEATHER_UNITS_KEY: &str = "chaos-weather-units";
 
+/// °F or °C for displayed temperatures: the device preference when one is
+/// set, otherwise derived from the system locale (which the browser/webview
+/// exposes as `navigator.language`).
+pub(crate) fn weather_fahrenheit() -> bool {
+    match pref(WEATHER_UNITS_KEY).as_deref() {
+        Some("fahrenheit") => true,
+        Some(_) => false,
+        None => fahrenheit_locale(),
+    }
+}
+
+/// True when the system locale's region customarily uses Fahrenheit.
+pub(crate) fn fahrenheit_locale() -> bool {
+    // The short list of countries still on °F (US and its close orbit).
+    const FAHRENHEIT_REGIONS: [&str; 8] = ["US", "BS", "BZ", "KY", "LR", "PW", "FM", "MH"];
+    web_sys::window()
+        .and_then(|w| w.navigator().language())
+        .is_some_and(|lang| {
+            lang.split('-').any(|part| {
+                part.len() == 2
+                    && part.chars().all(|c| c.is_ascii_uppercase())
+                    && FAHRENHEIT_REGIONS.contains(&part)
+            })
+        })
+}
+
 /// A device preference; `None`/empty means "server default".
 pub(crate) fn pref(key: &str) -> Option<String> {
     local_storage()?
@@ -150,6 +176,27 @@ pub(crate) fn set_pref(key: &str, value: &str) {
         } else {
             storage.set_item(key, value.trim())
         };
+    }
+}
+
+/// The per-device server override (settings page / connect screen). `None`
+/// means the platform default: the page origin on web, the bundled default
+/// in the shells — see chaos-web's `resolve()`.
+pub(crate) fn api_base_override() -> Option<String> {
+    local_storage()?.get_item(API_BASE_KEY).ok()?
+}
+
+/// Persist (or clear) the server override, then reload so the whole app —
+/// client, session, gate — starts over against the new server.
+pub(crate) fn set_api_base_override(value: Option<&str>) {
+    if let Some(storage) = local_storage() {
+        let _ = match value {
+            Some(value) => storage.set_item(API_BASE_KEY, value),
+            None => storage.remove_item(API_BASE_KEY),
+        };
+    }
+    if let Some(window) = web_sys::window() {
+        let _ = window.location().reload();
     }
 }
 

@@ -20,7 +20,18 @@ pub fn AppPage() -> impl IntoView {
                 Some(app) => {
                     let sep = if app.url.query().is_some() { '&' } else { '?' };
                     let src = format!("{}{sep}chaos-theme={}", app.url, theme.get());
-                    view! { <iframe class="app-frame" title=app.title src=src></iframe> }
+                    // allowfullscreen: apps drive their own fullscreen (the
+                    // yomu reader has a button for it); without the grant
+                    // requestFullscreen inside the frame is a silent no-op.
+                    view! {
+                        <iframe
+                            class="app-frame"
+                            title=app.title
+                            src=src
+                            allowfullscreen="true"
+                            allow="fullscreen"
+                        ></iframe>
+                    }
                         .into_any()
                 }
                 // Apps load right after mount; a direct hit on /apps/x shows
