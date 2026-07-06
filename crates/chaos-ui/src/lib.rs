@@ -130,6 +130,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
     view! {
         <ServerGate>
         <Router>
+            <ShareRedirect/>
             <nav class="topbar">
                 <span class="brand">"chaos"</span>
                 <A href="/">"Dashboard"</A>
@@ -181,6 +182,37 @@ pub fn App(config: AppConfig) -> impl IntoView {
             </main>
         </Router>
         </ServerGate>
+    }
+}
+
+/// Android share-sheet entry: the shell cold-loads `/?share=<text>` (only
+/// the root path is guaranteed to resolve in Tauri's asset protocol), and
+/// this forwards the payload to the links quick-add.
+#[component]
+fn ShareRedirect() -> impl IntoView {
+    let navigate = leptos_router::hooks::use_navigate();
+    let shared = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .and_then(|search| {
+            url::form_urlencoded::parse(search.trim_start_matches('?').as_bytes())
+                .find(|(k, _)| k == "share")
+                .map(|(_, v)| v.into_owned())
+        });
+    if let Some(text) = shared {
+        let target = format!(
+            "/links?add={}",
+            url::form_urlencoded::byte_serialize(text.as_bytes()).collect::<String>()
+        );
+        // Deferred: navigating during the initial render is a no-op.
+        leptos::task::spawn_local(async move {
+            navigate(
+                &target,
+                leptos_router::NavigateOptions {
+                    replace: true,
+                    ..Default::default()
+                },
+            );
+        });
     }
 }
 

@@ -13,6 +13,9 @@ use crate::use_client;
 
 type CollectionsResource = LocalResource<chaos_client::Result<Vec<Collection>>>;
 
+/// Links shown per page; filters reset paging to the first page.
+const PAGE_SIZE: u32 = 50;
+
 /// Links page: collection sidebar, tag filters, search, quick-add, link list
 /// and the edit dialogs. All mutations bump `refresh` to re-run the resources.
 #[component]
@@ -21,8 +24,18 @@ pub fn Links() -> impl IntoView {
     let selected_collection = RwSignal::new(None::<Uuid>);
     let selected_tag = RwSignal::new(None::<String>);
     let search = RwSignal::new(String::new());
+    let page_index = RwSignal::new(0u32);
     let editing_link = RwSignal::new(None::<Link>);
     let editing_collection = RwSignal::new(None::<Collection>);
+
+    // Changing any filter jumps back to the first page.
+    let filters = Memo::new(move |_| (selected_collection.get(), selected_tag.get(), search.get()));
+    Effect::new(move |prev: Option<()>| {
+        filters.track();
+        if prev.is_some() {
+            page_index.set(0);
+        }
+    });
 
     let client = use_client();
     let links = LocalResource::new({
@@ -33,7 +46,8 @@ pub fn Links() -> impl IntoView {
                 collection_id: selected_collection.get(),
                 tag: selected_tag.get(),
                 q: Some(search.get()).filter(|q| !q.trim().is_empty()),
-                ..Default::default()
+                limit: Some(PAGE_SIZE),
+                offset: Some(page_index.get() * PAGE_SIZE),
             };
             let client = client.clone();
             async move { client.list_links(&query).await }
@@ -91,11 +105,35 @@ pub fn Links() -> impl IntoView {
                             );
                         }
                         let total = page.total;
+                        let pages = total.div_ceil(PAGE_SIZE as u64).max(1) as u32;
+                        let current = page_index;
                         view! {
                             <p class="muted links-count">
                                 {total} " link" {if total == 1 { "" } else { "s" }}
                             </p>
                             <LinkList links=page.items editing=editing_link refresh/>
+                            {(pages > 1)
+                                .then(|| {
+                                    view! {
+                                        <div class="pager">
+                                            <button
+                                                disabled=move || current.get() == 0
+                                                on:click=move |_| current.update(|p| *p = p.saturating_sub(1))
+                                            >
+                                                "‹ Prev"
+                                            </button>
+                                            <span class="muted">
+                                                {move || format!("{} / {pages}", current.get() + 1)}
+                                            </span>
+                                            <button
+                                                disabled=move || current.get() + 1 >= pages
+                                                on:click=move |_| current.update(|p| *p += 1)
+                                            >
+                                                "Next ›"
+                                            </button>
+                                        </div>
+                                    }
+                                })}
                         }
                             .into_any()
                     }
@@ -316,37 +354,77 @@ fn AddLinkForm(
     let tags = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
 
-    let submit = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let parsed = match url.get_untracked().trim().parse::<url::Url>() {
-            Ok(u) => u,
-            Err(_) => {
-                error.set(Some("invalid URL".into()));
-                return;
-            }
-        };
-        let req = CreateLinkRequest {
-            url: parsed,
-            title: Some(title.get_untracked())
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty()),
-            description: None,
-            collection_id: selected_collection.get_untracked(),
-            tags: split_tags(&tags.get_untracked()),
-        };
+    let save = {
         let client = client.clone();
-        spawn_local(async move {
-            match client.create_link(&req).await {
-                Ok(_) => {
-                    url.set(String::new());
-                    title.set(String::new());
-                    tags.set(String::new());
-                    error.set(None);
-                    refresh.update(|n| *n += 1);
+        move || {
+            let parsed = match url.get_untracked().trim().parse::<url::Url>() {
+                Ok(u) => u,
+                Err(_) => {
+                    error.set(Some("invalid URL".into()));
+                    return;
                 }
-                Err(err) => error.set(Some(err.to_string())),
+            };
+            let req = CreateLinkRequest {
+                url: parsed,
+                title: Some(title.get_untracked())
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty()),
+                description: None,
+                collection_id: selected_collection.get_untracked(),
+                tags: split_tags(&tags.get_untracked()),
+            };
+            let client = client.clone();
+            spawn_local(async move {
+                match client.create_link(&req).await {
+                    Ok(_) => {
+                        url.set(String::new());
+                        title.set(String::new());
+                        tags.set(String::new());
+                        error.set(None);
+                        refresh.update(|n| *n += 1);
+                    }
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+            });
+        }
+    };
+
+    // Shared into the app (Android share sheet → /links?add=<text>): pull
+    // the first URL out of the payload and save it right away; anything
+    // without a recognizable URL only prefills the field for manual fixing.
+    let shared = leptos_router::hooks::use_query_map()
+        .get_untracked()
+        .get("add");
+    if let Some(text) = shared {
+        let first_url = text
+            .split_whitespace()
+            .find(|t| t.starts_with("http://") || t.starts_with("https://"))
+            .map(str::to_string);
+        match first_url {
+            Some(u) => {
+                url.set(u);
+                save();
             }
+            None => url.set(text),
+        }
+        let navigate = leptos_router::hooks::use_navigate();
+        spawn_local(async move {
+            navigate(
+                "/links",
+                leptos_router::NavigateOptions {
+                    replace: true,
+                    ..Default::default()
+                },
+            );
         });
+    }
+
+    let submit = {
+        let save = save.clone();
+        move |ev: leptos::ev::SubmitEvent| {
+            ev.prevent_default();
+            save();
+        }
     };
 
     view! {
@@ -467,6 +545,19 @@ fn LinkItem(link: Link, editing: RwSignal<Option<Link>>, refresh: RwSignal<u32>)
         <li class="link-item">
             <div class="link-item-body">
                 <a href=link.url.to_string() target="_blank" rel="noreferrer" class="link-title">
+                    {(!host.is_empty())
+                        .then(|| client.icon_url(&format!("fav:{host}")))
+                        .flatten()
+                        .map(|src| {
+                            view! {
+                                <img
+                                    class="link-favicon"
+                                    src=src.to_string()
+                                    loading="lazy"
+                                    onerror="this.style.display='none'"
+                                />
+                            }
+                        })}
                     {link.title}
                 </a>
                 <span class="muted link-host">{host}</span>

@@ -45,6 +45,13 @@ pub async fn icon(
             "image/svg+xml",
             "svg",
         ),
+        // Site favicon by hostname (used for link rows). DuckDuckGo's
+        // service resolves the page's actual favicon, any format.
+        "fav" => (
+            format!("https://icons.duckduckgo.com/ip3/{name}.ico"),
+            "image/x-icon",
+            "ico",
+        ),
         _ => return Err(ApiError::NotFound),
     };
 
@@ -89,7 +96,9 @@ async fn fetch_icon(state: &AppState, url: &str) -> Result<Vec<u8>, ApiError> {
         return Err(ApiError::NotFound);
     }
     let bytes = resp.bytes().await.map_err(|_| ApiError::NotFound)?;
-    if bytes.len() > MAX_ICON_BYTES {
+    // An empty body (some favicon services answer 200 with nothing) must
+    // not be cached forever as "the icon".
+    if bytes.is_empty() || bytes.len() > MAX_ICON_BYTES {
         return Err(ApiError::NotFound);
     }
     Ok(bytes.to_vec())
