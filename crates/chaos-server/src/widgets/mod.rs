@@ -12,7 +12,9 @@ mod feed;
 mod posts;
 mod releases;
 mod stats;
-mod systemd;
+// pub(crate): the service monitor and the service-action API endpoint reuse
+// the unit query/act helpers for on-demand services (`ServiceDef::unit`).
+pub(crate) mod systemd;
 mod weather;
 
 use std::collections::HashMap;

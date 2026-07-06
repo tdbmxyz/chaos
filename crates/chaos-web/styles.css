@@ -130,6 +130,18 @@ main {
   background: var(--unknown);
 }
 
+/* On-demand service kept stopped on purpose: calm, not alarming. */
+.dot.paused {
+  background: none;
+  border: 1px solid var(--muted);
+}
+
+/* Start/stop button on an on-demand service tile. */
+.service-btn {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+}
+
 /* ---- links page ---- */
 
 .links-layout {

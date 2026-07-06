@@ -111,10 +111,17 @@ fn ServicesWidget() -> impl IntoView {
         on_cleanup(move || handle.clear());
     }
 
+    // Bumped after a start/stop of an on-demand service so its tile flips
+    // to the fresh state right away instead of on the next poll.
+    let version = RwSignal::new(0u32);
+    let busy = RwSignal::new(false);
+    let action_error = RwSignal::new(None::<String>);
+
     let services = LocalResource::new({
         let client = client.clone();
         move || {
             tick.track();
+            version.track();
             if let Some(RefreshTick(refresh)) = refresh {
                 refresh.track();
             }
@@ -123,12 +130,28 @@ fn ServicesWidget() -> impl IntoView {
         }
     });
 
+    let run = Callback::new(move |(id, action): (String, SystemdAction)| {
+        let client = client.clone();
+        busy.set(true);
+        action_error.set(None);
+        spawn_local(async move {
+            match client.service_action(&id, action).await {
+                Ok(_) => version.update(|n| *n += 1),
+                Err(err) => action_error.set(Some(err.to_string())),
+            }
+            busy.set(false);
+        });
+    });
+
     view! {
         <section class="widget widget-services">
             <h2>"Services"</h2>
+            {move || action_error.get().map(|err| view! { <p class="error">{err}</p> })}
             {move || match services.get() {
                 None => view! { <p class="muted">"Checking services…"</p> }.into_any(),
-                Some(Ok(list)) => view! { <ServiceGrid services=list/> }.into_any(),
+                Some(Ok(list)) => {
+                    view! { <ServiceGrid services=list controls=(busy, run)/> }.into_any()
+                }
                 Some(Err(err)) => {
                     view! { <p class="error">"Could not reach chaos server: " {err.to_string()}</p> }
                         .into_any()

@@ -7,8 +7,8 @@
 use chaos_domain::{
     ApiErrorBody, AppLink, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
     CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse, Link,
-    LinkPage, LinkQuery, LoginRequest, LoginResponse, ServiceWithStatus, SystemdActionRequest,
-    TagWithCount, UpdateLinkRequest, User, WidgetData,
+    LinkPage, LinkQuery, LoginRequest, LoginResponse, ServiceActionRequest, ServiceWithStatus,
+    SystemdAction, SystemdActionRequest, TagWithCount, UpdateLinkRequest, User, WidgetData,
 };
 use url::Url;
 use uuid::Uuid;
@@ -90,6 +90,20 @@ impl ChaosClient {
         if let Some(location) = location {
             req = req.query(&[("location", location)]);
         }
+        self.send(req).await
+    }
+
+    /// Start/stop an on-demand service's systemd unit (services configured
+    /// with a `unit`); returns the service with its re-checked status.
+    pub async fn service_action(
+        &self,
+        id: &str,
+        action: SystemdAction,
+    ) -> Result<ServiceWithStatus> {
+        let req = self
+            .http
+            .post(self.url(&format!("api/v1/services/{id}/systemd"))?)
+            .json(&ServiceActionRequest { action });
         self.send(req).await
     }
 

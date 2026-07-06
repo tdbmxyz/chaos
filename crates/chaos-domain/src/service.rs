@@ -21,6 +21,14 @@ pub struct ServiceDef {
     /// URL polled by the health monitor. Defaults to `url` when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_url: Option<Url>,
+    /// Systemd unit backing an *on-demand* service (heavy, kept stopped at
+    /// rest). When set, the monitor asks systemd before probing HTTP — an
+    /// inactive unit shows as [`HealthState::Paused`] instead of down — and
+    /// the tile offers start/stop through
+    /// `POST /api/v1/services/{id}/systemd` (the unit must also be listed
+    /// in the polkit allowlist, `services.chaos.systemdControl.units`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
 }
 
 impl ServiceDef {
@@ -40,6 +48,12 @@ pub enum HealthState {
     Degraded,
     /// Connection failed or timed out.
     Down,
+    /// On-demand service whose unit is deliberately stopped (its default
+    /// state); no HTTP check is made.
+    Paused,
+    /// On-demand service whose unit is running but not answering HTTP yet
+    /// (units report active before slow apps bind their port).
+    Starting,
     /// Not checked yet.
     Unknown,
 }

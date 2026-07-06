@@ -40,8 +40,9 @@ async fn status(def: &SystemdUnitDef) -> SystemdUnitStatus {
 }
 
 /// `systemctl show` exits 0 even for unknown units (LoadState=not-found),
-/// so the load state doubles as the "does this unit exist" signal.
-async fn query(unit: &str) -> Result<(String, String), String> {
+/// so the load state doubles as the "does this unit exist" signal. Also
+/// used by the service monitor for on-demand services (`ServiceDef::unit`).
+pub async fn query(unit: &str) -> Result<(String, String), String> {
     let output = tokio::time::timeout(
         STATUS_TIMEOUT,
         Command::new("systemctl")

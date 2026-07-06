@@ -100,6 +100,14 @@ impl SystemdAction {
     }
 }
 
+/// Body of `POST /api/v1/services/{id}/systemd`. Only valid for services
+/// with a configured `unit` (on-demand services); the unit itself comes
+/// from the server config, never from the client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceActionRequest {
+    pub action: SystemdAction,
+}
+
 // ---- collections ----
 
 /// Shared by create and update (update = full replacement).

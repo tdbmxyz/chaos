@@ -11,8 +11,8 @@ use axum::extract::{Path, Query, State};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chaos_domain::{
-    DashboardLayout, HealthResponse, ServiceStatus, ServiceWithStatus, SystemdActionRequest,
-    WidgetData,
+    DashboardLayout, HealthResponse, ServiceActionRequest, ServiceDef, ServiceStatus,
+    ServiceWithStatus, SystemdActionRequest, WidgetData,
 };
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -42,6 +42,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/apps", get(apps))
         .route("/services", get(services))
+        .route("/services/{id}/systemd", post(service_systemd))
         .route("/dashboard", get(dashboard))
         .route("/widgets/{id}", get(widget_data))
         .route("/widgets/{id}/systemd", post(widget_systemd))
@@ -131,6 +132,51 @@ async fn apps(State(state): State<AppState>) -> Json<Vec<chaos_domain::AppLink>>
     Json(state.config.apps.clone())
 }
 
+/// Start/stop an on-demand service's systemd unit, then re-check and return
+/// its fresh status. Only services configured with a `unit` are actionable —
+/// the unit name never comes from the client, and polkit further restricts
+/// what the chaos user may touch (`systemdControl.units`).
+async fn service_systemd(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ServiceActionRequest>,
+) -> Result<Json<ServiceWithStatus>, ApiError> {
+    let service = on_demand_service(&state.config.services, &id)?;
+
+    tracing::info!(service = id, verb = req.action.verb(), "service action");
+    crate::widgets::systemd::act(service.unit.as_deref().expect("checked"), req.action)
+        .await
+        .map_err(ApiError::BadGateway)?;
+
+    // Re-check immediately so the tile flips to starting/paused without
+    // waiting for the next monitor sweep.
+    let client = crate::monitor::client(&state.config.monitor);
+    let status = crate::monitor::check(&client, service).await;
+    state
+        .statuses
+        .write()
+        .await
+        .insert(service.id.clone(), status.clone());
+
+    Ok(Json(ServiceWithStatus {
+        def: service.clone(),
+        status,
+    }))
+}
+
+fn on_demand_service<'a>(services: &'a [ServiceDef], id: &str) -> Result<&'a ServiceDef, ApiError> {
+    let service = services
+        .iter()
+        .find(|s| s.id == id)
+        .ok_or(ApiError::NotFound)?;
+    if service.unit.is_none() {
+        return Err(ApiError::Unprocessable(format!(
+            "service {id:?} has no systemd unit configured"
+        )));
+    }
+    Ok(service)
+}
+
 async fn services(State(state): State<AppState>) -> Json<Vec<ServiceWithStatus>> {
     let statuses = state.statuses.read().await;
     let list = state
@@ -146,4 +192,38 @@ async fn services(State(state): State<AppState>) -> Json<Vec<ServiceWithStatus>>
         })
         .collect();
     Json(list)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_actions_require_a_configured_unit() {
+        let service = |id: &str, unit: Option<&str>| ServiceDef {
+            id: id.into(),
+            title: id.into(),
+            url: "http://zeus:1234".parse().unwrap(),
+            icon: None,
+            check_url: None,
+            unit: unit.map(Into::into),
+        };
+        let services = [
+            service("jellyfin", None),
+            service("stirling-pdf", Some("stirling-pdf.service")),
+        ];
+
+        assert!(matches!(
+            on_demand_service(&services, "nope"),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            on_demand_service(&services, "jellyfin"),
+            Err(ApiError::Unprocessable(_))
+        ));
+        assert_eq!(
+            on_demand_service(&services, "stirling-pdf").unwrap().id,
+            "stirling-pdf"
+        );
+    }
 }

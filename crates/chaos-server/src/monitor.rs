@@ -1,27 +1,37 @@
 //! Background health monitor: polls each configured service and stores the
 //! result in `AppState::statuses` (the glance "monitor" widget equivalent).
+//!
+//! On-demand services (those with a `unit`) are asked to systemd first: a
+//! deliberately stopped unit is `Paused`, not `Down`, and skips the HTTP
+//! probe entirely.
 
 use std::time::{Duration, Instant};
 
 use chaos_domain::{HealthState, ServiceDef, ServiceStatus};
 use chrono::Utc;
 
+use crate::config::MonitorConfig;
 use crate::state::AppState;
+use crate::widgets::systemd;
 
 pub fn spawn(state: AppState) {
     tokio::spawn(run(state));
 }
 
-async fn run(state: AppState) {
-    let timeout = Duration::from_millis(state.config.monitor.timeout_ms);
-    let interval = Duration::from_secs(state.config.monitor.interval_secs);
-
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
+/// The HTTP client used for health probes. Also built one-off by the
+/// service-action handler to re-check right after a start/stop.
+pub fn client(config: &MonitorConfig) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(config.timeout_ms))
         // Self-hosted services often use self-signed certificates on the LAN.
         .danger_accept_invalid_certs(true)
         .build()
-        .expect("building monitor http client");
+        .expect("building monitor http client")
+}
+
+async fn run(state: AppState) {
+    let interval = Duration::from_secs(state.config.monitor.interval_secs);
+    let client = client(&state.config.monitor);
 
     loop {
         let sweep_started = Instant::now();
@@ -48,7 +58,51 @@ async fn run(state: AppState) {
     }
 }
 
-async fn check(client: &reqwest::Client, service: &ServiceDef) -> ServiceStatus {
+pub async fn check(client: &reqwest::Client, service: &ServiceDef) -> ServiceStatus {
+    let Some(unit) = &service.unit else {
+        return probe_http(client, service).await;
+    };
+
+    match systemd::query(unit).await {
+        Ok((active_state, _)) => match active_state.as_str() {
+            "active" => {
+                let mut status = probe_http(client, service).await;
+                // systemd reports active before slow apps bind their port
+                // (JVM services take a while); a running unit with a dead
+                // port reads as still starting, not down.
+                if status.state == HealthState::Down {
+                    status.state = HealthState::Starting;
+                }
+                status
+            }
+            "activating" | "reloading" => status_only(HealthState::Starting, None),
+            "failed" => status_only(HealthState::Down, Some(format!("unit {unit} failed"))),
+            // inactive / deactivating: stopped on purpose — the default
+            // state for on-demand services, so no HTTP check and no alarm.
+            "inactive" | "deactivating" => status_only(HealthState::Paused, None),
+            other => status_only(
+                HealthState::Unknown,
+                Some(format!("unit {unit} is {other}")),
+            ),
+        },
+        Err(reason) => {
+            tracing::warn!(unit, reason, "systemd query failed for service");
+            status_only(HealthState::Unknown, Some(reason))
+        }
+    }
+}
+
+fn status_only(state: HealthState, error: Option<String>) -> ServiceStatus {
+    ServiceStatus {
+        state,
+        http_status: None,
+        latency_ms: None,
+        checked_at: Some(Utc::now()),
+        error,
+    }
+}
+
+async fn probe_http(client: &reqwest::Client, service: &ServiceDef) -> ServiceStatus {
     let started = Instant::now();
     let result = client
         .get(service.effective_check_url().clone())
