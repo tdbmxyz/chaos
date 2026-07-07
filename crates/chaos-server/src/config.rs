@@ -41,6 +41,33 @@ pub struct Config {
     /// Companion applications ("plugins", e.g. yomu). Empty = feature off,
     /// nothing rendered anywhere.
     pub apps: Vec<chaos_domain::AppLink>,
+    /// Home Assistant integration (Home tab: temperature history + light
+    /// control). Feature is off when `base_url` is `None`.
+    pub home_assistant: HomeAssistantConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HomeAssistantConfig {
+    /// Home Assistant base URL, e.g. `http://zeus:8093` (reverse-proxied to
+    /// the instance). `None` disables the whole Home tab.
+    pub base_url: Option<url::Url>,
+    /// File holding a Home Assistant long-lived access token (an agenix
+    /// secret path on NixOS). Read once at startup.
+    pub token_file: Option<PathBuf>,
+    /// Temperature sensors shown on the Home tab.
+    pub sensors: Vec<HomeEntityDef>,
+    /// Lights controllable from the Home tab.
+    pub lights: Vec<HomeEntityDef>,
+}
+
+/// One Home Assistant entity exposed on the Home tab. The `entity_id` is
+/// server-side only — clients only ever see `id`/`label`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HomeEntityDef {
+    pub id: String,
+    pub label: String,
+    pub entity_id: String,
 }
 
 /// One dashboard column as written in configuration. Widget instance ids are
@@ -102,6 +129,7 @@ impl Default for Config {
             bookmarks: Vec::new(),
             columns: Vec::new(),
             apps: Vec::new(),
+            home_assistant: HomeAssistantConfig::default(),
         }
     }
 }

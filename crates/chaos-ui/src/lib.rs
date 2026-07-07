@@ -366,6 +366,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <A href="/">"Dashboard"</A>
                 <A href="/links">"Links"</A>
                 <A href="/calendar">"Calendar"</A>
+                <A href="/home">"Home"</A>
                 {move || {
                     apps.0
                         .get()
@@ -400,6 +401,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     <Route path=path!("/") view=pages::Dashboard/>
                     <Route path=path!("/links") view=pages::Links/>
                     <Route path=path!("/calendar") view=pages::CalendarPage/>
+                    <Route path=path!("/home") view=pages::HomePage/>
                     <Route path=path!("/login") view=pages::Login/>
                     <Route path=path!("/settings") view=pages::Settings/>
                     <Route path=path!("/apps/:id") view=pages::AppPage/>

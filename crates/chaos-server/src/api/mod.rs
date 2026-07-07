@@ -4,6 +4,7 @@ mod auth;
 mod calendar;
 mod collections;
 mod error;
+mod home;
 mod icons;
 mod links;
 
@@ -46,6 +47,10 @@ pub fn router(state: AppState) -> Router {
         .route("/dashboard", get(dashboard))
         .route("/widgets/{id}", get(widget_data))
         .route("/widgets/{id}/systemd", post(widget_systemd))
+        .route("/home/sensors", get(home::sensors))
+        .route("/home/lights", get(home::lights))
+        .route("/home/lights/{id}", post(home::set_light))
+        .route("/home/temperature", get(home::temperature))
         .route("/icons/{spec}", get(icons::icon))
         .route("/links", get(links::list).post(links::create))
         .route(
