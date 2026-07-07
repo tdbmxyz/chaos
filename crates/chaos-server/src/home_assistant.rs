@@ -4,7 +4,6 @@
 //! the browser never talks to Home Assistant directly. Built once in
 //! `AppState::new` when `home_assistant.base_url` is configured.
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use chaos_domain::{LightCommand, LightState, RgbColor, TemperatureReading, TemperatureSeries};
@@ -77,29 +76,31 @@ impl HomeAssistantClient {
             .append_pair("end_time", &end.to_rfc3339())
             .append_pair("minimal_response", "");
 
-        let raw: Vec<Vec<HaStateChange>> = self.get_json(url).await?;
-
-        let mut by_entity: HashMap<String, Vec<TemperatureReading>> = HashMap::new();
-        for change in raw.into_iter().flatten() {
-            let Some(celsius) = change.state.parse::<f64>().ok() else {
-                continue; // "unavailable"/"unknown"
-            };
-            by_entity
-                .entry(change.entity_id)
-                .or_default()
-                .push(TemperatureReading {
-                    at: change.last_changed,
-                    celsius,
-                });
-        }
+        // One array per requested entity, in request order (per HA's docs).
+        // `minimal_response` drops `entity_id` (and attributes) from every
+        // entry but the first for a given entity, so match by array
+        // position instead of by `entity_id`.
+        let mut raw: Vec<Vec<HaStateChange>> = self.get_json(url).await?;
+        raw.resize_with(self.sensors.len(), Vec::new);
 
         Ok(self
             .sensors
             .iter()
-            .map(|def| TemperatureSeries {
+            .zip(raw)
+            .map(|(def, changes)| TemperatureSeries {
                 id: def.id.clone(),
                 label: def.label.clone(),
-                readings: by_entity.remove(&def.entity_id).unwrap_or_default(),
+                readings: changes
+                    .into_iter()
+                    .filter_map(|change| {
+                        // "unavailable"/"unknown" don't parse as a number.
+                        let celsius = change.state.parse::<f64>().ok()?;
+                        Some(TemperatureReading {
+                            at: change.last_changed,
+                            celsius,
+                        })
+                    })
+                    .collect(),
             })
             .collect())
     }
@@ -209,7 +210,6 @@ fn to_light_state(def: &HomeEntityDef, raw: &HaEntityState) -> LightState {
 
 #[derive(Debug, Deserialize)]
 struct HaStateChange {
-    entity_id: String,
     state: String,
     last_changed: DateTime<Utc>,
 }
