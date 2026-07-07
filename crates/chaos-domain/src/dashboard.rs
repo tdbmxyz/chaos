@@ -6,7 +6,7 @@
 //! per widget instance from `/api/v1/widgets/{id}` so the server can cache
 //! upstream calls (Open-Meteo, feeds, GitHub) independently of the layout.
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -211,6 +211,10 @@ pub struct WeatherData {
     /// Human description of `weather_code`.
     pub description: String,
     pub daily: Vec<DailyForecast>,
+    /// Hour-by-hour forecast from the current hour on (the weather page;
+    /// the dashboard widget only shows current + daily).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hourly: Vec<HourlyForecast>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -218,6 +222,14 @@ pub struct DailyForecast {
     pub date: NaiveDate,
     pub min_c: f64,
     pub max_c: f64,
+    pub weather_code: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HourlyForecast {
+    /// Local time at the forecast location (Open-Meteo `timezone=auto`).
+    pub time: NaiveDateTime,
+    pub temp_c: f64,
     pub weather_code: i32,
 }
 

@@ -123,6 +123,57 @@ impl WidgetHub {
         }
     }
 
+    /// Forecast for the weather page, independent of any widget instance:
+    /// any location can be asked for; `None` falls back to the layout's
+    /// weather widget. Same cache and staleness rules as widget payloads.
+    pub async fn weather(
+        &self,
+        location: Option<&str>,
+    ) -> Result<chaos_domain::WeatherData, WidgetError> {
+        let location = location
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && l.len() <= 64);
+        let configured = self.entries.values().find_map(|w| match w {
+            Widget::Weather { location } => Some(location.as_str()),
+            _ => None,
+        });
+        let place = location.or(configured).ok_or_else(|| {
+            WidgetError::Rejected("no location given and no weather widget configured".into())
+        })?;
+
+        let cache_key = format!("weather@{place}");
+        if let Some(entry) = self.cache.read().await.get(&cache_key)
+            && entry.fetched.elapsed() < Duration::from_secs(600)
+            && let WidgetData::Weather(data) = &entry.data
+        {
+            return Ok(data.clone());
+        }
+
+        match weather::fetch(&self.http, &self.geocode, place).await {
+            Ok(WidgetData::Weather(data)) => {
+                self.cache.write().await.insert(
+                    cache_key,
+                    CacheEntry {
+                        fetched: Instant::now(),
+                        data: WidgetData::Weather(data.clone()),
+                    },
+                );
+                Ok(data)
+            }
+            Ok(_) => unreachable!("weather::fetch returns weather data"),
+            Err(reason) => {
+                if let Some(entry) = self.cache.read().await.get(&cache_key)
+                    && let WidgetData::Weather(data) = &entry.data
+                {
+                    tracing::warn!(place, reason, "weather refresh failed, serving stale data");
+                    return Ok(data.clone());
+                }
+                tracing::warn!(place, reason, "weather fetch failed");
+                Err(WidgetError::Upstream(reason))
+            }
+        }
+    }
+
     async fn fetch(&self, widget: &Widget, location: Option<&str>) -> Result<WidgetData, String> {
         match widget {
             Widget::Weather {

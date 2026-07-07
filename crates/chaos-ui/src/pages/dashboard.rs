@@ -150,7 +150,13 @@ fn ServicesWidget() -> impl IntoView {
             {move || match services.get() {
                 None => view! { <p class="muted">"Checking services…"</p> }.into_any(),
                 Some(Ok(list)) => {
-                    view! { <ServiceGrid services=list controls=(busy, run)/> }.into_any()
+                    let count = list.len();
+                    view! {
+                        <Collapsible count>
+                            <ServiceGrid services=list controls=(busy, run)/>
+                        </Collapsible>
+                    }
+                        .into_any()
                 }
                 Some(Err(err)) => {
                     view! { <p class="error">"Could not reach chaos server: " {err.to_string()}</p> }
@@ -192,6 +198,19 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => String::new(),
     };
 
+    // The weather title opens the detailed hourly/multi-location page,
+    // like the calendar widget's title opens the calendar.
+    let title = if matches!(widget, Widget::Weather { .. }) {
+        view! {
+            <a class="widget-title-link" href="/weather" title="Open weather">
+                {title}
+            </a>
+        }
+        .into_any()
+    } else {
+        title.into_any()
+    };
+
     // Device preference: weather follows the location set on /settings.
     let weather_location =
         matches!(widget, Widget::Weather { .. }).then(|| crate::pref(crate::WEATHER_LOCATION_KEY));
@@ -215,15 +234,20 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                     view! { <WeatherView weather/> }.into_any()
                 }
                 Some(Ok(WidgetData::Feed { items })) => {
+                    let count = items.len();
                     view! {
-                        <ul class="feed-list">
-                            {items.into_iter().map(feed_item_view).collect_view()}
-                        </ul>
+                        <Collapsible count>
+                            <ul class="feed-list">
+                                {items.into_iter().map(feed_item_view).collect_view()}
+                            </ul>
+                        </Collapsible>
                     }
                         .into_any()
                 }
                 Some(Ok(WidgetData::Releases { items })) => {
+                    let count = items.len();
                     view! {
+                        <Collapsible count>
                         <ul class="feed-list">
                             {items
                                 .into_iter()
@@ -247,6 +271,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                                 })
                                 .collect_view()}
                         </ul>
+                        </Collapsible>
                     }
                         .into_any()
                 }
@@ -259,6 +284,31 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
             }}
         </section>
+    }
+}
+
+/// Wrapper collapsing a long list to its first three entries on phones —
+/// the hiding and the ▾/▴ toggle are CSS, scoped to the narrow layout, so
+/// wider screens always show everything.
+#[component]
+fn Collapsible(count: usize, children: Children) -> impl IntoView {
+    let collapsed = RwSignal::new(true);
+    view! {
+        <div class="collapsible" class:collapsed=move || collapsed.get()>
+            {children()}
+            {(count > 3)
+                .then(|| {
+                    view! {
+                        <button
+                            class="collapse-toggle"
+                            title="Show more or less"
+                            on:click=move |_| collapsed.update(|c| *c = !*c)
+                        >
+                            {move || if collapsed.get() { "▾" } else { "▴" }}
+                        </button>
+                    }
+                })}
+        </div>
     }
 }
 
@@ -481,13 +531,7 @@ fn WeatherView(weather: WeatherData) -> impl IntoView {
     // °F/°C is a device display preference (/settings), defaulting to what
     // the system locale suggests; the wire stays metric.
     let fahrenheit = crate::weather_fahrenheit();
-    let temp = move |celsius: f64| {
-        if fahrenheit {
-            format!("{:.0}°", celsius * 9.0 / 5.0 + 32.0)
-        } else {
-            format!("{celsius:.0}°")
-        }
-    };
+    let temp = move |celsius: f64| crate::format_temp(celsius, fahrenheit);
     let details = format!(
         "{} · feels {} · wind {:.0} km/h{}",
         weather.location,
@@ -501,7 +545,7 @@ fn WeatherView(weather: WeatherData) -> impl IntoView {
     view! {
         <div class="weather">
             <div class="weather-now">
-                <span class="weather-emoji">{weather_emoji(weather.weather_code)}</span>
+                <span class="weather-emoji">{crate::weather_emoji(weather.weather_code)}</span>
                 <span class="weather-temp">{temp(weather.temperature_c)}</span>
                 <div class="weather-desc">
                     <div>{weather.description}</div>
@@ -516,7 +560,7 @@ fn WeatherView(weather: WeatherData) -> impl IntoView {
                         view! {
                             <div class="weather-day">
                                 <span class="muted">{day.date.format("%a").to_string()}</span>
-                                <span>{weather_emoji(day.weather_code)}</span>
+                                <span>{crate::weather_emoji(day.weather_code)}</span>
                                 <span>{temp(day.max_c)}</span>
                                 <span class="muted">{temp(day.min_c)}</span>
                             </div>
@@ -710,21 +754,6 @@ fn rel_time(when: DateTime<Utc>) -> String {
         0..60 => format!("{minutes}m"),
         60..1440 => format!("{}h", minutes / 60),
         _ => format!("{}d", minutes / 1440),
-    }
-}
-
-fn weather_emoji(code: i32) -> &'static str {
-    match code {
-        0 => "☀️",
-        1 => "🌤️",
-        2 => "⛅",
-        3 => "☁️",
-        45 | 48 => "🌫️",
-        51..=57 => "🌦️",
-        61..=67 | 80..=82 => "🌧️",
-        71..=77 | 85 | 86 => "🌨️",
-        95..=99 => "⛈️",
-        _ => "🌡️",
     }
 }
 

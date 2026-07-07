@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use chaos_domain::{DailyForecast, WeatherData, WidgetData};
+use chaos_domain::{DailyForecast, HourlyForecast, WeatherData, WidgetData};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
@@ -29,6 +29,7 @@ pub async fn fetch(
          ?latitude={lat}&longitude={lon}\
          &current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m\
          &daily=weather_code,temperature_2m_max,temperature_2m_min\
+         &hourly=temperature_2m,weather_code\
          &timezone=auto&forecast_days=5",
         lat = place.latitude,
         lon = place.longitude,
@@ -51,6 +52,31 @@ pub async fn fetch(
         .collect();
 
     let current = forecast.current;
+    // The hourly series starts at local midnight; keep from the current
+    // hour on (48 points bound the payload and the page).
+    let this_hour = {
+        use chrono::Timelike;
+        current
+            .time
+            .with_minute(0)
+            .and_then(|t| t.with_second(0))
+            .unwrap_or(current.time)
+    };
+    let hourly = forecast
+        .hourly
+        .time
+        .into_iter()
+        .zip(forecast.hourly.temperature_2m)
+        .zip(forecast.hourly.weather_code)
+        .map(|((time, temp_c), weather_code)| HourlyForecast {
+            time,
+            temp_c,
+            weather_code,
+        })
+        .filter(|h| h.time >= this_hour)
+        .take(48)
+        .collect();
+
     Ok(WidgetData::Weather(WeatherData {
         location: place.name,
         temperature_c: current.temperature_2m,
@@ -60,6 +86,7 @@ pub async fn fetch(
         weather_code: current.weather_code,
         description: describe(current.weather_code).to_string(),
         daily,
+        hourly,
     }))
 }
 
@@ -72,15 +99,34 @@ async fn resolve(
         return Ok(place.clone());
     }
 
+    // "Osaka, JP" style disambiguation: the geocoding API only searches
+    // names, so a trailing country part becomes a filter on the results.
+    let (name_query, country) = match location.rsplit_once(',') {
+        Some((name, country)) if !name.trim().is_empty() => {
+            (name.trim(), Some(country.trim().to_ascii_uppercase()))
+        }
+        _ => (location.trim(), None),
+    };
+
     let url = format!(
-        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json",
-        urlencoded(location)
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=10&language=en&format=json",
+        urlencoded(name_query)
     );
     let response: GeocodeResponse = get_json(http, &url).await?;
     let hit = response
         .results
         .into_iter()
-        .next()
+        .find(|hit| match &country {
+            // Match the ISO code ("JP") or a country name prefix ("Japan").
+            Some(want) => {
+                hit.country_code.as_deref() == Some(want)
+                    || hit
+                        .country
+                        .as_deref()
+                        .is_some_and(|c| c.to_ascii_uppercase().starts_with(want.as_str()))
+            }
+            None => true,
+        })
         .ok_or_else(|| format!("location {location:?} not found by geocoding"))?;
 
     let name = match &hit.country_code {
@@ -147,6 +193,7 @@ struct GeocodeHit {
     name: String,
     latitude: f64,
     longitude: f64,
+    country: Option<String>,
     country_code: Option<String>,
 }
 
@@ -154,15 +201,49 @@ struct GeocodeHit {
 struct Forecast {
     current: CurrentWeather,
     daily: DailySeries,
+    hourly: HourlySeries,
 }
 
 #[derive(Debug, Deserialize)]
 struct CurrentWeather {
+    /// Local time at the location (`timezone=auto`), anchoring the hourly
+    /// series to "from now on".
+    #[serde(deserialize_with = "local_time")]
+    time: chrono::NaiveDateTime,
     temperature_2m: f64,
     apparent_temperature: f64,
     relative_humidity_2m: Option<f64>,
     weather_code: i32,
     wind_speed_10m: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct HourlySeries {
+    #[serde(deserialize_with = "local_times")]
+    time: Vec<chrono::NaiveDateTime>,
+    temperature_2m: Vec<f64>,
+    weather_code: Vec<i32>,
+}
+
+/// Open-Meteo local times omit the seconds (`2026-07-07T02:45`), which the
+/// default chrono deserializer rejects.
+fn parse_local_time(raw: &str) -> Result<chrono::NaiveDateTime, chrono::ParseError> {
+    chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S"))
+}
+
+fn local_time<'de, D: serde::Deserializer<'de>>(d: D) -> Result<chrono::NaiveDateTime, D::Error> {
+    let raw = String::deserialize(d)?;
+    parse_local_time(&raw).map_err(serde::de::Error::custom)
+}
+
+fn local_times<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<chrono::NaiveDateTime>, D::Error> {
+    let raw = Vec::<String>::deserialize(d)?;
+    raw.iter()
+        .map(|s| parse_local_time(s).map_err(serde::de::Error::custom))
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]

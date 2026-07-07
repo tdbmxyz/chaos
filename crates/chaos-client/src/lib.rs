@@ -9,7 +9,8 @@ use chaos_domain::{
     CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse,
     HomeSensorInfo, LightCommand, LightState, Link, LinkPage, LinkQuery, LoginRequest,
     LoginResponse, ServiceActionRequest, ServiceWithStatus, SystemdAction, SystemdActionRequest,
-    TagWithCount, TemperatureQuery, TemperatureSeries, UpdateLinkRequest, User, WidgetData,
+    TagWithCount, TemperatureQuery, TemperatureSeries, UpdateLinkRequest, User, WeatherData,
+    WidgetData,
 };
 use url::Url;
 use uuid::Uuid;
@@ -88,6 +89,16 @@ impl ChaosClient {
     /// every widget kind except weather.
     pub async fn widget_data(&self, id: &str, location: Option<&str>) -> Result<WidgetData> {
         let mut req = self.http.get(self.url(&format!("api/v1/widgets/{id}"))?);
+        if let Some(location) = location {
+            req = req.query(&[("location", location)]);
+        }
+        self.send(req).await
+    }
+
+    /// Forecast for any location (`None` = the server's configured place),
+    /// with the hourly series for the weather page.
+    pub async fn weather(&self, location: Option<&str>) -> Result<WeatherData> {
+        let mut req = self.http.get(self.url("api/v1/weather")?);
         if let Some(location) = location {
             req = req.query(&[("location", location)]);
         }

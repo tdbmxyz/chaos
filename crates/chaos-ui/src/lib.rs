@@ -134,20 +134,82 @@ pub(crate) fn persist_token() -> bool {
 
 pub(crate) const WEATHER_LOCATION_KEY: &str = "chaos-weather-location";
 pub(crate) const WEATHER_UNITS_KEY: &str = "chaos-weather-units";
+/// Locations compared on the weather page, newline-separated (names may
+/// contain commas, e.g. "Osaka, JP").
+pub(crate) const WEATHER_PLACES_KEY: &str = "chaos-weather-places";
+
+pub(crate) fn weather_places() -> Vec<String> {
+    pref(WEATHER_PLACES_KEY)
+        .map(|raw| {
+            raw.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn set_weather_places(places: &[String]) {
+    set_pref(WEATHER_PLACES_KEY, &places.join("\n"));
+}
+
+/// Displayed temperature honoring the °C/°F preference; the wire is metric.
+pub(crate) fn format_temp(celsius: f64, fahrenheit: bool) -> String {
+    if fahrenheit {
+        format!("{:.0}°", celsius * 9.0 / 5.0 + 32.0)
+    } else {
+        format!("{celsius:.0}°")
+    }
+}
+
+pub(crate) fn weather_emoji(code: i32) -> &'static str {
+    match code {
+        0 => "☀️",
+        1 => "🌤️",
+        2 => "⛅",
+        3 => "☁️",
+        45 | 48 => "🌫️",
+        51..=57 => "🌦️",
+        61..=67 | 80..=82 => "🌧️",
+        71..=77 | 85 | 86 => "🌨️",
+        95..=99 => "⛈️",
+        _ => "🌡️",
+    }
+}
+
+thread_local! {
+    /// Units default reported by the server's health check (its host locale,
+    /// LC_MEASUREMENT and friends). Set by the gate before pages render.
+    static SERVER_FAHRENHEIT: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn set_server_fahrenheit(value: Option<bool>) {
+    SERVER_FAHRENHEIT.set(value);
+}
 
 /// °F or °C for displayed temperatures: the device preference when one is
-/// set, otherwise derived from the system locale (which the browser/webview
-/// exposes as `navigator.language`).
+/// set, otherwise the system default.
 pub(crate) fn weather_fahrenheit() -> bool {
     match pref(WEATHER_UNITS_KEY).as_deref() {
         Some("fahrenheit") => true,
         Some(_) => false,
-        None => fahrenheit_locale(),
+        None => default_fahrenheit(),
     }
 }
 
-/// True when the system locale's region customarily uses Fahrenheit.
-pub(crate) fn fahrenheit_locale() -> bool {
+/// The "system locale" units default: what the server host's locale says
+/// (it sees LC_MEASUREMENT; browsers don't), else the browser language
+/// region as a rough proxy.
+pub(crate) fn default_fahrenheit() -> bool {
+    SERVER_FAHRENHEIT.get().unwrap_or_else(fahrenheit_locale)
+}
+
+/// True when the browser language's region customarily uses Fahrenheit —
+/// only a proxy: `navigator.language` is the browser UI language, not the
+/// OS locale.
+fn fahrenheit_locale() -> bool {
     // The short list of countries still on °F (US and its close orbit).
     const FAHRENHEIT_REGIONS: [&str; 8] = ["US", "BS", "BZ", "KY", "LR", "PW", "FM", "MH"];
     web_sys::window()
@@ -366,6 +428,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <A href="/">"Dashboard"</A>
                 <A href="/links">"Links"</A>
                 <A href="/calendar">"Calendar"</A>
+                <A href="/weather">"Weather"</A>
                 <A href="/home">"Home"</A>
                 {move || {
                     apps.0
@@ -401,6 +464,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     <Route path=path!("/") view=pages::Dashboard/>
                     <Route path=path!("/links") view=pages::Links/>
                     <Route path=path!("/calendar") view=pages::CalendarPage/>
+                    <Route path=path!("/weather") view=pages::WeatherPage/>
                     <Route path=path!("/home") view=pages::HomePage/>
                     <Route path=path!("/login") view=pages::Login/>
                     <Route path=path!("/settings") view=pages::Settings/>
@@ -490,7 +554,12 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
     let client = use_client();
     spawn_local(async move {
         match client.health().await {
-            Ok(_) => gate.set(GateState::Ready),
+            Ok(health) => {
+                // Units default from the server host's locale; kept for
+                // weather_fahrenheit before any page renders.
+                set_server_fahrenheit(health.fahrenheit);
+                gate.set(GateState::Ready);
+            }
             Err(_) => gate.set(GateState::Unreachable),
         }
     });

@@ -47,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/dashboard", get(dashboard))
         .route("/widgets/{id}", get(widget_data))
         .route("/widgets/{id}/systemd", post(widget_systemd))
+        .route("/weather", get(weather))
         .route("/home/sensors", get(home::sensors))
         .route("/home/lights", get(home::lights))
         .route("/home/lights/{id}", post(home::set_light))
@@ -93,7 +94,29 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
+        fahrenheit: Some(locale_fahrenheit()),
     })
+}
+
+/// Whether the host locale measures in Fahrenheit, from the usual POSIX
+/// precedence. Browsers can't read the system locale, so this is their
+/// units default (mirrors `fahrenheit_locale` in chaos-ui).
+fn locale_fahrenheit() -> bool {
+    // The short list of regions still on °F (US and its close orbit).
+    const FAHRENHEIT_REGIONS: [&str; 8] = ["US", "BS", "BZ", "KY", "LR", "PW", "FM", "MH"];
+    ["LC_MEASUREMENT", "LC_ALL", "LANG"]
+        .iter()
+        .find_map(|var| std::env::var(var).ok().filter(|v| !v.trim().is_empty()))
+        // "fr_FR.UTF-8" → region "FR"
+        .and_then(|locale| {
+            locale
+                .split('.')
+                .next()?
+                .rsplit(['_', '-'])
+                .next()
+                .map(str::to_ascii_uppercase)
+        })
+        .is_some_and(|region| FAHRENHEIT_REGIONS.contains(&region.as_str()))
 }
 
 async fn dashboard(State(state): State<AppState>) -> Json<DashboardLayout> {
@@ -115,6 +138,20 @@ async fn widget_data(
     state
         .widgets
         .data(&id, query.location.as_deref())
+        .await
+        .map(Json)
+        .map_err(Into::into)
+}
+
+/// Forecast for any location (the weather page), not tied to a widget
+/// instance; without `location` the layout's weather widget place is used.
+async fn weather(
+    State(state): State<AppState>,
+    Query(query): Query<WidgetQuery>,
+) -> Result<Json<chaos_domain::WeatherData>, ApiError> {
+    state
+        .widgets
+        .weather(query.location.as_deref())
         .await
         .map(Json)
         .map_err(Into::into)

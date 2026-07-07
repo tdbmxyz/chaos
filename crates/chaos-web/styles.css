@@ -1209,9 +1209,133 @@ button.primary {
   color: var(--accent);
 }
 
+/* ---- weather page ---- */
+
+.weather-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.weather-page-head h2 {
+  margin: 0;
+}
+
+.weather-add {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.weather-add input {
+  min-width: 16rem;
+}
+
+.weather-row {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 0.9rem;
+}
+
+/* remove button, top-right of the row */
+.weather-row > .icon-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  color: var(--muted);
+}
+
+.weather-row-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.weather-row-title {
+  min-width: 0;
+}
+
+.weather-row-title h3 {
+  margin: 0;
+}
+
+.weather-row-title .muted {
+  font-size: 0.85rem;
+}
+
+.weather-row-temp {
+  margin-left: auto;
+  padding-right: 1.5rem;
+  font-size: 1.7rem;
+  font-weight: 600;
+}
+
+.hourly-strip {
+  display: flex;
+  overflow-x: auto;
+  margin-top: 0.75rem;
+  padding-bottom: 0.25rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.hour-cell {
+  flex: none;
+  width: 3.1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.35rem 0;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hour-cell.day-break {
+  border-left: 1px solid var(--border);
+}
+
+.hour-cell.day-break .hour-label {
+  color: var(--accent);
+}
+
+.hour-label {
+  font-size: 0.7rem;
+}
+
+/* ---- collapsible lists (phones) ----
+   Long widgets (services, HN/lobsters, releases) show three entries with
+   a ▾ toggle; wider screens always show everything. */
+
+.collapse-toggle {
+  display: none;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.35rem 0;
+  cursor: pointer;
+}
+
 /* ---- small screens (phone) ---- */
 
 @media (max-width: 40rem) {
+  .collapse-toggle {
+    display: block;
+  }
+
+  .collapsible.collapsed .feed-list li:nth-child(n + 4),
+  .collapsible.collapsed .service-card:nth-child(n + 4) {
+    display: none;
+  }
+
   .feed-list li {
     flex-wrap: wrap;
   }
@@ -1221,18 +1345,26 @@ button.primary {
     white-space: normal;
   }
 
+  /* Bottom bar: too many entries to fit, so it scrolls sideways instead
+     of crushing the labels. */
   .topbar {
     inset: auto 0 0 0;
     width: auto;
     flex-direction: row;
     align-items: center;
-    justify-content: space-around;
-    gap: 0;
+    justify-content: flex-start;
+    gap: 0.35rem;
     padding: 0.5rem 0.75rem;
     font-size: 0.9rem;
     white-space: nowrap;
+    overflow-x: auto;
     border-right: none;
     border-top: 1px solid var(--border);
+  }
+
+  .topbar a,
+  .topbar button {
+    flex: none;
   }
 
   .brand,
