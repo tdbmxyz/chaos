@@ -6,6 +6,7 @@ use tokio::sync::{Notify, RwLock};
 
 use crate::config::Config;
 use crate::db::Db;
+use crate::home_assistant::HomeAssistantClient;
 use crate::ics::FeedCache;
 use crate::widgets::WidgetHub;
 
@@ -24,12 +25,15 @@ pub struct AppState {
     pub widgets: Arc<WidgetHub>,
     /// Parsed ICS calendar feeds, cached per calendar id.
     pub ics: Arc<FeedCache>,
+    /// Home Assistant client, when the Home tab is configured.
+    pub home: Option<Arc<HomeAssistantClient>>,
 }
 
 impl AppState {
-    pub fn new(config: Config, db: Db) -> Self {
+    pub fn new(config: Config, db: Db) -> anyhow::Result<Self> {
         let widgets = Arc::new(WidgetHub::new(&config));
-        Self {
+        let home = HomeAssistantClient::new(&config.home_assistant)?.map(Arc::new);
+        Ok(Self {
             config: Arc::new(config),
             db,
             fetcher: crate::metadata::http_client(),
@@ -37,6 +41,7 @@ impl AppState {
             statuses: Arc::new(RwLock::new(HashMap::new())),
             widgets,
             ics: Arc::new(FeedCache::default()),
-        }
+            home,
+        })
     }
 }

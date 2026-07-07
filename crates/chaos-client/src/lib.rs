@@ -6,9 +6,11 @@
 
 use chaos_domain::{
     ApiErrorBody, AppLink, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
-    CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse, Link,
-    LinkPage, LinkQuery, LoginRequest, LoginResponse, ServiceActionRequest, ServiceWithStatus,
-    SystemdAction, SystemdActionRequest, TagWithCount, UpdateLinkRequest, User, WidgetData,
+    CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse,
+    HomeSensorInfo, LightCommand, LightState, Link, LinkPage, LinkQuery, LoginRequest,
+    LoginResponse, ServiceActionRequest, ServiceWithStatus, SystemdAction, SystemdActionRequest,
+    TagWithCount, TemperatureQuery, TemperatureSeries, UpdateLinkRequest, User, WeatherData,
+    WidgetData,
 };
 use url::Url;
 use uuid::Uuid;
@@ -87,6 +89,16 @@ impl ChaosClient {
     /// every widget kind except weather.
     pub async fn widget_data(&self, id: &str, location: Option<&str>) -> Result<WidgetData> {
         let mut req = self.http.get(self.url(&format!("api/v1/widgets/{id}"))?);
+        if let Some(location) = location {
+            req = req.query(&[("location", location)]);
+        }
+        self.send(req).await
+    }
+
+    /// Forecast for any location (`None` = the server's configured place),
+    /// with the hourly series for the weather page.
+    pub async fn weather(&self, location: Option<&str>) -> Result<WeatherData> {
+        let mut req = self.http.get(self.url("api/v1/weather")?);
         if let Some(location) = location {
             req = req.query(&[("location", location)]);
         }
@@ -276,6 +288,39 @@ impl ChaosClient {
     pub async fn delete_event(&self, id: Uuid) -> Result<()> {
         let req = self.http.delete(self.url(&format!("api/v1/events/{id}"))?);
         self.send_no_content(req).await
+    }
+
+    // ---- home ----
+
+    /// Configured temperature sensors (empty when the Home tab is off).
+    pub async fn home_sensors(&self) -> Result<Vec<HomeSensorInfo>> {
+        self.get("api/v1/home/sensors").await
+    }
+
+    /// Temperature history for every configured sensor in the given range.
+    pub async fn home_temperature(
+        &self,
+        query: &TemperatureQuery,
+    ) -> Result<Vec<TemperatureSeries>> {
+        let req = self
+            .http
+            .get(self.url("api/v1/home/temperature")?)
+            .query(query);
+        self.send(req).await
+    }
+
+    /// Current state of every configured light.
+    pub async fn home_lights(&self) -> Result<Vec<LightState>> {
+        self.get("api/v1/home/lights").await
+    }
+
+    /// Apply a partial update (on/off, brightness, color) to a light.
+    pub async fn set_light(&self, id: &str, cmd: &LightCommand) -> Result<LightState> {
+        let req = self
+            .http
+            .post(self.url(&format!("api/v1/home/lights/{id}"))?)
+            .json(cmd);
+        self.send(req).await
     }
 
     // ---- plumbing ----

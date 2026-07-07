@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod db_auth;
 mod db_calendar;
+mod home_assistant;
 mod ics;
 mod import;
 mod metadata;
@@ -28,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("opening database {}", config.db_path.display()))?;
 
-    let state = state::AppState::new(config, db);
+    let state = state::AppState::new(config, db).context("initializing application state")?;
 
     // One-shot CLI modes.
     let args: Vec<String> = std::env::args().skip(1).collect();

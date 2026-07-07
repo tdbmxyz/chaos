@@ -11,6 +11,12 @@ pub struct HealthResponse {
     pub status: String,
     /// Server crate version, useful to detect client/server drift.
     pub version: String,
+    /// Whether the server host's locale (`LC_MEASUREMENT`/`LC_ALL`/`LANG`)
+    /// implies Fahrenheit. The UI's units default: browsers can't see the
+    /// system locale (`navigator.language` is only the browser UI language),
+    /// and the server host usually shares the household's conventions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fahrenheit: Option<bool>,
 }
 
 /// Uniform error body returned by the API for non-2xx responses.

@@ -11,7 +11,7 @@ pub fn Settings() -> impl IntoView {
     let location = RwSignal::new(pref(WEATHER_LOCATION_KEY).unwrap_or_default());
     // Empty = follow the system locale; "celsius"/"fahrenheit" override it.
     let units = RwSignal::new(pref(WEATHER_UNITS_KEY).unwrap_or_default());
-    let locale_units = if crate::fahrenheit_locale() {
+    let locale_units = if crate::default_fahrenheit() {
         "System locale (°F)"
     } else {
         "System locale (°C)"
