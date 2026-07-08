@@ -139,6 +139,7 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
     view! {
         <div class="home-range-picker">
             <div class="home-range-quick">
+                <button on:click=move |_| last_hours(3)>"Last 3h"</button>
                 <button on:click=today>"Today"</button>
                 <button on:click=move |_| last_hours(24)>"Last 24h"</button>
                 <button on:click=move |_| last_hours(24 * 7)>"Last 7 days"</button>
@@ -171,105 +172,213 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
     }
 }
 
-/// Multi-series temperature history as a stretched inline SVG (same
-/// cheap-to-render approach as the dashboard `Sparkline`), one line per
-/// sensor, with a legend and min/max axis labels.
+/// Multi-room temperature history on ECharts (vendored, see
+/// chaos-ui/src/echarts.rs): hover tooltip with every visible room's value,
+/// click the legend to hide a room (the y-axis stays fixed — it is pinned
+/// from all series), drag a horizontal span to zoom (client-side; HA
+/// history is already full resolution for the fetched window).
 #[component]
 fn TemperatureChart(
     series: Vec<TemperatureSeries>,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> impl IntoView {
-    let span_ms = (end - start).num_milliseconds().max(1) as f64;
+    if !series.iter().any(|s| !s.readings.is_empty()) {
+        return view! { <p class="muted">"No readings in this range."</p> }.into_any();
+    }
 
-    let all_readings: Vec<f64> = series
-        .iter()
-        .flat_map(|s| s.readings.iter().map(|r| r.celsius))
-        .collect();
-    let (min_c, max_c) = if all_readings.is_empty() {
-        (0.0, 1.0)
-    } else {
-        let min = all_readings.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = all_readings
-            .iter()
-            .cloned()
-            .fold(f64::NEG_INFINITY, f64::max);
-        if max > min {
-            (min, max)
-        } else {
-            (min - 0.5, max + 0.5)
+    let node = NodeRef::<leptos::html::Div>::new();
+    let chart = StoredValue::new_local(None::<crate::echarts::EChart>);
+    let failed = RwSignal::new(false);
+
+    Effect::new(move |_| {
+        let Some(el) = node.get() else {
+            return;
+        };
+        let instance = match chart.get_value() {
+            Some(instance) => instance,
+            None => match crate::echarts::init(&el) {
+                Ok(instance) => {
+                    chart.set_value(Some(instance.clone()));
+                    instance
+                }
+                // Bundle missing/init failed: show a plain message instead
+                // of a blank panel; the page still works.
+                Err(_) => {
+                    failed.set(true);
+                    return;
+                }
+            },
+        };
+        let option = crate::echarts::json(&chart_option(&series, start, end).to_string());
+        let _ = instance.set_option(&option);
+        // Keep the drag-select zoom armed (a toolbox feature, armed
+        // programmatically so no toolbox icon has to be clicked — the
+        // toolbox itself stays hidden).
+        let _ = instance.dispatch_action(&crate::echarts::json(
+            r#"{"type":"takeGlobalCursor","key":"dataZoomSelect","dataZoomSelectActive":true}"#,
+        ));
+    });
+
+    let resize = window_event_listener(leptos::ev::resize, move |_| {
+        if let Some(instance) = chart.get_value() {
+            let _ = instance.resize();
         }
-    };
-    let c_span = max_c - min_c;
+    });
+    on_cleanup(move || {
+        resize.remove();
+        if let Some(instance) = chart.get_value() {
+            let _ = instance.dispose();
+        }
+    });
 
-    let lines: Vec<(String, &'static str, String)> = series
+    view! {
+        <div class="temp-chart" node_ref=node></div>
+        {move || {
+            failed
+                .get()
+                .then(|| view! { <p class="error">"Chart failed to load (echarts bundle missing?)"</p> })
+        }}
+    }
+    .into_any()
+}
+
+/// The ECharts option for the fetched series, themed from the CSS palette.
+fn chart_option(
+    series: &[TemperatureSeries],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> serde_json::Value {
+    let fahrenheit = crate::weather_fahrenheit();
+    let unit = if fahrenheit { "°F" } else { "°C" };
+    let convert = move |celsius: f64| {
+        let value = if fahrenheit {
+            celsius * 9.0 / 5.0 + 32.0
+        } else {
+            celsius
+        };
+        // One decimal: these values land verbatim in the tooltip.
+        (value * 10.0).round() / 10.0
+    };
+
+    // Y-scale pinned from ALL series so hiding a room never rescales.
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for reading in series.iter().flat_map(|s| &s.readings) {
+        let value = convert(reading.celsius);
+        min = min.min(value);
+        max = max.max(value);
+    }
+    if !min.is_finite() {
+        (min, max) = (0.0, 1.0);
+    }
+    let (min, max) = ((min - 0.5).floor(), (max + 0.5).ceil());
+
+    let text = css_var("--text");
+    let muted = css_var("--muted");
+    let border = css_var("--border");
+    let surface = css_var("--surface");
+
+    // Every room resampled onto one shared time grid. HA sensors report at
+    // their own moments, and the axis tooltip only lists series that own a
+    // point at the snapped timestamp — raw series made it show a single
+    // room. HA history is state-based, so carrying the last value forward
+    // is exact, not an approximation; before a room's first reading the
+    // value is null (line simply starts later).
+    let start_ms = start.timestamp_millis();
+    let end_ms = end.timestamp_millis();
+    let step_ms = ((end_ms - start_ms) / 240).max(60_000);
+
+    let series_json: Vec<serde_json::Value> = series
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let color = SERIES_COLORS[i % SERIES_COLORS.len()];
-            let points: String = s
-                .readings
-                .iter()
-                .map(|r| {
-                    let x = (r.at - start).num_milliseconds() as f64 / span_ms * 100.0;
-                    let y = 100.0 - (r.celsius - min_c) / c_span * 100.0;
-                    format!("{x:.2},{y:.2} ")
-                })
-                .collect();
-            (s.label.clone(), color, points)
+            let mut readings = s.readings.iter().peekable();
+            let mut current: Option<f64> = None;
+            let mut data = Vec::new();
+            let mut t = start_ms;
+            while t <= end_ms {
+                while readings
+                    .peek()
+                    .is_some_and(|r| r.at.timestamp_millis() <= t)
+                {
+                    current = readings.next().map(|r| convert(r.celsius));
+                }
+                data.push(match current {
+                    Some(value) => serde_json::json!([t, value]),
+                    None => serde_json::json!([t, serde_json::Value::Null]),
+                });
+                t += step_ms;
+            }
+            serde_json::json!({
+                "name": s.label,
+                "type": "line",
+                "showSymbol": false,
+                "color": SERIES_COLORS[i % SERIES_COLORS.len()],
+                "lineStyle": { "width": 1.5 },
+                "data": data,
+            })
         })
         .collect();
 
-    let has_data = series.iter().any(|s| !s.readings.is_empty());
+    serde_json::json!({
+        "animation": false,
+        "grid": { "left": 44, "right": 16, "top": 36, "bottom": 28 },
+        "legend": { "top": 0, "textStyle": { "color": text }, "inactiveColor": muted },
+        "tooltip": {
+            "trigger": "axis",
+            "backgroundColor": surface,
+            "borderColor": border,
+            "textStyle": { "color": text },
+        },
+        // The toolbox must be *rendered* for its dataZoomSelect cursor to
+        // exist ("show": false never creates the feature, so arming it was
+        // a no-op) — so it renders transparent and off-canvas, and
+        // TemperatureChart arms drag-zoom via takeGlobalCursor.
+        "toolbox": {
+            "show": true,
+            "top": -40,
+            "feature": { "dataZoom": { "yAxisIndex": "none", "iconStyle": { "opacity": 0 } } },
+        },
+        // Touch: pinch-zoom through an inside dataZoom; every mouse
+        // interaction stays off so the drag-select brush keeps the mouse.
+        "dataZoom": [{
+            "type": "inside",
+            "xAxisIndex": 0,
+            "zoomOnMouseWheel": false,
+            "moveOnMouseMove": false,
+            "moveOnMouseWheel": false,
+        }],
+        "xAxis": {
+            "type": "time",
+            "min": start.timestamp_millis(),
+            "max": end.timestamp_millis(),
+            "axisLabel": { "color": muted },
+            "axisLine": { "lineStyle": { "color": border } },
+            "splitLine": { "show": false },
+        },
+        "yAxis": {
+            "type": "value",
+            "min": min,
+            "max": max,
+            "axisLabel": { "color": muted, "formatter": format!("{{value}}{unit}") },
+            "splitLine": { "lineStyle": { "color": border } },
+        },
+        "series": series_json,
+    })
+}
 
-    view! {
-        <div class="temp-chart">
-            {if has_data {
-                view! {
-                    <div class="temp-chart-plot">
-                        <div class="temp-chart-yaxis muted">
-                            <span>{format!("{max_c:.1}°C")}</span>
-                            <span>{format!("{min_c:.1}°C")}</span>
-                        </div>
-                        <svg class="temp-chart-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-                            {lines
-                                .iter()
-                                .map(|(_, color, points)| {
-                                    view! {
-                                        <polyline
-                                            class="temp-chart-line"
-                                            points=points.clone()
-                                            style=format!("stroke: {color}")
-                                        ></polyline>
-                                    }
-                                })
-                                .collect_view()}
-                        </svg>
-                    </div>
-                }
-                    .into_any()
-            } else {
-                view! { <p class="muted">"No readings in this range."</p> }.into_any()
-            }}
-            <div class="temp-chart-legend">
-                {lines
-                    .iter()
-                    .map(|(label, color, _)| {
-                        view! {
-                            <span class="temp-chart-legend-item">
-                                <span class="temp-chart-swatch" style=format!("background: {color}")></span>
-                                {label.clone()}
-                            </span>
-                        }
-                    })
-                    .collect_view()}
-            </div>
-            <div class="temp-chart-range muted">
-                {start.with_timezone(&Local).format("%b %d, %H:%M").to_string()} " – "
-                {end.with_timezone(&Local).format("%b %d, %H:%M").to_string()}
-            </div>
-        </div>
-    }
+/// A CSS custom property from the active theme (empty string if unset —
+/// ECharts then falls back to its defaults, which is survivable).
+fn css_var(name: &str) -> String {
+    web_sys::window()
+        .and_then(|w| {
+            let body = w.document()?.body()?;
+            w.get_computed_style(&body).ok().flatten()
+        })
+        .and_then(|style| style.get_property_value(name).ok())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// On/off + brightness + color for one configured light. Holds its own
@@ -306,8 +415,11 @@ fn LightCard(light: LightState) -> impl IntoView {
         let client = client.clone();
         let id = id.clone();
         spawn_local(async move {
-            if let Ok(state) = client.set_light(&id, &cmd).await {
-                apply_state(state);
+            match client.set_light(&id, &cmd).await {
+                Ok(state) => apply_state(state),
+                // The optimistic flip must not stand on failure: mark the
+                // card unreachable until the next successful command.
+                Err(_) => available.set(false),
             }
         });
     };
@@ -321,6 +433,9 @@ fn LightCard(light: LightState) -> impl IntoView {
         let send = send.clone();
         move |ev: leptos::ev::Event| {
             let checked = event_target_checked(&ev);
+            // Optimistic: the card follows the user's intent immediately;
+            // apply_state reconciles from the (now confirmed) response.
+            on.set(checked);
             let mut cmd = LightCommand {
                 on: Some(checked),
                 ..Default::default()
@@ -377,9 +492,16 @@ fn LightCard(light: LightState) -> impl IntoView {
                     min="0"
                     max="100"
                     prop:value=brightness
+                    // Live readout while dragging; the command only goes
+                    // out on release (change), not per pixel of drag.
+                    on:input=move |ev| {
+                        if let Ok(pct) = event_target_value(&ev).parse::<u8>() {
+                            brightness.set(pct);
+                        }
+                    }
                     on:change=change_brightness
                 />
-                <span class="muted">{move || format!("{}%", brightness.get())}</span>
+                <span class="muted light-pct">{move || format!("{}%", brightness.get())}</span>
             </label>
             <label class="light-card-row">
                 <span class="muted">"Color"</span>
