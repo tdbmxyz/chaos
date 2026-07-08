@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="600" height="600">
+  <defs>
+    <!-- Radial gradient for the fiery orb, brighter toward upper-left -->
+    <radialGradient id="fire" cx="38%" cy="32%" r="85%">
+      <stop offset="0%"  stop-color="#ff5a1e"/>
+      <stop offset="35%" stop-color="#f5401a"/>
+      <stop offset="70%" stop-color="#e01f0f"/>
+      <stop offset="100%" stop-color="#c81208"/>
+    </radialGradient>
+
+    <!-- Soft feathered highlight sweeping down-left -->
+    <linearGradient id="sheen" x1="30%" y1="10%" x2="55%" y2="90%">
+      <stop offset="0%"  stop-color="#ffb27a" stop-opacity="0.55"/>
+      <stop offset="45%" stop-color="#ff7a3c" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#ff7a3c" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Clip so the crescent stays inside the orb -->
+    <clipPath id="orbClip">
+      <circle cx="300" cy="300" r="238"/>
+    </clipPath>
+  </defs>
+
+  <!-- Black ring / outer border -->
+  <circle cx="300" cy="300" r="258" fill="#000000"/>
+
+  <!-- Fiery interior -->
+  <circle cx="300" cy="300" r="238" fill="url(#fire)"/>
+
+  <!-- Feathered highlight overlay -->
+  <ellipse cx="285" cy="300" rx="230" ry="238" fill="url(#sheen)" clip-path="url(#orbClip)"/>
+
+  <!-- Black crescent in lower-right, clipped to the orb -->
+  <g clip-path="url(#orbClip)">
+    <circle cx="470" cy="470" r="230" fill="#000000"/>
+  </g>
+</svg>
