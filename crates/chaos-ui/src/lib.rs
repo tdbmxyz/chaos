@@ -3,6 +3,8 @@
 //! (like where the API lives) is injected from the outside via [`AppConfig`].
 
 mod components;
+#[allow(dead_code)] // consumed by the home chart (next commit)
+mod echarts;
 mod pages;
 
 use chaos_client::ChaosClient;
