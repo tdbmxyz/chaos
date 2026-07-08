@@ -139,6 +139,7 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
     view! {
         <div class="home-range-picker">
             <div class="home-range-quick">
+                <button on:click=move |_| last_hours(3)>"Last 3h"</button>
                 <button on:click=today>"Today"</button>
                 <button on:click=move |_| last_hours(24)>"Last 24h"</button>
                 <button on:click=move |_| last_hours(24 * 7)>"Last 7 days"</button>
