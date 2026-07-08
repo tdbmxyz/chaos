@@ -24,4 +24,5 @@ web-sys = { workspace = true, features = [
     "Document",
     "Element",
     "HtmlElement",
+    "CssStyleDeclaration",
 ] }

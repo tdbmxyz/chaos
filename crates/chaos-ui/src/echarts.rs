@@ -25,6 +25,16 @@ extern "C" {
     pub fn dispose(this: &EChart) -> Result<(), JsValue>;
 }
 
+// wasm-bindgen doesn't derive `Clone` for extern types by itself; the
+// instance is cached in a `StoredValue` (Home's chart Effect re-fetches it
+// on every rerun rather than re-initializing), which needs it.
+impl Clone for EChart {
+    fn clone(&self) -> Self {
+        use wasm_bindgen::JsCast;
+        JsValue::from(self).unchecked_into()
+    }
+}
+
 /// Parse a JSON string into a JS object (NULL on bad input — callers treat
 /// every interop step as fallible, the chart just stays empty).
 pub fn json(raw: &str) -> JsValue {
