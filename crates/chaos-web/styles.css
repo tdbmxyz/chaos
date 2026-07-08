@@ -1795,6 +1795,13 @@ body[data-theme="terminal"] .widget h2 {
   align-items: center;
   gap: 0.5rem;
   font-weight: 600;
+  cursor: pointer;
+}
+
+.light-card-head input[type="checkbox"] {
+  width: 1.15rem;
+  height: 1.15rem;
+  accent-color: var(--accent);
 }
 
 .light-card-row {
@@ -1807,6 +1814,19 @@ body[data-theme="terminal"] .widget h2 {
   flex: 1;
   /* range inputs have an intrinsic ~130px minimum that flex can't shrink */
   min-width: 0;
+  accent-color: var(--accent);
+}
+
+/* Phones: taller controls = honest touch targets. */
+@media (max-width: 40rem) {
+  .light-card-row input[type="range"] {
+    height: 2.2rem;
+  }
+
+  .light-card-row input[type="color"] {
+    width: 3rem;
+    height: 2.2rem;
+  }
 }
 
 /* Fixed slot so "5%" vs "100%" never reflows the row. */

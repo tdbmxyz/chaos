@@ -279,21 +279,44 @@ fn chart_option(
     let border = css_var("--border");
     let surface = css_var("--surface");
 
+    // Every room resampled onto one shared time grid. HA sensors report at
+    // their own moments, and the axis tooltip only lists series that own a
+    // point at the snapped timestamp — raw series made it show a single
+    // room. HA history is state-based, so carrying the last value forward
+    // is exact, not an approximation; before a room's first reading the
+    // value is null (line simply starts later).
+    let start_ms = start.timestamp_millis();
+    let end_ms = end.timestamp_millis();
+    let step_ms = ((end_ms - start_ms) / 240).max(60_000);
+
     let series_json: Vec<serde_json::Value> = series
         .iter()
         .enumerate()
         .map(|(i, s)| {
+            let mut readings = s.readings.iter().peekable();
+            let mut current: Option<f64> = None;
+            let mut data = Vec::new();
+            let mut t = start_ms;
+            while t <= end_ms {
+                while readings
+                    .peek()
+                    .is_some_and(|r| r.at.timestamp_millis() <= t)
+                {
+                    current = readings.next().map(|r| convert(r.celsius));
+                }
+                data.push(match current {
+                    Some(value) => serde_json::json!([t, value]),
+                    None => serde_json::json!([t, serde_json::Value::Null]),
+                });
+                t += step_ms;
+            }
             serde_json::json!({
                 "name": s.label,
                 "type": "line",
                 "showSymbol": false,
                 "color": SERIES_COLORS[i % SERIES_COLORS.len()],
                 "lineStyle": { "width": 1.5 },
-                "data": s
-                    .readings
-                    .iter()
-                    .map(|r| serde_json::json!([r.at.timestamp_millis(), convert(r.celsius)]))
-                    .collect::<Vec<_>>(),
+                "data": data,
             })
         })
         .collect();
@@ -308,9 +331,24 @@ fn chart_option(
             "borderColor": border,
             "textStyle": { "color": text },
         },
-        // Hidden toolbox: only its dataZoom feature exists, armed from
-        // TemperatureChart via takeGlobalCursor for direct drag-zoom.
-        "toolbox": { "show": false, "feature": { "dataZoom": { "yAxisIndex": "none" } } },
+        // The toolbox must be *rendered* for its dataZoomSelect cursor to
+        // exist ("show": false never creates the feature, so arming it was
+        // a no-op) — so it renders transparent and off-canvas, and
+        // TemperatureChart arms drag-zoom via takeGlobalCursor.
+        "toolbox": {
+            "show": true,
+            "top": -40,
+            "feature": { "dataZoom": { "yAxisIndex": "none", "iconStyle": { "opacity": 0 } } },
+        },
+        // Touch: pinch-zoom through an inside dataZoom; every mouse
+        // interaction stays off so the drag-select brush keeps the mouse.
+        "dataZoom": [{
+            "type": "inside",
+            "xAxisIndex": 0,
+            "zoomOnMouseWheel": false,
+            "moveOnMouseMove": false,
+            "moveOnMouseWheel": false,
+        }],
         "xAxis": {
             "type": "time",
             "min": start.timestamp_millis(),
@@ -454,6 +492,13 @@ fn LightCard(light: LightState) -> impl IntoView {
                     min="0"
                     max="100"
                     prop:value=brightness
+                    // Live readout while dragging; the command only goes
+                    // out on release (change), not per pixel of drag.
+                    on:input=move |ev| {
+                        if let Ok(pct) = event_target_value(&ev).parse::<u8>() {
+                            brightness.set(pct);
+                        }
+                    }
                     on:change=change_brightness
                 />
                 <span class="muted light-pct">{move || format!("{}%", brightness.get())}</span>
