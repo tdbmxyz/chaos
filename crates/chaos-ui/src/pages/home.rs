@@ -312,13 +312,26 @@ fn LightCard(light: LightState) -> impl IntoView {
         });
     };
 
+    // Brightness/color moved while the light is off are only remembered
+    // (never sent — adjusting a percentage must not power the light) and
+    // ride along with the next turn-on.
+    let pending = RwSignal::new(LightCommand::default());
+
     let toggle = {
         let send = send.clone();
         move |ev: leptos::ev::Event| {
-            send(LightCommand {
-                on: Some(event_target_checked(&ev)),
+            let checked = event_target_checked(&ev);
+            let mut cmd = LightCommand {
+                on: Some(checked),
                 ..Default::default()
-            });
+            };
+            if checked {
+                let queued = pending.get_untracked();
+                cmd.brightness = queued.brightness;
+                cmd.color = queued.color;
+                pending.set(LightCommand::default());
+            }
+            send(cmd);
         }
     };
     let change_brightness = {
@@ -326,20 +339,28 @@ fn LightCard(light: LightState) -> impl IntoView {
         move |ev: leptos::ev::Event| {
             if let Ok(pct) = event_target_value(&ev).parse::<u8>() {
                 brightness.set(pct);
-                send(LightCommand {
-                    brightness: Some(pct),
-                    ..Default::default()
-                });
+                if on.get_untracked() {
+                    send(LightCommand {
+                        brightness: Some(pct),
+                        ..Default::default()
+                    });
+                } else {
+                    pending.update(|p| p.brightness = Some(pct));
+                }
             }
         }
     };
     let change_color = move |ev: leptos::ev::Event| {
         if let Some(rgb) = parse_hex_color(&event_target_value(&ev)) {
             color.set(rgb);
-            send(LightCommand {
-                color: Some(rgb),
-                ..Default::default()
-            });
+            if on.get_untracked() {
+                send(LightCommand {
+                    color: Some(rgb),
+                    ..Default::default()
+                });
+            } else {
+                pending.update(|p| p.color = Some(rgb));
+            }
         }
     };
 

@@ -15,19 +15,16 @@ fn require_home(state: &AppState) -> Result<&HomeAssistantClient, ApiError> {
 }
 
 pub async fn sensors(State(state): State<AppState>) -> Json<Vec<HomeSensorInfo>> {
-    let sensors = state
-        .home
-        .as_ref()
-        .map(|home| {
-            home.sensors
-                .iter()
-                .map(|def| HomeSensorInfo {
-                    id: def.id.clone(),
-                    label: def.label.clone(),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let Some(home) = state.home.as_ref() else {
+        return Json(Vec::new());
+    };
+    let mut sensors = Vec::with_capacity(home.sensors.len());
+    for def in &home.sensors {
+        sensors.push(HomeSensorInfo {
+            id: def.id.clone(),
+            label: home.label(def).await,
+        });
+    }
     Json(sensors)
 }
 
