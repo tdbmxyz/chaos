@@ -1853,4 +1853,14 @@ body[data-theme="terminal"] .widget h2 {
 
 .light-card-row input[type="range"] {
   flex: 1;
+  /* range inputs have an intrinsic ~130px minimum that flex can't shrink */
+  min-width: 0;
+}
+
+/* Fixed slot so "5%" vs "100%" never reflows the row. */
+.light-card-row > .muted:last-child {
+  flex: none;
+  min-width: 3.2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }

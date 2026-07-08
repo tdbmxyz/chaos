@@ -321,6 +321,9 @@ fn LightCard(light: LightState) -> impl IntoView {
         let send = send.clone();
         move |ev: leptos::ev::Event| {
             let checked = event_target_checked(&ev);
+            // Optimistic: the card follows the user's intent immediately;
+            // apply_state reconciles from the (now confirmed) response.
+            on.set(checked);
             let mut cmd = LightCommand {
                 on: Some(checked),
                 ..Default::default()
