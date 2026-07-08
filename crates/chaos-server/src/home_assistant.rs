@@ -4,11 +4,13 @@
 //! the browser never talks to Home Assistant directly. Built once in
 //! `AppState::new` when `home_assistant.base_url` is configured.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use chaos_domain::{LightCommand, LightState, RgbColor, TemperatureReading, TemperatureSeries};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use tokio::sync::RwLock;
 use url::Url;
 
 use crate::config::{HomeAssistantConfig, HomeEntityDef};
@@ -21,6 +23,10 @@ pub struct HomeAssistantClient {
     token: String,
     pub sensors: Vec<HomeEntityDef>,
     pub lights: Vec<HomeEntityDef>,
+    /// Labels resolved from Home Assistant for entities configured without
+    /// one (area name, then friendly name), cached per entity for the
+    /// process lifetime.
+    labels: RwLock<HashMap<String, String>>,
 }
 
 impl HomeAssistantClient {
@@ -46,7 +52,61 @@ impl HomeAssistantClient {
             token,
             sensors: config.sensors.clone(),
             lights: config.lights.clone(),
+            labels: RwLock::new(HashMap::new()),
         }))
+    }
+
+    /// Display name of an entity: the configured label, or — resolved from
+    /// Home Assistant and cached — its area (room), then its friendly name.
+    /// Falls back to the public `id` (uncached, so it retries) when Home
+    /// Assistant can't answer.
+    pub async fn label(&self, def: &HomeEntityDef) -> String {
+        if let Some(label) = &def.label {
+            return label.clone();
+        }
+        if let Some(hit) = self.labels.read().await.get(&def.entity_id) {
+            return hit.clone();
+        }
+        match self.resolve_label(&def.entity_id).await {
+            Ok(label) => {
+                self.labels
+                    .write()
+                    .await
+                    .insert(def.entity_id.clone(), label.clone());
+                label
+            }
+            Err(reason) => {
+                tracing::warn!(
+                    entity_id = def.entity_id,
+                    reason,
+                    "home assistant label resolution failed"
+                );
+                def.id.clone()
+            }
+        }
+    }
+
+    async fn resolve_label(&self, entity_id: &str) -> Result<String, String> {
+        let template = format!(
+            "{{{{ area_name('{entity_id}') or state_attr('{entity_id}', 'friendly_name') or '' }}}}"
+        );
+        let resp = self
+            .http
+            .post(self.url("api/template"))
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({ "template": template }))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("home assistant returned {}", resp.status()));
+        }
+        let label = resp.text().await.map_err(|e| e.to_string())?;
+        let label = label.trim();
+        if label.is_empty() {
+            return Err("no area or friendly name".into());
+        }
+        Ok(label.to_string())
     }
 
     fn url(&self, path: &str) -> Url {
@@ -83,13 +143,11 @@ impl HomeAssistantClient {
         let mut raw: Vec<Vec<HaStateChange>> = self.get_json(url).await?;
         raw.resize_with(self.sensors.len(), Vec::new);
 
-        Ok(self
-            .sensors
-            .iter()
-            .zip(raw)
-            .map(|(def, changes)| TemperatureSeries {
+        let mut series = Vec::with_capacity(self.sensors.len());
+        for (def, changes) in self.sensors.iter().zip(raw) {
+            series.push(TemperatureSeries {
                 id: def.id.clone(),
-                label: def.label.clone(),
+                label: self.label(def).await,
                 readings: changes
                     .into_iter()
                     .filter_map(|change| {
@@ -101,8 +159,9 @@ impl HomeAssistantClient {
                         })
                     })
                     .collect(),
-            })
-            .collect())
+            });
+        }
+        Ok(series)
     }
 
     pub async fn light_state(&self, def: &HomeEntityDef) -> LightState {
@@ -116,7 +175,7 @@ impl HomeAssistantClient {
                 );
                 LightState {
                     id: def.id.clone(),
-                    label: def.label.clone(),
+                    label: self.label(def).await,
                     available: false,
                     on: false,
                     brightness: None,
@@ -129,7 +188,7 @@ impl HomeAssistantClient {
     async fn fetch_light_state(&self, def: &HomeEntityDef) -> Result<LightState, String> {
         let url = self.url(&format!("api/states/{}", def.entity_id));
         let raw: HaEntityState = self.get_json(url).await?;
-        Ok(to_light_state(def, &raw))
+        Ok(to_light_state(def, self.label(def).await, &raw))
     }
 
     pub async fn set_light(
@@ -137,11 +196,23 @@ impl HomeAssistantClient {
         def: &HomeEntityDef,
         cmd: &LightCommand,
     ) -> Result<LightState, String> {
-        if cmd.on == Some(false) {
-            self.call_service("turn_off", def, None, None).await?;
-        } else {
-            self.call_service("turn_on", def, cmd.brightness, cmd.color)
-                .await?;
+        match cmd.on {
+            Some(false) => self.call_service("turn_off", def, None, None).await?,
+            Some(true) => {
+                self.call_service("turn_on", def, cmd.brightness, cmd.color)
+                    .await?;
+            }
+            // Adjustments only apply to a lit lamp: HA's turn_on would
+            // power the light as a side effect of a brightness/color
+            // change, so an off light is left untouched.
+            None => {
+                let state = self.fetch_light_state(def).await?;
+                if !state.on {
+                    return Ok(state);
+                }
+                self.call_service("turn_on", def, cmd.brightness, cmd.color)
+                    .await?;
+            }
         }
         self.fetch_light_state(def).await
     }
@@ -191,10 +262,10 @@ impl HomeAssistantClient {
     }
 }
 
-fn to_light_state(def: &HomeEntityDef, raw: &HaEntityState) -> LightState {
+fn to_light_state(def: &HomeEntityDef, label: String, raw: &HaEntityState) -> LightState {
     LightState {
         id: def.id.clone(),
-        label: def.label.clone(),
+        label,
         available: raw.state != "unavailable",
         on: raw.state == "on",
         brightness: raw

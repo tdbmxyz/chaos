@@ -66,7 +66,10 @@ pub struct HomeAssistantConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HomeEntityDef {
     pub id: String,
-    pub label: String,
+    /// Display name. When omitted the server asks Home Assistant for one:
+    /// the entity's area (room) first, then its friendly name.
+    #[serde(default)]
+    pub label: Option<String>,
     pub entity_id: String,
 }
 
