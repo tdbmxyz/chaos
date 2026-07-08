@@ -214,9 +214,11 @@ impl HomeAssistantClient {
             }
             // Adjustments only apply to a lit lamp: HA's turn_on would
             // power the light as a side effect of a brightness/color
-            // change, so an off light is left untouched.
+            // change, so an off light is left untouched. The pre-check
+            // polls (not a single fetch): a just-commanded turn-on may
+            // still be confirming when the adjustment arrives.
             None => {
-                let state = self.fetch_light_state(def).await?;
+                let state = self.confirm(def, |state| state.on).await?;
                 if !state.on {
                     return Ok(state);
                 }
@@ -235,25 +237,35 @@ impl HomeAssistantClient {
     }
 
     /// Poll the entity until `settled` observes the commanded state, up to
-    /// CONFIRM_POLLS × CONFIRM_INTERVAL; then return the last state seen —
-    /// a genuinely failed command still reports the truth. Poll errors are
-    /// ignored (the last good reading wins).
+    /// 1 + CONFIRM_POLLS fetches spaced CONFIRM_INTERVAL apart; then return
+    /// the last state seen — a genuinely failed command still reports the
+    /// truth. Individual fetch errors are tolerated (the last good reading
+    /// wins); only a fully unreachable HA is an error.
     async fn confirm(
         &self,
         def: &HomeEntityDef,
         settled: impl Fn(&LightState) -> bool,
     ) -> Result<LightState, String> {
-        let mut state = self.fetch_light_state(def).await?;
-        for _ in 0..CONFIRM_POLLS {
-            if settled(&state) {
-                return Ok(state);
+        let mut last: Result<LightState, String> = Err("no state observed".into());
+        for attempt in 0..=CONFIRM_POLLS {
+            if attempt > 0 {
+                tokio::time::sleep(CONFIRM_INTERVAL).await;
             }
-            tokio::time::sleep(CONFIRM_INTERVAL).await;
-            if let Ok(fresh) = self.fetch_light_state(def).await {
-                state = fresh;
+            match self.fetch_light_state(def).await {
+                Ok(state) => {
+                    if settled(&state) {
+                        return Ok(state);
+                    }
+                    last = Ok(state);
+                }
+                Err(reason) => {
+                    if last.is_err() {
+                        last = Err(reason);
+                    }
+                }
             }
         }
-        Ok(state)
+        last
     }
 
     async fn call_service(
@@ -453,5 +465,32 @@ mod tests {
             .expect("set_light");
 
         assert!(!state.on, "timeout must surface HA's actual state");
+    }
+
+    /// An adjustment arriving while a turn-on is still confirming must wait
+    /// for the light to come up rather than dropping the adjustment (and
+    /// telling the client the light is off).
+    #[tokio::test]
+    async fn adjustment_waits_out_the_turn_on_confirmation() {
+        let (url, fetches) = stub_ha(vec!["off", "on"]).await;
+        let ha = client(url);
+
+        let state = ha
+            .set_light(
+                &light_def(),
+                &LightCommand {
+                    color: Some(chaos_domain::RgbColor {
+                        r: 255,
+                        g: 200,
+                        b: 120,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("set_light");
+
+        assert!(state.on, "the adjustment must not report a stale off");
+        assert!(fetches.load(Ordering::SeqCst) >= 3);
     }
 }

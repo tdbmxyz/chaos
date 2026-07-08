@@ -1810,7 +1810,7 @@ body[data-theme="terminal"] .widget h2 {
 }
 
 /* Fixed slot so "5%" vs "100%" never reflows the row. */
-.light-card-row > .muted:last-child {
+.light-pct {
   flex: none;
   min-width: 3.2rem;
   text-align: right;

@@ -26,8 +26,9 @@ extern "C" {
 }
 
 // wasm-bindgen doesn't derive `Clone` for extern types by itself; the
-// instance is cached in a `StoredValue` (Home's chart Effect re-fetches it
-// on every rerun rather than re-initializing), which needs it.
+// instance is cached in a `StoredValue` for the component's lifetime (the
+// parent remounts TemperatureChart per data change, so the instance itself
+// never survives a data change), which needs it.
 impl Clone for EChart {
     fn clone(&self) -> Self {
         use wasm_bindgen::JsCast;

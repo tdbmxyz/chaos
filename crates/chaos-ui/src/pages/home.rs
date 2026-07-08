@@ -189,6 +189,7 @@ fn TemperatureChart(
 
     let node = NodeRef::<leptos::html::Div>::new();
     let chart = StoredValue::new_local(None::<crate::echarts::EChart>);
+    let failed = RwSignal::new(false);
 
     Effect::new(move |_| {
         let Some(el) = node.get() else {
@@ -201,19 +202,19 @@ fn TemperatureChart(
                     chart.set_value(Some(instance.clone()));
                     instance
                 }
-                // Bundle missing/init failed: leave the div empty rather
-                // than panic; the page still works.
-                Err(_) => return,
+                // Bundle missing/init failed: show a plain message instead
+                // of a blank panel; the page still works.
+                Err(_) => {
+                    failed.set(true);
+                    return;
+                }
             },
         };
         let option = crate::echarts::json(&chart_option(&series, start, end).to_string());
         let _ = instance.set_option(&option);
-        // Fresh data ⇒ fresh window; and keep the drag-select zoom armed
-        // (it is a toolbox feature, armed programmatically so no toolbox
-        // icon has to be clicked — the toolbox itself stays hidden).
-        let _ = instance.dispatch_action(&crate::echarts::json(
-            r#"{"type":"dataZoom","start":0,"end":100}"#,
-        ));
+        // Keep the drag-select zoom armed (a toolbox feature, armed
+        // programmatically so no toolbox icon has to be clicked — the
+        // toolbox itself stays hidden).
         let _ = instance.dispatch_action(&crate::echarts::json(
             r#"{"type":"takeGlobalCursor","key":"dataZoomSelect","dataZoomSelectActive":true}"#,
         ));
@@ -231,7 +232,15 @@ fn TemperatureChart(
         }
     });
 
-    view! { <div class="temp-chart" node_ref=node></div> }.into_any()
+    view! {
+        <div class="temp-chart" node_ref=node></div>
+        {move || {
+            failed
+                .get()
+                .then(|| view! { <p class="error">"Chart failed to load (echarts bundle missing?)"</p> })
+        }}
+    }
+    .into_any()
 }
 
 /// The ECharts option for the fetched series, themed from the CSS palette.
@@ -368,8 +377,11 @@ fn LightCard(light: LightState) -> impl IntoView {
         let client = client.clone();
         let id = id.clone();
         spawn_local(async move {
-            if let Ok(state) = client.set_light(&id, &cmd).await {
-                apply_state(state);
+            match client.set_light(&id, &cmd).await {
+                Ok(state) => apply_state(state),
+                // The optimistic flip must not stand on failure: mark the
+                // card unreachable until the next successful command.
+                Err(_) => available.set(false),
             }
         });
     };
@@ -444,7 +456,7 @@ fn LightCard(light: LightState) -> impl IntoView {
                     prop:value=brightness
                     on:change=change_brightness
                 />
-                <span class="muted">{move || format!("{}%", brightness.get())}</span>
+                <span class="muted light-pct">{move || format!("{}%", brightness.get())}</span>
             </label>
             <label class="light-card-row">
                 <span class="muted">"Color"</span>
