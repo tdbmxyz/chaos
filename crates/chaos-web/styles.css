@@ -1759,63 +1759,15 @@ body[data-theme="terminal"] .widget h2 {
   gap: 0.4rem;
 }
 
+/* Home temperature chart (ECharts renders into this div). */
 .temp-chart {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 1rem;
+  height: 320px;
 }
 
-.temp-chart-plot {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.temp-chart-yaxis {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  font-size: 0.75rem;
-  text-align: right;
-}
-
-.temp-chart-svg {
-  flex: 1;
-  min-width: 0;
-  height: 10rem;
-  display: block;
-}
-
-.temp-chart-line {
-  fill: none;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
-
-.temp-chart-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.9rem;
-  margin-top: 0.75rem;
-}
-
-.temp-chart-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
-}
-
-.temp-chart-swatch {
-  width: 0.7rem;
-  height: 0.7rem;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.temp-chart-range {
-  margin-top: 0.5rem;
-  font-size: 0.8rem;
+@media (max-width: 40rem) {
+  .temp-chart {
+    height: 240px;
+  }
 }
 
 .light-grid {
@@ -1853,4 +1805,14 @@ body[data-theme="terminal"] .widget h2 {
 
 .light-card-row input[type="range"] {
   flex: 1;
+  /* range inputs have an intrinsic ~130px minimum that flex can't shrink */
+  min-width: 0;
+}
+
+/* Fixed slot so "5%" vs "100%" never reflows the row. */
+.light-pct {
+  flex: none;
+  min-width: 3.2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }

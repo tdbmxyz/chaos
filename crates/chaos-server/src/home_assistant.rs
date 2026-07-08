@@ -17,6 +17,12 @@ use crate::config::{HomeAssistantConfig, HomeEntityDef};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// After a light command, HA can report the old state for a moment
+/// (Zigbee and friends confirm asynchronously). Poll until the command
+/// is observed so clients never receive a stale state.
+const CONFIRM_POLLS: usize = 8;
+const CONFIRM_INTERVAL: Duration = Duration::from_millis(250);
+
 pub struct HomeAssistantClient {
     http: reqwest::Client,
     base_url: Url,
@@ -197,24 +203,69 @@ impl HomeAssistantClient {
         cmd: &LightCommand,
     ) -> Result<LightState, String> {
         match cmd.on {
-            Some(false) => self.call_service("turn_off", def, None, None).await?,
+            Some(false) => {
+                self.call_service("turn_off", def, None, None).await?;
+                self.confirm(def, |state| !state.on).await
+            }
             Some(true) => {
                 self.call_service("turn_on", def, cmd.brightness, cmd.color)
                     .await?;
+                self.confirm(def, |state| state.on).await
             }
             // Adjustments only apply to a lit lamp: HA's turn_on would
             // power the light as a side effect of a brightness/color
-            // change, so an off light is left untouched.
+            // change, so an off light is left untouched. The pre-check
+            // polls (not a single fetch): a just-commanded turn-on may
+            // still be confirming when the adjustment arrives.
             None => {
-                let state = self.fetch_light_state(def).await?;
+                let state = self.confirm(def, |state| state.on).await?;
                 if !state.on {
                     return Ok(state);
                 }
                 self.call_service("turn_on", def, cmd.brightness, cmd.color)
                     .await?;
+                let target = cmd.brightness;
+                self.confirm(def, move |state| match target {
+                    // brightness_pct → 0-255 → pct roundtrips lossily,
+                    // hence the tolerance.
+                    Some(pct) => state.brightness.is_some_and(|b| b.abs_diff(pct) <= 2),
+                    None => true,
+                })
+                .await
             }
         }
-        self.fetch_light_state(def).await
+    }
+
+    /// Poll the entity until `settled` observes the commanded state, up to
+    /// 1 + CONFIRM_POLLS fetches spaced CONFIRM_INTERVAL apart; then return
+    /// the last state seen — a genuinely failed command still reports the
+    /// truth. Individual fetch errors are tolerated (the last good reading
+    /// wins); only a fully unreachable HA is an error.
+    async fn confirm(
+        &self,
+        def: &HomeEntityDef,
+        settled: impl Fn(&LightState) -> bool,
+    ) -> Result<LightState, String> {
+        let mut last: Result<LightState, String> = Err("no state observed".into());
+        for attempt in 0..=CONFIRM_POLLS {
+            if attempt > 0 {
+                tokio::time::sleep(CONFIRM_INTERVAL).await;
+            }
+            match self.fetch_light_state(def).await {
+                Ok(state) => {
+                    if settled(&state) {
+                        return Ok(state);
+                    }
+                    last = Ok(state);
+                }
+                Err(reason) => {
+                    if last.is_err() {
+                        last = Err(reason);
+                    }
+                }
+            }
+        }
+        last
     }
 
     async fn call_service(
@@ -296,4 +347,150 @@ struct HaEntityState {
 struct HaLightAttributes {
     brightness: Option<u8>,
     rgb_color: Option<[u8; 3]>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use chaos_domain::LightCommand;
+
+    use super::*;
+    use crate::config::{HomeAssistantConfig, HomeEntityDef};
+
+    fn light_def() -> HomeEntityDef {
+        HomeEntityDef {
+            id: "lamp".into(),
+            label: Some("Lamp".into()),
+            entity_id: "light.lamp".into(),
+        }
+    }
+
+    /// Stub HA: `/api/states/{id}` walks through `states` (sticking on the
+    /// last one), `/api/services/light/{service}` always succeeds. Returns
+    /// the base URL and a counter of state fetches.
+    async fn stub_ha(states: Vec<&'static str>) -> (Url, Arc<AtomicUsize>) {
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let states = Arc::new(states);
+        let app = axum::Router::new()
+            .route(
+                "/api/states/{id}",
+                axum::routing::get({
+                    let fetches = fetches.clone();
+                    let states = states.clone();
+                    move |_: axum::extract::Path<String>| {
+                        let n = fetches.fetch_add(1, Ordering::SeqCst);
+                        let state = states[n.min(states.len() - 1)];
+                        let body = serde_json::json!({ "state": state, "attributes": {} });
+                        async move { axum::Json(body) }
+                    }
+                }),
+            )
+            .route(
+                "/api/services/light/{service}",
+                axum::routing::post(|| async { axum::Json(serde_json::json!([])) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binding stub ha");
+        let addr = listener.local_addr().expect("stub ha addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serving stub ha");
+        });
+        (
+            format!("http://{addr}/").parse().expect("stub ha url"),
+            fetches,
+        )
+    }
+
+    fn client(base_url: Url) -> HomeAssistantClient {
+        let token = std::env::temp_dir().join(format!(
+            "chaos-ha-test-token-{}-{:p}",
+            std::process::id(),
+            &base_url
+        ));
+        std::fs::write(&token, "test-token").expect("writing stub token");
+        HomeAssistantClient::new(&HomeAssistantConfig {
+            base_url: Some(base_url),
+            token_file: Some(token),
+            sensors: vec![],
+            lights: vec![light_def()],
+        })
+        .expect("building client")
+        .expect("client is configured")
+    }
+
+    /// HA reports `off` for a while after turn_on (async confirmation):
+    /// set_light must keep polling and answer with the settled `on`.
+    #[tokio::test]
+    async fn set_light_waits_for_the_commanded_state() {
+        let (url, fetches) = stub_ha(vec!["off", "off", "on"]).await;
+        let ha = client(url);
+
+        let state = ha
+            .set_light(
+                &light_def(),
+                &LightCommand {
+                    on: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("set_light");
+
+        assert!(state.on, "should report the confirmed on state");
+        assert!(
+            fetches.load(Ordering::SeqCst) >= 3,
+            "should have polled past the stale readings"
+        );
+    }
+
+    /// A light that never confirms: after the poll budget the last observed
+    /// (real) state is returned rather than hanging or lying.
+    #[tokio::test]
+    async fn set_light_reports_the_truth_on_confirmation_timeout() {
+        let (url, _fetches) = stub_ha(vec!["off"]).await;
+        let ha = client(url);
+
+        let state = ha
+            .set_light(
+                &light_def(),
+                &LightCommand {
+                    on: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("set_light");
+
+        assert!(!state.on, "timeout must surface HA's actual state");
+    }
+
+    /// An adjustment arriving while a turn-on is still confirming must wait
+    /// for the light to come up rather than dropping the adjustment (and
+    /// telling the client the light is off).
+    #[tokio::test]
+    async fn adjustment_waits_out_the_turn_on_confirmation() {
+        let (url, fetches) = stub_ha(vec!["off", "on"]).await;
+        let ha = client(url);
+
+        let state = ha
+            .set_light(
+                &light_def(),
+                &LightCommand {
+                    color: Some(chaos_domain::RgbColor {
+                        r: 255,
+                        g: 200,
+                        b: 120,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("set_light");
+
+        assert!(state.on, "the adjustment must not report a stale off");
+        assert!(fetches.load(Ordering::SeqCst) >= 3);
+    }
 }

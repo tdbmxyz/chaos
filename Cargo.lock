@@ -569,8 +569,10 @@ dependencies = [
  "js-sys",
  "leptos",
  "leptos_router",
+ "serde_json",
  "url",
  "uuid",
+ "wasm-bindgen",
  "web-sys",
 ]
 
