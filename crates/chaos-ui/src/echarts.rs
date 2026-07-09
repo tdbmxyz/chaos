@@ -2,6 +2,7 @@
 //! from index.html). Only the surface the Home tab chart uses — options are
 //! passed as JSON built with serde_json and parsed on the JS side.
 
+use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -65,4 +66,76 @@ pub(crate) fn css_var(name: &str) -> String {
         .and_then(|style| style.get_property_value(name).ok())
         .map(|value| value.trim().to_string())
         .unwrap_or_default()
+}
+
+/// A mounted ECharts instance: owns init, option updates, drag-select zoom
+/// arming, resize, and disposal. `option` is re-run reactively, so a builder
+/// that reads signals re-renders the chart. When `group` is set, the chart
+/// joins that ECharts connect-group (shared dataZoom + tooltip across every
+/// chart in the group). `class` sizes the container (e.g. `"temp-chart"`).
+#[component]
+pub fn ChartCanvas(
+    option: Callback<(), serde_json::Value>,
+    // `into` lets callers pass `group="weather"` (wrapped to Some) or omit it (None).
+    #[prop(optional, into)] group: Option<&'static str>,
+    class: &'static str,
+) -> impl IntoView {
+    let node = NodeRef::<leptos::html::Div>::new();
+    let chart = StoredValue::new_local(None::<EChart>);
+    let failed = RwSignal::new(false);
+
+    Effect::new(move |_| {
+        let Some(el) = node.get() else {
+            return;
+        };
+        let instance = match chart.get_value() {
+            Some(instance) => instance,
+            None => match init(&el) {
+                Ok(instance) => {
+                    if let Some(group) = group {
+                        instance.set_group(group);
+                    }
+                    chart.set_value(Some(instance.clone()));
+                    instance
+                }
+                // Bundle missing / init failed: show a message, page still works.
+                Err(_) => {
+                    failed.set(true);
+                    return;
+                }
+            },
+        };
+        let opt = json(&option.run(()).to_string());
+        let _ = instance.set_option(&opt);
+        // Arm drag-select zoom (a toolbox feature, armed programmatically so no
+        // toolbox icon must be clicked — the toolbox itself stays hidden).
+        let _ = instance.dispatch_action(&json(
+            r#"{"type":"takeGlobalCursor","key":"dataZoomSelect","dataZoomSelectActive":true}"#,
+        ));
+        // (Re)connect the group as members mount asynchronously.
+        if let Some(group) = group {
+            connect(group);
+        }
+    });
+
+    let resize = window_event_listener(leptos::ev::resize, move |_| {
+        if let Some(instance) = chart.get_value() {
+            let _ = instance.resize();
+        }
+    });
+    on_cleanup(move || {
+        resize.remove();
+        if let Some(instance) = chart.get_value() {
+            let _ = instance.dispose();
+        }
+    });
+
+    view! {
+        <div class=class node_ref=node></div>
+        {move || {
+            failed
+                .get()
+                .then(|| view! { <p class="error">"Chart failed to load (echarts bundle missing?)"</p> })
+        }}
+    }
 }

@@ -187,60 +187,8 @@ fn TemperatureChart(
         return view! { <p class="muted">"No readings in this range."</p> }.into_any();
     }
 
-    let node = NodeRef::<leptos::html::Div>::new();
-    let chart = StoredValue::new_local(None::<crate::echarts::EChart>);
-    let failed = RwSignal::new(false);
-
-    Effect::new(move |_| {
-        let Some(el) = node.get() else {
-            return;
-        };
-        let instance = match chart.get_value() {
-            Some(instance) => instance,
-            None => match crate::echarts::init(&el) {
-                Ok(instance) => {
-                    chart.set_value(Some(instance.clone()));
-                    instance
-                }
-                // Bundle missing/init failed: show a plain message instead
-                // of a blank panel; the page still works.
-                Err(_) => {
-                    failed.set(true);
-                    return;
-                }
-            },
-        };
-        let option = crate::echarts::json(&chart_option(&series, start, end).to_string());
-        let _ = instance.set_option(&option);
-        // Keep the drag-select zoom armed (a toolbox feature, armed
-        // programmatically so no toolbox icon has to be clicked — the
-        // toolbox itself stays hidden).
-        let _ = instance.dispatch_action(&crate::echarts::json(
-            r#"{"type":"takeGlobalCursor","key":"dataZoomSelect","dataZoomSelectActive":true}"#,
-        ));
-    });
-
-    let resize = window_event_listener(leptos::ev::resize, move |_| {
-        if let Some(instance) = chart.get_value() {
-            let _ = instance.resize();
-        }
-    });
-    on_cleanup(move || {
-        resize.remove();
-        if let Some(instance) = chart.get_value() {
-            let _ = instance.dispose();
-        }
-    });
-
-    view! {
-        <div class="temp-chart" node_ref=node></div>
-        {move || {
-            failed
-                .get()
-                .then(|| view! { <p class="error">"Chart failed to load (echarts bundle missing?)"</p> })
-        }}
-    }
-    .into_any()
+    let option = Callback::new(move |()| chart_option(&series, start, end));
+    view! { <crate::echarts::ChartCanvas option class="temp-chart"/> }.into_any()
 }
 
 /// The ECharts option for the fetched series, themed from the CSS palette.
