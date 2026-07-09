@@ -49,11 +49,6 @@ extern "C" {
     /// `zr.on(event, handler)` — subscribe to a raw canvas event.
     #[wasm_bindgen(method)]
     pub fn on(this: &ZRender, event: &str, handler: &js_sys::Function);
-
-    /// `chart.getOption()` — the live, normalized option; read to learn the
-    /// current dataZoom window.
-    #[wasm_bindgen(method, js_name = getOption)]
-    pub fn get_option(this: &EChart) -> JsValue;
 }
 
 // wasm-bindgen doesn't derive `Clone` for extern types by itself; ChartCanvas
@@ -111,58 +106,29 @@ impl ChartColors {
     }
 }
 
-/// Widen a dataZoom window `[start, end]` (percentages of the full range) by
-/// 2× around its center, clamped to `[0, 100]` — one gradual "zoom out" step.
-/// Repeated calls walk any window back to the full range; a degenerate
-/// (zero-width) window opens to a 5% span so it can't get stuck.
-pub(crate) fn widen_window(start: f64, end: f64) -> (f64, f64) {
-    let span = ((end - start) * 2.0).clamp(5.0, 100.0);
-    let center = (start + end) / 2.0;
-    let mut s = center - span / 2.0;
-    let mut e = center + span / 2.0;
-    if s < 0.0 {
-        e = (e - s).min(100.0);
-        s = 0.0;
-    }
-    if e > 100.0 {
-        s = (s - (e - 100.0)).max(0.0);
-        e = 100.0;
-    }
-    (s, e)
+/// Dispatch a dataZoom action setting the window to `[start, end]` percent
+/// of the full range.
+fn zoom_to(chart: &EChart, (start, end): (f64, f64)) {
+    let _ = chart.dispatch_action(&json(&format!(
+        r#"{{"type":"dataZoom","start":{start},"end":{end}}}"#
+    )));
 }
 
-/// The chart's current dataZoom window in percent, `(0, 100)` when the
-/// option carries no dataZoom (never the case for our charts, but the
-/// fallback keeps the handler total).
-fn zoom_window(chart: &EChart) -> (f64, f64) {
-    use wasm_bindgen::JsCast;
-    let opt = chart.get_option();
-    let first = js_sys::Reflect::get(&opt, &"dataZoom".into())
-        .ok()
-        .and_then(|v| v.dyn_into::<js_sys::Array>().ok())
-        .and_then(|arr| (arr.length() > 0).then(|| arr.get(0)));
-    let field = |obj: &JsValue, name: &str, default: f64| {
-        js_sys::Reflect::get(obj, &name.into())
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(default)
-    };
-    match first {
-        Some(dz) => (field(&dz, "start", 0.0), field(&dz, "end", 100.0)),
-        None => (0.0, 100.0),
-    }
-}
-
-/// A mounted ECharts instance: owns init, option updates, drag-select zoom
-/// arming, resize, and disposal. `option` is re-run reactively, so a builder
-/// that reads signals re-renders the chart. When `group` is set, the chart
-/// joins that ECharts connect-group (shared dataZoom + tooltip across every
-/// chart in the group). `class` sizes the container (e.g. `"temp-chart"`).
+/// A mounted ECharts instance: owns init, option updates, zoom gestures,
+/// resize, and disposal. `option` is re-run reactively, so a builder that
+/// reads signals re-renders the chart. When `group` is set, the chart joins
+/// that ECharts connect-group (shared dataZoom + tooltip across every chart
+/// in the group). `reset_zoom` is the default dataZoom window in percent —
+/// applied once after the first render and again on every double-click
+/// (options never carry `start`/`end`, so reactive re-renders leave a
+/// user-adjusted window alone). `class` sizes the container.
 #[component]
 pub fn ChartCanvas(
     option: Callback<(), serde_json::Value>,
     // `into` lets callers pass `group="weather"` (wrapped to Some) or omit it (None).
     #[prop(optional, into)] group: Option<&'static str>,
+    // `into`: pass a bare `(start, end)` tuple or omit for the full range.
+    #[prop(optional, into)] reset_zoom: Option<(f64, f64)>,
     class: &'static str,
 ) -> impl IntoView {
     let node = NodeRef::<leptos::html::Div>::new();
@@ -170,6 +136,9 @@ pub fn ChartCanvas(
     // The dblclick closure must outlive the JS subscription; it's parked
     // here and dropped on cleanup (after dispose tears down zrender).
     let dblclick = StoredValue::new_local(None::<Closure<dyn FnMut()>>);
+    // The default window is dispatched once, after the first set_option of
+    // the mount (the dataZoom component must exist before the action).
+    let zoomed = StoredValue::new_local(false);
     let failed = RwSignal::new(false);
 
     Effect::new(move |_| {
@@ -183,26 +152,22 @@ pub fn ChartCanvas(
                     if let Some(group) = group {
                         instance.set_group(group);
                     }
-                    // Double-click steps the zoom back out: widen the current
-                    // window 2× and dispatch it. In a connect group the action
-                    // propagates, so all weather charts step out together.
-                    let zoom_out = {
+                    // Double-click resets to the default window. In a
+                    // connect group the action propagates, so all weather
+                    // charts reset together.
+                    let reset = {
                         let instance = instance.clone();
                         Closure::wrap(Box::new(move || {
-                            let (start, end) = zoom_window(&instance);
-                            let (start, end) = widen_window(start, end);
-                            let _ = instance.dispatch_action(&json(&format!(
-                                r#"{{"type":"dataZoom","start":{start},"end":{end}}}"#
-                            )));
+                            zoom_to(&instance, reset_zoom.unwrap_or((0.0, 100.0)));
                         }) as Box<dyn FnMut()>)
                     };
                     {
                         use wasm_bindgen::JsCast;
                         instance
                             .get_zr()
-                            .on("dblclick", zoom_out.as_ref().unchecked_ref());
+                            .on("dblclick", reset.as_ref().unchecked_ref());
                     }
-                    dblclick.set_value(Some(zoom_out));
+                    dblclick.set_value(Some(reset));
                     chart.set_value(Some(instance.clone()));
                     instance
                 }
@@ -219,11 +184,13 @@ pub fn ChartCanvas(
         // other component — crucially the dataZoom — merges, preserving the
         // current zoom window as siblings stream in.
         let _ = instance.set_option_with(&opt, &json(r#"{"replaceMerge":["series"]}"#));
-        // Arm drag-select zoom (a toolbox feature, armed programmatically so no
-        // toolbox icon must be clicked — the toolbox itself stays hidden).
-        let _ = instance.dispatch_action(&json(
-            r#"{"type":"takeGlobalCursor","key":"dataZoomSelect","dataZoomSelectActive":true}"#,
-        ));
+        // First render of this mount: apply the default window. Propagating
+        // through the connect group is intended — a newly added location
+        // realigns every synced chart, keeping the group consistent.
+        if !zoomed.get_value() {
+            zoomed.set_value(true);
+            zoom_to(&instance, reset_zoom.unwrap_or((0.0, 100.0)));
+        }
         // (Re)connect the group as members mount asynchronously.
         if let Some(group) = group {
             connect(group);
@@ -250,44 +217,5 @@ pub fn ChartCanvas(
                 .get()
                 .then(|| view! { <p class="error">"Chart failed to load (echarts bundle missing?)"</p> })
         }}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::widen_window;
-
-    #[test]
-    fn widens_twofold_around_center() {
-        assert_eq!(widen_window(40.0, 60.0), (30.0, 70.0));
-    }
-
-    #[test]
-    fn clamps_at_left_edge() {
-        // [0, 10] doubles to a 20-wide window; can't go below 0, so it
-        // grows rightward.
-        assert_eq!(widen_window(0.0, 10.0), (0.0, 20.0));
-    }
-
-    #[test]
-    fn clamps_at_right_edge() {
-        assert_eq!(widen_window(90.0, 100.0), (80.0, 100.0));
-    }
-
-    #[test]
-    fn full_range_is_a_fixed_point() {
-        assert_eq!(widen_window(0.0, 100.0), (0.0, 100.0));
-    }
-
-    #[test]
-    fn degenerate_window_gets_minimum_span() {
-        // A zero-width window (fully zoomed) opens to a 5% span.
-        assert_eq!(widen_window(50.0, 50.0), (47.5, 52.5));
-    }
-
-    #[test]
-    fn near_full_span_caps_at_full_range() {
-        // 2 × 60 caps at 100, centered on 50 → the full range.
-        assert_eq!(widen_window(20.0, 80.0), (0.0, 100.0));
     }
 }

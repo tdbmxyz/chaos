@@ -279,22 +279,13 @@ fn chart_option(
             "borderColor": border,
             "textStyle": { "color": text },
         },
-        // The toolbox must be *rendered* for its dataZoomSelect cursor to
-        // exist ("show": false never creates the feature, so arming it was
-        // a no-op) — so it renders transparent and off-canvas, and
-        // TemperatureChart arms drag-zoom via takeGlobalCursor.
-        "toolbox": {
-            "show": true,
-            "top": -40,
-            "feature": { "dataZoom": { "yAxisIndex": "none", "iconStyle": { "opacity": 0 } } },
-        },
-        // Touch: pinch-zoom through an inside dataZoom; every mouse
-        // interaction stays off so the drag-select brush keeps the mouse.
+        // Wheel zooms around the cursor, drag pans, touch pinches; wheel
+        // never pans (moveOnMouseWheel) so scroll stays predictable.
         "dataZoom": [{
             "type": "inside",
             "xAxisIndex": 0,
-            "zoomOnMouseWheel": false,
-            "moveOnMouseMove": false,
+            "zoomOnMouseWheel": true,
+            "moveOnMouseMove": true,
             "moveOnMouseWheel": false,
         }],
         "xAxis": {
