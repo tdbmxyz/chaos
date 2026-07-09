@@ -23,6 +23,16 @@ extern "C" {
 
     #[wasm_bindgen(method, catch)]
     pub fn dispose(this: &EChart) -> Result<(), JsValue>;
+
+    /// Assign the chart to a connect-group (charts sharing a group can be
+    /// linked with `connect`).
+    #[wasm_bindgen(method, setter = group)]
+    pub fn set_group(this: &EChart, group: &str);
+
+    /// `echarts.connect(group)` — link dataZoom + tooltip across every chart
+    /// currently assigned to `group`.
+    #[wasm_bindgen(js_namespace = echarts)]
+    pub fn connect(group: &str);
 }
 
 // wasm-bindgen doesn't derive `Clone` for extern types by itself; the
