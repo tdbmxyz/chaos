@@ -1,6 +1,7 @@
 //! Minimal bindings to the vendored Apache ECharts bundle (loaded globally
-//! from index.html). Only the surface the Home tab chart uses — options are
-//! passed as JSON built with serde_json and parsed on the JS side.
+//! from index.html). Provides reusable chart bindings plus a `ChartCanvas`
+//! component used by both the Home and Weather tabs — options are passed as
+//! JSON built with serde_json and parsed on the JS side.
 
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
@@ -66,6 +67,30 @@ pub(crate) fn css_var(name: &str) -> String {
         .and_then(|style| style.get_property_value(name).ok())
         .map(|value| value.trim().to_string())
         .unwrap_or_default()
+}
+
+/// Theme colours pulled from CSS variables, injected into option builders so
+/// those builders stay pure (no DOM) and unit-testable off-wasm.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ChartColors {
+    pub text: String,
+    pub muted: String,
+    pub border: String,
+    pub surface: String,
+    pub accent: String,
+}
+
+impl ChartColors {
+    /// Read from the active theme (browser only — calls `css_var`).
+    pub(crate) fn from_theme() -> Self {
+        Self {
+            text: css_var("--text"),
+            muted: css_var("--muted"),
+            border: css_var("--border"),
+            surface: css_var("--surface"),
+            accent: css_var("--accent"),
+        }
+    }
 }
 
 /// A mounted ECharts instance: owns init, option updates, drag-select zoom

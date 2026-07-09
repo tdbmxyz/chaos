@@ -4,6 +4,107 @@ use leptos::prelude::*;
 
 use crate::{WEATHER_LOCATION_KEY, use_client};
 
+/// Two-line x-axis labels: weather emoji on top, then the hour (`"14h"`), or
+/// the weekday (`"Fri"`) at midnight so day boundaries read at a glance.
+fn hourly_labels(hourly: &[chaos_domain::HourlyForecast]) -> Vec<String> {
+    hourly
+        .iter()
+        .map(|h| {
+            let below = if h.time.hour() == 0 {
+                h.time.format("%a").to_string()
+            } else {
+                format!("{}h", h.time.hour())
+            };
+            format!("{}\n{}", crate::weather_emoji(h.weather_code), below)
+        })
+        .collect()
+}
+
+/// Temperatures in the display unit, one decimal (values land verbatim in the
+/// chart tooltip).
+fn hourly_temps(hourly: &[chaos_domain::HourlyForecast], fahrenheit: bool) -> Vec<f64> {
+    hourly
+        .iter()
+        .map(|h| {
+            let value = if fahrenheit {
+                h.temp_c * 9.0 / 5.0 + 32.0
+            } else {
+                h.temp_c
+            };
+            (value * 10.0).round() / 10.0
+        })
+        .collect()
+}
+
+/// The ECharts option for one location's 48 h forecast. Category x-axis (one
+/// slot per hour) so each tick carries an emoji-over-hour label and cross-
+/// location zoom aligns by forecast hour, not wall-clock. Colours are injected
+/// by the caller so this stays pure/testable.
+fn weather_chart_option(
+    hourly: &[chaos_domain::HourlyForecast],
+    fahrenheit: bool,
+    colors: &crate::echarts::ChartColors,
+) -> serde_json::Value {
+    let unit = if fahrenheit { "°F" } else { "°C" };
+    let labels = hourly_labels(hourly);
+    let temps = hourly_temps(hourly, fahrenheit);
+
+    let text = colors.text.as_str();
+    let muted = colors.muted.as_str();
+    let border = colors.border.as_str();
+    let surface = colors.surface.as_str();
+    let accent = colors.accent.as_str();
+
+    serde_json::json!({
+        "animation": false,
+        "grid": { "left": 44, "right": 16, "top": 20, "bottom": 40 },
+        // No `valueFormatter` here: ECharts wants a JS function for it and the
+        // JSON bridge can't carry one, so the axis tooltip shows the raw
+        // one-decimal number — the y-axis already labels the unit.
+        "tooltip": {
+            "trigger": "axis",
+            "backgroundColor": surface,
+            "borderColor": border,
+            "textStyle": { "color": text },
+        },
+        // Rendered but transparent + off-canvas so its dataZoomSelect cursor
+        // exists for ChartCanvas to arm (see the Home chart for the rationale).
+        "toolbox": {
+            "show": true,
+            "top": -40,
+            "feature": { "dataZoom": { "yAxisIndex": "none", "iconStyle": { "opacity": 0 } } },
+        },
+        "dataZoom": [{
+            "type": "inside",
+            "xAxisIndex": 0,
+            "zoomOnMouseWheel": false,
+            "moveOnMouseMove": false,
+            "moveOnMouseWheel": false,
+        }],
+        "xAxis": {
+            "type": "category",
+            "data": labels,
+            "axisLabel": { "color": muted, "interval": 2, "lineHeight": 16 },
+            "axisLine": { "lineStyle": { "color": border } },
+            "axisTick": { "alignWithLabel": true },
+        },
+        "yAxis": {
+            "type": "value",
+            "scale": true,
+            "axisLabel": { "color": muted, "formatter": format!("{{value}}{unit}") },
+            "splitLine": { "lineStyle": { "color": border } },
+        },
+        "series": [{
+            "name": "Temperature",
+            "type": "line",
+            "showSymbol": false,
+            "color": accent,
+            "lineStyle": { "width": 1.5 },
+            "data": temps,
+        }],
+    })
+}
+
 /// Weather in detail: one row per location with current conditions and the
 /// hour-by-hour forecast, so places compare at a glance. The location list
 /// is a device preference; with none configured the dashboard's location
@@ -130,26 +231,83 @@ fn weather_row_body(weather: WeatherData) -> impl IntoView {
             </div>
             <span class="weather-row-temp">{temp(weather.temperature_c)}</span>
         </div>
-        <div class="hourly-strip">
-            {weather
-                .hourly
-                .into_iter()
-                .map(|hour| {
-                    let day_break = hour.time.hour() == 0;
-                    let label = if day_break {
-                        hour.time.format("%a").to_string()
-                    } else {
-                        format!("{}h", hour.time.hour())
-                    };
-                    view! {
-                        <div class="hour-cell" class:day-break=day_break>
-                            <span class="muted hour-label">{label}</span>
-                            <span>{crate::weather_emoji(hour.weather_code)}</span>
-                            <span class="hour-temp">{temp(hour.temp_c)}</span>
-                        </div>
-                    }
-                })
-                .collect_view()}
-        </div>
+        {
+            let hourly = weather.hourly;
+            let colors = crate::echarts::ChartColors::from_theme();
+            let option = Callback::new(move |()| weather_chart_option(&hourly, fahrenheit, &colors));
+            view! {
+                <crate::echarts::ChartCanvas option group="weather" class="weather-chart"/>
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chaos_domain::HourlyForecast;
+    use chrono::NaiveDate;
+
+    fn hour(y: i32, m: u32, d: u32, h: u32, temp_c: f64, code: i32) -> HourlyForecast {
+        HourlyForecast {
+            time: NaiveDate::from_ymd_opt(y, m, d)
+                .unwrap()
+                .and_hms_opt(h, 0, 0)
+                .unwrap(),
+            temp_c,
+            weather_code: code,
+        }
+    }
+
+    #[test]
+    fn labels_show_emoji_over_hour() {
+        // 2026-07-09 14:00 -> emoji for code 0 over "14h".
+        let hours = vec![hour(2026, 7, 9, 14, 20.0, 0)];
+        assert_eq!(
+            hourly_labels(&hours),
+            vec![format!("{}\n14h", crate::weather_emoji(0))]
+        );
+    }
+
+    #[test]
+    fn labels_show_weekday_at_midnight() {
+        // 2026-07-10 is a Friday; midnight rows carry the weekday, not "0h".
+        let hours = vec![hour(2026, 7, 10, 0, 15.0, 2)];
+        assert_eq!(
+            hourly_labels(&hours),
+            vec![format!("{}\nFri", crate::weather_emoji(2))]
+        );
+    }
+
+    #[test]
+    fn temps_convert_and_round_celsius() {
+        let hours = vec![hour(2026, 7, 9, 14, 20.04, 0)];
+        assert_eq!(hourly_temps(&hours, false), vec![20.0]);
+    }
+
+    #[test]
+    fn temps_convert_and_round_fahrenheit() {
+        // 20°C -> 68°F.
+        let hours = vec![hour(2026, 7, 9, 14, 20.0, 0)];
+        assert_eq!(hourly_temps(&hours, true), vec![68.0]);
+    }
+
+    #[test]
+    fn option_has_category_axis_and_one_series() {
+        let hours = vec![hour(2026, 7, 9, 14, 20.0, 0), hour(2026, 7, 9, 15, 21.0, 2)];
+        // Empty colours: the test asserts structure, not styling, and keeps the
+        // DOM-reading css_var out of this native test.
+        let opt = weather_chart_option(&hours, false, &crate::echarts::ChartColors::default());
+        assert_eq!(opt["xAxis"]["type"], "category");
+        assert_eq!(opt["xAxis"]["axisLabel"]["interval"], 2);
+        assert_eq!(opt["series"].as_array().unwrap().len(), 1);
+        assert_eq!(opt["series"][0]["data"], serde_json::json!([20.0, 21.0]));
+        assert_eq!(
+            opt["xAxis"]["data"],
+            serde_json::json!([
+                format!("{}\n14h", crate::weather_emoji(0)),
+                format!("{}\n15h", crate::weather_emoji(2)),
+            ])
+        );
     }
 }
