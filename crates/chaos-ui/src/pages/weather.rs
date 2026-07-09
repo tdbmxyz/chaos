@@ -187,15 +187,20 @@ fn weather_chart_option(
 /// comparison. Same pinned y-range, zoom gestures, and now-marker (on the
 /// first series, from the first location's clock) as the split charts; the
 /// x-axis borrows the first location's timestamps, so cross-timezone rows
-/// pair by hour index, not wall-clock. Precondition: `all` is non-empty
-/// (the caller renders an empty state instead).
+/// pair by hour index, not wall-clock. An empty `all` (possible transiently
+/// while the last row retracts) yields an empty option rather than
+/// panicking; the caller normally renders an empty state instead.
 fn combined_chart_option(
     all: &LoadedForecasts,
     fahrenheit: bool,
     colors: &crate::echarts::ChartColors,
 ) -> serde_json::Value {
     let unit = if fahrenheit { "°F" } else { "°C" };
-    let (_, first_hourly, first_now) = &all[0];
+    // Retraction can empty the list before the chart unmounts (framework
+    // scheduling); render an empty option instead of indexing into nothing.
+    let Some((_, first_hourly, first_now)) = all.first() else {
+        return serde_json::json!({});
+    };
     let labels = time_labels(first_hourly);
 
     let text = colors.text.as_str();
@@ -698,6 +703,17 @@ mod tests {
         // Labels come from the FIRST location, without the emoji line.
         assert_eq!(opt["xAxis"]["data"], serde_json::json!(["14h", "15h"]));
         assert_eq!(opt["xAxis"]["axisLabel"]["hideOverlap"], true);
+    }
+
+    #[test]
+    fn combined_option_survives_empty_list() {
+        // Transient retract-to-empty must not panic (wasm aborts on panic).
+        let opt = combined_chart_option(
+            &LoadedForecasts::new(),
+            false,
+            &crate::echarts::ChartColors::default(),
+        );
+        assert!(opt["series"].is_null());
     }
 
     #[test]
