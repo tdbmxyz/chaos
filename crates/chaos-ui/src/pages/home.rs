@@ -175,7 +175,8 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
 /// Multi-room temperature history on ECharts (vendored, see
 /// chaos-ui/src/echarts.rs): hover tooltip with every visible room's value,
 /// click the legend to hide a room (the y-axis stays fixed — it is pinned
-/// from all series), drag a horizontal span to zoom (client-side; HA
+/// from all series), wheel to zoom around the cursor, drag to pan, pinch on
+/// touch, double-click to reset to the full range (all client-side; HA
 /// history is already full resolution for the fetched window).
 #[component]
 fn TemperatureChart(

@@ -131,6 +131,7 @@ pub fn ChartCanvas(
     #[prop(optional, into)] reset_zoom: Option<(f64, f64)>,
     class: &'static str,
 ) -> impl IntoView {
+    let reset_zoom = reset_zoom.unwrap_or((0.0, 100.0));
     let node = NodeRef::<leptos::html::Div>::new();
     let chart = StoredValue::new_local(None::<EChart>);
     // The dblclick closure must outlive the JS subscription; it's parked
@@ -158,7 +159,7 @@ pub fn ChartCanvas(
                     let reset = {
                         let instance = instance.clone();
                         Closure::wrap(Box::new(move || {
-                            zoom_to(&instance, reset_zoom.unwrap_or((0.0, 100.0)));
+                            zoom_to(&instance, reset_zoom);
                         }) as Box<dyn FnMut()>)
                     };
                     {
@@ -189,7 +190,7 @@ pub fn ChartCanvas(
         // realigns every synced chart, keeping the group consistent.
         if !zoomed.get_value() {
             zoomed.set_value(true);
-            zoom_to(&instance, reset_zoom.unwrap_or((0.0, 100.0)));
+            zoom_to(&instance, reset_zoom);
         }
         // (Re)connect the group as members mount asynchronously.
         if let Some(group) = group {
