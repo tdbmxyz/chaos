@@ -4,19 +4,21 @@ use leptos::prelude::*;
 
 use crate::{WEATHER_LOCATION_KEY, use_client};
 
-/// Every loaded location's hourly forecast, insertion-ordered as fetches
-/// resolve; keyed by the API's resolved display name. Charts read it for
-/// the combined tooltip and the shared y-range.
-type LoadedForecasts = Vec<(String, Vec<chaos_domain::HourlyForecast>)>;
+/// Every loaded location's hourly forecast plus its `now_index`, insertion-
+/// ordered as fetches resolve; keyed by the API's resolved display name.
+/// Charts read it for the shared y-range and the combined view.
+type LoadedForecasts = Vec<(String, Vec<chaos_domain::HourlyForecast>, usize)>;
 
 /// Two-line x-axis labels: weather emoji on top, then the hour (`"14h"`), or
-/// the weekday (`"Fri"`) at midnight so day boundaries read at a glance.
+/// the weekday and day-of-month ("Fri 10") at midnight so day boundaries read
+/// at a glance.
 fn hourly_labels(hourly: &[chaos_domain::HourlyForecast]) -> Vec<String> {
     hourly
         .iter()
         .map(|h| {
             let below = if h.time.hour() == 0 {
-                h.time.format("%a").to_string()
+                // "Fri 10" — day boundaries stay identifiable across weeks.
+                h.time.format("%a %-d").to_string()
             } else {
                 format!("{}h", h.time.hour())
             };
@@ -41,13 +43,6 @@ fn hourly_temps(hourly: &[chaos_domain::HourlyForecast], fahrenheit: bool) -> Ve
         .collect()
 }
 
-/// Marker colors for sibling locations in the combined tooltip, cycled by
-/// each location's index in the page-wide list so a place keeps one color
-/// on every chart. (Its line is invisible; only the tooltip marker shows.)
-const SIBLING_PALETTE: [&str; 6] = [
-    "#5470c6", "#91cc75", "#fac858", "#ee6666", "#73c0de", "#9a60b4",
-];
-
 /// The page-wide y-axis bounds: min/max over every location's converted
 /// temperatures, padded one display degree and rounded outward. Every chart
 /// pins its y-axis to this, so scales match and zooming never rescales.
@@ -63,23 +58,38 @@ fn y_range(everyone: &[(&str, &[chaos_domain::HourlyForecast])], fahrenheit: boo
     ((min - 1.0).floor(), (max + 1.0).ceil())
 }
 
-/// The ECharts option for one location's 48 h forecast. Category x-axis (one
+/// The default visible window — past 24 h through next 48 h — as dataZoom
+/// percentages of the full series, clamped to [0, 100]. Full range for an
+/// empty series.
+fn default_window(now_index: usize, len: usize) -> (f64, f64) {
+    if len == 0 {
+        return (0.0, 100.0);
+    }
+    let len = len as f64;
+    // Multiply before dividing: `58.0 / 100.0 * 100.0` is 57.999…, while
+    // `58.0 * 100.0 / 100.0` stays exact.
+    let start = (now_index as f64 - 24.0).max(0.0) * 100.0 / len;
+    let end = (now_index as f64 + 48.0).min(len) * 100.0 / len;
+    (start, end)
+}
+
+/// The ECharts option for one location in split view. Category x-axis (one
 /// slot per hour) so each tick carries an emoji-over-hour label and cross-
-/// location zoom aligns by forecast hour, not wall-clock. Every loaded
-/// location rides along as an extra series with an invisible line, which
-/// makes the built-in axis tooltip list all of them (the JSON option bridge
-/// can't carry a JS formatter) — and the y-axis is pinned to the page-wide
-/// range so charts compare at a glance. Colours are injected by the caller
-/// so this stays pure/testable.
+/// location zoom aligns by forecast hour, not wall-clock. One visible
+/// series; the y-axis is pinned to the page-wide range (every loaded
+/// location, plus this row's own data in case its publish hasn't landed —
+/// duplicates can't move a min/max) so charts compare at a glance. A dashed
+/// mark line separates past from forecast. Colours are injected by the
+/// caller so this stays pure/testable.
 fn weather_chart_option(
-    own_name: &str,
-    own_hourly: &[chaos_domain::HourlyForecast],
+    hourly: &[chaos_domain::HourlyForecast],
+    now_index: usize,
     all: &LoadedForecasts,
     fahrenheit: bool,
     colors: &crate::echarts::ChartColors,
 ) -> serde_json::Value {
     let unit = if fahrenheit { "°F" } else { "°C" };
-    let labels = hourly_labels(own_hourly);
+    let labels = hourly_labels(hourly);
 
     let text = colors.text.as_str();
     let muted = colors.muted.as_str();
@@ -87,60 +97,12 @@ fn weather_chart_option(
     let surface = colors.surface.as_str();
     let accent = colors.accent.as_str();
 
-    // The shared list is filled by row Effects, so this row's own entry may
-    // not have landed yet — fold it into `everyone` (for the y-range and a
-    // prepended series) so the chart never renders lineless.
     let mut everyone: Vec<(&str, &[chaos_domain::HourlyForecast])> = all
         .iter()
-        .map(|(name, hourly)| (name.as_str(), hourly.as_slice()))
+        .map(|(name, hourly, _)| (name.as_str(), hourly.as_slice()))
         .collect();
-    let own_missing = !everyone.iter().any(|(name, _)| *name == own_name);
-    if own_missing {
-        everyone.insert(0, (own_name, own_hourly));
-    }
+    everyone.push(("", hourly));
     let (y_min, y_max) = y_range(&everyone, fahrenheit);
-
-    let own_series = |hourly: &[chaos_domain::HourlyForecast]| {
-        serde_json::json!({
-            "name": own_name,
-            "type": "line",
-            "showSymbol": false,
-            "color": accent,
-            "lineStyle": { "width": 1.5 },
-            "data": hourly_temps(hourly, fahrenheit),
-        })
-    };
-    // Palette indices come from the SHARED list (`all`), never the merged
-    // one, so a sibling's marker color is identical on every chart even
-    // when a not-yet-published row prepends its own series.
-    let mut series: Vec<serde_json::Value> = all
-        .iter()
-        .enumerate()
-        .map(|(i, (name, hourly))| {
-            if name == own_name {
-                // Always draw the own line from the row's fresh data: a
-                // refetch could leave the shared entry transiently stale,
-                // and the x-axis labels already come from `own_hourly`.
-                own_series(own_hourly)
-            } else {
-                // Line hidden, series silent; the color survives as the
-                // tooltip marker. Aligned by hour index (same equal-length
-                // assumption as the cross-location zoom sync).
-                serde_json::json!({
-                    "name": name,
-                    "type": "line",
-                    "showSymbol": false,
-                    "silent": true,
-                    "color": SIBLING_PALETTE[i % SIBLING_PALETTE.len()],
-                    "lineStyle": { "opacity": 0 },
-                    "data": hourly_temps(hourly, fahrenheit),
-                })
-            }
-        })
-        .collect();
-    if own_missing {
-        series.insert(0, own_series(own_hourly));
-    }
 
     serde_json::json!({
         "animation": false,
@@ -154,24 +116,22 @@ fn weather_chart_option(
             "borderColor": border,
             "textStyle": { "color": text },
         },
-        // Rendered but transparent + off-canvas so its dataZoomSelect cursor
-        // exists for ChartCanvas to arm (see the Home chart for the rationale).
-        "toolbox": {
-            "show": true,
-            "top": -40,
-            "feature": { "dataZoom": { "yAxisIndex": "none", "iconStyle": { "opacity": 0 } } },
-        },
+        // Wheel zooms around the cursor, drag pans, touch pinches. No
+        // start/end here: ChartCanvas dispatches the default window once,
+        // so reactive re-renders don't snap a user-adjusted window back.
         "dataZoom": [{
             "type": "inside",
             "xAxisIndex": 0,
-            "zoomOnMouseWheel": false,
-            "moveOnMouseMove": false,
+            "zoomOnMouseWheel": true,
+            "moveOnMouseMove": true,
             "moveOnMouseWheel": false,
         }],
         "xAxis": {
             "type": "category",
             "data": labels,
-            "axisLabel": { "color": muted, "interval": 2, "lineHeight": 16 },
+            // Auto-thinned labels: density adapts to the zoom level across
+            // the 32-day series.
+            "axisLabel": { "color": muted, "hideOverlap": true, "lineHeight": 16 },
             "axisLine": { "lineStyle": { "color": border } },
             "axisTick": { "alignWithLabel": true },
         },
@@ -182,7 +142,21 @@ fn weather_chart_option(
             "axisLabel": { "color": muted, "formatter": format!("{{value}}{unit}") },
             "splitLine": { "lineStyle": { "color": border } },
         },
-        "series": series,
+        "series": [{
+            "name": "Temperature",
+            "type": "line",
+            "showSymbol": false,
+            "color": accent,
+            "lineStyle": { "width": 1.5 },
+            "data": hourly_temps(hourly, fahrenheit),
+            "markLine": {
+                "silent": true,
+                "symbol": "none",
+                "label": { "show": true, "formatter": "now", "color": muted },
+                "lineStyle": { "color": muted, "type": "dashed", "width": 1 },
+                "data": [{ "xAxis": now_index }],
+            },
+        }],
     })
 }
 
@@ -249,8 +223,7 @@ pub fn WeatherPage() -> impl IntoView {
     }
 }
 
-/// One location: current conditions plus the hourly strip (48 h, scrolls
-/// sideways; midnight cells carry the weekday instead of an hour).
+/// One location: current conditions plus the ±16-day hourly chart.
 #[component]
 fn WeatherRow(
     location: Option<String>,
@@ -270,7 +243,7 @@ fn WeatherRow(
     });
 
     // Publish this row's forecast into the page-wide list (charts read it
-    // for the combined tooltip and shared y-range). Upsert by resolved name
+    // for the shared y-range and the combined view). Upsert by resolved name
     // so refetches don't duplicate; remember the name to unpublish when the
     // row unmounts (location removed / page left).
     let published = StoredValue::new(None::<String>);
@@ -281,20 +254,20 @@ fn WeatherRow(
         if weather.hourly.is_empty() {
             return;
         }
-        let (name, hourly) = (weather.location, weather.hourly);
+        let (name, hourly, now_index) = (weather.location, weather.hourly, weather.now_index);
         published.set_value(Some(name.clone()));
         // Known edge: two place strings resolving to the same display name
         // share one entry, and removing one row retracts the entry the other
-        // still uses — self-healing, because the survivor's `own_missing`
-        // prepend keeps its line drawn.
-        loaded.update(|list| match list.iter_mut().find(|(n, _)| *n == name) {
-            Some(entry) => entry.1 = hourly.clone(),
-            None => list.push((name.clone(), hourly.clone())),
+        // still uses — self-healing, because the y-range folds each row's
+        // own data in regardless.
+        loaded.update(|list| match list.iter_mut().find(|(n, _, _)| *n == name) {
+            Some(entry) => (entry.1, entry.2) = (hourly.clone(), now_index),
+            None => list.push((name.clone(), hourly.clone(), now_index)),
         });
     });
     on_cleanup(move || {
         if let Some(name) = published.get_value() {
-            loaded.update(|list| list.retain(|(n, _)| n != &name));
+            loaded.update(|list| list.retain(|(n, _, _)| n != &name));
         }
     });
 
@@ -326,7 +299,6 @@ fn WeatherRow(
 }
 
 fn weather_row_body(weather: WeatherData, loaded: RwSignal<LoadedForecasts>) -> impl IntoView {
-    let location = weather.location.clone();
     let fahrenheit = crate::weather_fahrenheit();
     let temp = move |celsius: f64| crate::format_temp(celsius, fahrenheit);
     let details = format!(
@@ -351,18 +323,25 @@ fn weather_row_body(weather: WeatherData, loaded: RwSignal<LoadedForecasts>) -> 
         </div>
         {
             let hourly = weather.hourly;
+            let now_index = weather.now_index;
             if hourly.is_empty() {
                 // Mirror the Home chart's empty state rather than showing an
                 // axes-only, line-less box.
                 view! { <p class="muted">"No hourly forecast."</p> }.into_any()
             } else {
                 let colors = crate::echarts::ChartColors::from_theme();
+                let reset = default_window(now_index, hourly.len());
                 let option = Callback::new(move |()| {
                     let all = loaded.get();
-                    weather_chart_option(&location, &hourly, &all, fahrenheit, &colors)
+                    weather_chart_option(&hourly, now_index, &all, fahrenheit, &colors)
                 });
                 view! {
-                    <crate::echarts::ChartCanvas option group="weather" class="weather-chart"/>
+                    <crate::echarts::ChartCanvas
+                        option
+                        group="weather"
+                        reset_zoom=reset
+                        class="weather-chart"
+                    />
                 }
                 .into_any()
             }
@@ -398,12 +377,13 @@ mod tests {
     }
 
     #[test]
-    fn labels_show_weekday_at_midnight() {
-        // 2026-07-10 is a Friday; midnight rows carry the weekday, not "0h".
+    fn labels_show_weekday_and_day_at_midnight() {
+        // 2026-07-10 is a Friday; midnight rows carry "Fri 10" so days stay
+        // identifiable across a 32-day series.
         let hours = vec![hour(2026, 7, 10, 0, 15.0, 2)];
         assert_eq!(
             hourly_labels(&hours),
-            vec![format!("{}\nFri", crate::weather_emoji(2))]
+            vec![format!("{}\nFri 10", crate::weather_emoji(2))]
         );
     }
 
@@ -421,16 +401,18 @@ mod tests {
     }
 
     /// Two loaded locations for option tests: "Osaka" (20–21°C) and
-    /// "Nijar" (30–31°C).
-    fn two_locations() -> Vec<(String, Vec<HourlyForecast>)> {
+    /// "Nijar" (30–31°C), each with now at index 1.
+    fn two_locations() -> LoadedForecasts {
         vec![
             (
                 "Osaka".to_string(),
                 vec![hour(2026, 7, 9, 14, 20.0, 0), hour(2026, 7, 9, 15, 21.0, 2)],
+                1,
             ),
             (
                 "Nijar".to_string(),
                 vec![hour(2026, 7, 9, 14, 30.0, 1), hour(2026, 7, 9, 15, 31.0, 1)],
+                1,
             ),
         ]
     }
@@ -440,7 +422,7 @@ mod tests {
         let all = two_locations();
         let everyone: Vec<(&str, &[HourlyForecast])> = all
             .iter()
-            .map(|(n, h)| (n.as_str(), h.as_slice()))
+            .map(|(n, h, _)| (n.as_str(), h.as_slice()))
             .collect();
         // min 20, max 31, ±1° padding → (19, 32).
         assert_eq!(y_range(&everyone, false), (19.0, 32.0));
@@ -448,99 +430,84 @@ mod tests {
 
     #[test]
     fn y_range_converts_to_fahrenheit() {
-        let all = [("A".to_string(), vec![hour(2026, 7, 9, 14, 20.0, 0)])];
+        let all = [("A".to_string(), vec![hour(2026, 7, 9, 14, 20.0, 0)], 0)];
         let everyone: Vec<(&str, &[HourlyForecast])> = all
             .iter()
-            .map(|(n, h)| (n.as_str(), h.as_slice()))
+            .map(|(n, h, _)| (n.as_str(), h.as_slice()))
             .collect();
         // 20°C = 68°F, ±1 → (67, 69).
         assert_eq!(y_range(&everyone, true), (67.0, 69.0));
     }
 
     #[test]
-    fn option_embeds_all_locations_one_visible() {
+    fn default_window_centers_on_now() {
+        // len 100, now at 50 → hours [26, 98] → percent (26, 98).
+        assert_eq!(default_window(50, 100), (26.0, 98.0));
+    }
+
+    #[test]
+    fn default_window_clamps_at_series_start() {
+        // now at 10: past-24h reaches before the series → clamp to 0.
+        assert_eq!(default_window(10, 100), (0.0, 58.0));
+    }
+
+    #[test]
+    fn default_window_clamps_at_series_end() {
+        // now at 90: next-48h reaches past the series → clamp to 100.
+        assert_eq!(default_window(90, 100), (66.0, 100.0));
+    }
+
+    #[test]
+    fn default_window_full_range_when_empty() {
+        assert_eq!(default_window(0, 0), (0.0, 100.0));
+    }
+
+    #[test]
+    fn split_option_has_one_series_and_now_marker() {
         let all = two_locations();
-        let own_hourly = all[0].1.clone();
+        let own = all[0].1.clone();
         let opt = weather_chart_option(
-            "Osaka",
-            &own_hourly,
+            &own,
+            1,
             &all,
             false,
             &crate::echarts::ChartColors::default(),
         );
+        // Exactly one visible series — no sibling embedding, no legend.
         let series = opt["series"].as_array().unwrap();
-        assert_eq!(series.len(), 2);
-        // Own series: named, visible (no opacity-0), not silent.
-        assert_eq!(series[0]["name"], "Osaka");
-        assert!(series[0]["lineStyle"]["opacity"].is_null());
-        assert!(series[0]["silent"].is_null());
+        assert_eq!(series.len(), 1);
         assert_eq!(series[0]["data"], serde_json::json!([20.0, 21.0]));
-        // Sibling: named, hidden line, silent, but a real marker color.
-        assert_eq!(series[1]["name"], "Nijar");
-        assert_eq!(series[1]["lineStyle"]["opacity"], 0);
-        assert_eq!(series[1]["silent"], true);
-        assert!(series[1]["color"].as_str().unwrap().starts_with('#'));
-        // Shared fixed y-range replaces scale:true.
+        assert!(opt["legend"].is_null());
+        // Now-marker at the given index.
+        assert_eq!(series[0]["markLine"]["data"][0]["xAxis"], 1);
+        // y pinned to the page-wide range (both locations): (19, 32).
         assert_eq!(opt["yAxis"]["min"], 19.0);
         assert_eq!(opt["yAxis"]["max"], 32.0);
-        assert!(opt["yAxis"]["scale"].is_null());
-        // x-axis still carries the OWN location's emoji labels.
-        assert_eq!(opt["xAxis"]["type"], "category");
-        assert_eq!(opt["xAxis"]["axisLabel"]["interval"], 2);
-        assert_eq!(
-            opt["xAxis"]["data"],
-            serde_json::json!([
-                format!("{}\n14h", crate::weather_emoji(0)),
-                format!("{}\n15h", crate::weather_emoji(2)),
-            ])
-        );
+        // Wheel zoom + drag pan on; no start/end in the option (the reset
+        // window is dispatched by ChartCanvas, not merged on re-renders).
+        assert_eq!(opt["dataZoom"][0]["zoomOnMouseWheel"], true);
+        assert_eq!(opt["dataZoom"][0]["moveOnMouseMove"], true);
+        assert!(opt["dataZoom"][0]["start"].is_null());
+        assert!(opt["dataZoom"][0]["end"].is_null());
+        // No toolbox (drag-select zoom is gone); labels auto-thin.
+        assert!(opt["toolbox"].is_null());
+        assert!(opt["xAxis"]["axisLabel"]["interval"].is_null());
+        assert_eq!(opt["xAxis"]["axisLabel"]["hideOverlap"], true);
     }
 
     #[test]
-    fn option_prepends_own_row_when_not_yet_in_shared_list() {
-        // The row renders before its Effect publishes into the shared list;
-        // the builder folds the own data in so the chart never renders empty.
+    fn split_option_y_range_includes_own_unpublished_data() {
+        // Own data not in the shared list still shapes the y-range.
         let all = two_locations();
         let own = vec![hour(2026, 7, 9, 14, 10.0, 0)];
         let opt = weather_chart_option(
-            "Palma",
             &own,
+            0,
             &all,
             false,
             &crate::echarts::ChartColors::default(),
         );
-        let series = opt["series"].as_array().unwrap();
-        assert_eq!(series.len(), 3);
-        assert_eq!(series[0]["name"], "Palma");
-        assert!(series[0]["lineStyle"]["opacity"].is_null());
-        // Own data participates in the y-range: min 10, max 31 → (9, 32).
         assert_eq!(opt["yAxis"]["min"], 9.0);
         assert_eq!(opt["yAxis"]["max"], 32.0);
-    }
-
-    #[test]
-    fn sibling_marker_colors_are_stable_by_list_index() {
-        // A location's tooltip marker color comes from its index in the
-        // shared list, so it's identical on every chart of the page.
-        let all = two_locations();
-        let opt_a = weather_chart_option(
-            "Osaka",
-            &all[0].1.clone(),
-            &all,
-            false,
-            &crate::echarts::ChartColors::default(),
-        );
-        let opt_b = weather_chart_option(
-            "Palma",
-            &[hour(2026, 7, 9, 14, 10.0, 0)],
-            &all,
-            false,
-            &crate::echarts::ChartColors::default(),
-        );
-        // "Nijar" is index 1 in the shared list on both charts; in opt_b the
-        // own series is prepended, shifting it to position 2 — same color.
-        assert_eq!(opt_a["series"][1]["name"], "Nijar");
-        assert_eq!(opt_b["series"][2]["name"], "Nijar");
-        assert_eq!(opt_a["series"][1]["color"], opt_b["series"][2]["color"]);
     }
 }
