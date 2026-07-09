@@ -233,10 +233,17 @@ fn weather_row_body(weather: WeatherData) -> impl IntoView {
         </div>
         {
             let hourly = weather.hourly;
-            let colors = crate::echarts::ChartColors::from_theme();
-            let option = Callback::new(move |()| weather_chart_option(&hourly, fahrenheit, &colors));
-            view! {
-                <crate::echarts::ChartCanvas option group="weather" class="weather-chart"/>
+            if hourly.is_empty() {
+                // Mirror the Home chart's empty state rather than showing an
+                // axes-only, line-less box.
+                view! { <p class="muted">"No hourly forecast."</p> }.into_any()
+            } else {
+                let colors = crate::echarts::ChartColors::from_theme();
+                let option = Callback::new(move |()| weather_chart_option(&hourly, fahrenheit, &colors));
+                view! {
+                    <crate::echarts::ChartCanvas option group="weather" class="weather-chart"/>
+                }
+                .into_any()
             }
         }
     }
