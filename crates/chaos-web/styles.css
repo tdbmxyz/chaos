@@ -1742,9 +1742,22 @@ body[data-theme="terminal"] .widget h2 {
   margin-top: 0.75rem;
 }
 
+.combined-chart {
+  height: 320px;
+  margin-top: 0.25rem;
+}
+
+.view-toggle {
+  white-space: nowrap;
+}
+
 @media (max-width: 40rem) {
   .weather-chart {
     height: 200px;
+  }
+
+  .combined-chart {
+    height: 240px;
   }
 }
 

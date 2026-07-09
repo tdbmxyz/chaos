@@ -27,6 +27,27 @@ fn hourly_labels(hourly: &[chaos_domain::HourlyForecast]) -> Vec<String> {
         .collect()
 }
 
+/// Single-line time labels for the combined chart: `"14h"`, or `"Fri 10"`
+/// at midnight — the split view's rhythm minus the emoji line (emoji are
+/// per-location, and this chart shows every location).
+fn time_labels(hourly: &[chaos_domain::HourlyForecast]) -> Vec<String> {
+    hourly
+        .iter()
+        .map(|h| {
+            if h.time.hour() == 0 {
+                h.time.format("%a %-d").to_string()
+            } else {
+                format!("{}h", h.time.hour())
+            }
+        })
+        .collect()
+}
+
+/// Line colors for the combined chart, one per location by list index.
+const LOCATION_PALETTE: [&str; 6] = [
+    "#5470c6", "#91cc75", "#fac858", "#ee6666", "#73c0de", "#9a60b4",
+];
+
 /// Temperatures in the display unit, one decimal (values land verbatim in the
 /// chart tooltip).
 fn hourly_temps(hourly: &[chaos_domain::HourlyForecast], fahrenheit: bool) -> Vec<f64> {
@@ -101,7 +122,7 @@ fn weather_chart_option(
         .iter()
         .map(|(name, hourly, _)| (name.as_str(), hourly.as_slice()))
         .collect();
-    everyone.push(("", hourly));
+    everyone.push(("", hourly)); // y-range only; names unused there, duplicates harmless.
     let (y_min, y_max) = y_range(&everyone, fahrenheit);
 
     serde_json::json!({
@@ -149,6 +170,7 @@ fn weather_chart_option(
             "color": accent,
             "lineStyle": { "width": 1.5 },
             "data": hourly_temps(hourly, fahrenheit),
+            // now_index may equal len (all past); ECharts clips the out-of-range line.
             "markLine": {
                 "silent": true,
                 "symbol": "none",
@@ -157,6 +179,97 @@ fn weather_chart_option(
                 "data": [{ "xAxis": now_index }],
             },
         }],
+    })
+}
+
+/// The combined view: every loaded location as a visible line in one chart,
+/// with a legend and the native multi-series axis tooltip doing the
+/// comparison. Same pinned y-range, zoom gestures, and now-marker (on the
+/// first series, from the first location's clock) as the split charts; the
+/// x-axis borrows the first location's timestamps, so cross-timezone rows
+/// pair by hour index, not wall-clock. Precondition: `all` is non-empty
+/// (the caller renders an empty state instead).
+fn combined_chart_option(
+    all: &LoadedForecasts,
+    fahrenheit: bool,
+    colors: &crate::echarts::ChartColors,
+) -> serde_json::Value {
+    let unit = if fahrenheit { "°F" } else { "°C" };
+    let (_, first_hourly, first_now) = &all[0];
+    let labels = time_labels(first_hourly);
+
+    let text = colors.text.as_str();
+    let muted = colors.muted.as_str();
+    let border = colors.border.as_str();
+    let surface = colors.surface.as_str();
+
+    let everyone: Vec<(&str, &[chaos_domain::HourlyForecast])> = all
+        .iter()
+        .map(|(name, hourly, _)| (name.as_str(), hourly.as_slice()))
+        .collect();
+    let (y_min, y_max) = y_range(&everyone, fahrenheit);
+
+    let names: Vec<&str> = all.iter().map(|(name, _, _)| name.as_str()).collect();
+    let series: Vec<serde_json::Value> = all
+        .iter()
+        .enumerate()
+        .map(|(i, (name, hourly, _))| {
+            let mut s = serde_json::json!({
+                "name": name,
+                "type": "line",
+                "showSymbol": false,
+                "color": LOCATION_PALETTE[i % LOCATION_PALETTE.len()],
+                "lineStyle": { "width": 1.5 },
+                "data": hourly_temps(hourly, fahrenheit),
+            });
+            if i == 0 {
+                // `now_index` may equal len (all data in the past); ECharts
+                // clips the out-of-range mark line instead of erroring.
+                s["markLine"] = serde_json::json!({
+                    "silent": true,
+                    "symbol": "none",
+                    "label": { "show": true, "formatter": "now", "color": muted },
+                    "lineStyle": { "color": muted, "type": "dashed", "width": 1 },
+                    "data": [{ "xAxis": first_now }],
+                });
+            }
+            s
+        })
+        .collect();
+
+    serde_json::json!({
+        "animation": false,
+        "grid": { "left": 44, "right": 16, "top": 36, "bottom": 40 },
+        "legend": { "top": 0, "data": names, "textStyle": { "color": text }, "inactiveColor": muted },
+        "tooltip": {
+            "trigger": "axis",
+            "backgroundColor": surface,
+            "borderColor": border,
+            "textStyle": { "color": text },
+        },
+        // Same gestures as the split charts; no start/end (see split view).
+        "dataZoom": [{
+            "type": "inside",
+            "xAxisIndex": 0,
+            "zoomOnMouseWheel": true,
+            "moveOnMouseMove": true,
+            "moveOnMouseWheel": false,
+        }],
+        "xAxis": {
+            "type": "category",
+            "data": labels,
+            "axisLabel": { "color": muted, "hideOverlap": true },
+            "axisLine": { "lineStyle": { "color": border } },
+            "axisTick": { "alignWithLabel": true },
+        },
+        "yAxis": {
+            "type": "value",
+            "min": y_min,
+            "max": y_max,
+            "axisLabel": { "color": muted, "formatter": format!("{{value}}{unit}") },
+            "splitLine": { "lineStyle": { "color": border } },
+        },
+        "series": series,
     })
 }
 
@@ -169,6 +282,7 @@ pub fn WeatherPage() -> impl IntoView {
     let places = RwSignal::new(crate::weather_places());
     let input = RwSignal::new(String::new());
     let loaded = RwSignal::new(LoadedForecasts::new());
+    let combined = RwSignal::new(false);
 
     let add = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -202,23 +316,38 @@ pub fn WeatherPage() -> impl IntoView {
                     />
                     <button type="submit">"Add"</button>
                 </form>
+                <button
+                    class="view-toggle"
+                    title="Switch between one chart per place and one combined chart"
+                    on:click=move |_| combined.update(|c| *c = !*c)
+                >
+                    {move || if combined.get() { "Split" } else { "Combine" }}
+                </button>
             </div>
             {move || {
                 let list = places.get();
                 if list.is_empty() {
                     // Same place the dashboard widget shows.
-                    view! { <WeatherRow location=None on_remove=None loaded/> }.into_any()
+                    view! { <WeatherRow location=None on_remove=None loaded combined/> }.into_any()
                 } else {
                     list.into_iter()
                         .map(|place| {
                             view! {
-                                <WeatherRow location=Some(place) on_remove=Some(remove) loaded/>
+                                <WeatherRow
+                                    location=Some(place)
+                                    on_remove=Some(remove)
+                                    loaded
+                                    combined
+                                />
                             }
                         })
                         .collect_view()
                         .into_any()
                 }
             }}
+            <Show when=move || combined.get()>
+                <CombinedChart loaded/>
+            </Show>
         </div>
     }
 }
@@ -229,6 +358,7 @@ fn WeatherRow(
     location: Option<String>,
     on_remove: Option<Callback<String>>,
     loaded: RwSignal<LoadedForecasts>,
+    combined: RwSignal<bool>,
 ) -> impl IntoView {
     let client = use_client();
     // A configured row asks for its place; the default row follows the
@@ -287,7 +417,7 @@ fn WeatherRow(
         <section class="weather-row">
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading forecast…"</p> }.into_any(),
-                Some(Ok(weather)) => weather_row_body(weather, loaded).into_any(),
+                Some(Ok(weather)) => weather_row_body(weather, loaded, combined).into_any(),
                 Some(Err(err)) => {
                     let place = location.clone().unwrap_or_else(|| "default location".into());
                     view! { <p class="error">{place} ": " {err.to_string()}</p> }.into_any()
@@ -298,7 +428,11 @@ fn WeatherRow(
     }
 }
 
-fn weather_row_body(weather: WeatherData, loaded: RwSignal<LoadedForecasts>) -> impl IntoView {
+fn weather_row_body(
+    weather: WeatherData,
+    loaded: RwSignal<LoadedForecasts>,
+    combined: RwSignal<bool>,
+) -> impl IntoView {
     let fahrenheit = crate::weather_fahrenheit();
     let temp = move |celsius: f64| crate::format_temp(celsius, fahrenheit);
     let details = format!(
@@ -336,16 +470,53 @@ fn weather_row_body(weather: WeatherData, loaded: RwSignal<LoadedForecasts>) -> 
                     weather_chart_option(&hourly, now_index, &all, fahrenheit, &colors)
                 });
                 view! {
-                    <crate::echarts::ChartCanvas
-                        option
-                        group="weather"
-                        reset_zoom=reset
-                        class="weather-chart"
-                    />
+                    <Show when=move || !combined.get()>
+                        <crate::echarts::ChartCanvas
+                            option
+                            group="weather"
+                            reset_zoom=reset
+                            class="weather-chart"
+                        />
+                    </Show>
                 }
                 .into_any()
             }
         }
+    }
+}
+
+/// One chart, every location. Remounts only when the FIRST loaded entry's
+/// shape changes (a Memo keys it), so later siblings streaming in update
+/// the mounted chart via set_option instead of resetting it; the option
+/// callback reads `loaded` so those updates are reactive.
+#[component]
+fn CombinedChart(loaded: RwSignal<LoadedForecasts>) -> impl IntoView {
+    let fahrenheit = crate::weather_fahrenheit();
+    let first = Memo::new(move |_| {
+        loaded.with(|list| list.first().map(|(_, hourly, now)| (hourly.len(), *now)))
+    });
+    view! {
+        <section class="weather-row">
+            {move || match first.get() {
+                None => view! { <p class="muted">"Loading forecast…"</p> }.into_any(),
+                Some((len, now_index)) => {
+                    let colors = crate::echarts::ChartColors::from_theme();
+                    let reset = default_window(now_index, len);
+                    let option = Callback::new(move |()| {
+                        let all = loaded.get();
+                        combined_chart_option(&all, fahrenheit, &colors)
+                    });
+                    view! {
+                        <crate::echarts::ChartCanvas
+                            option
+                            reset_zoom=reset
+                            class="combined-chart"
+                        />
+                    }
+                    .into_any()
+                }
+            }}
+        </section>
     }
 }
 
@@ -455,6 +626,8 @@ mod tests {
     fn default_window_clamps_at_series_end() {
         // now at 90: next-48h reaches past the series → clamp to 100.
         assert_eq!(default_window(90, 100), (66.0, 100.0));
+        // now == len (all data in the past) still yields a valid window.
+        assert_eq!(default_window(100, 100), (76.0, 100.0));
     }
 
     #[test]
@@ -493,6 +666,49 @@ mod tests {
         assert!(opt["toolbox"].is_null());
         assert!(opt["xAxis"]["axisLabel"]["interval"].is_null());
         assert_eq!(opt["xAxis"]["axisLabel"]["hideOverlap"], true);
+        // x-axis labels come from the own row's data.
+        assert_eq!(
+            opt["xAxis"]["data"][0],
+            format!("{}\n14h", crate::weather_emoji(0))
+        );
+    }
+
+    #[test]
+    fn combined_option_has_one_visible_series_per_location() {
+        let all = two_locations();
+        let opt = combined_chart_option(&all, false, &crate::echarts::ChartColors::default());
+        let series = opt["series"].as_array().unwrap();
+        assert_eq!(series.len(), 2);
+        // Both visible, palette-colored, named after their location.
+        assert_eq!(series[0]["name"], "Osaka");
+        assert_eq!(series[1]["name"], "Nijar");
+        for s in series {
+            assert!(s["lineStyle"]["opacity"].is_null());
+            assert!(s["color"].as_str().unwrap().starts_with('#'));
+        }
+        assert_ne!(series[0]["color"], series[1]["color"]);
+        // Legend names the locations; tooltip compares them natively.
+        assert_eq!(opt["legend"]["data"], serde_json::json!(["Osaka", "Nijar"]));
+        // Now-marker rides the first series, at the first entry's now_index.
+        assert_eq!(series[0]["markLine"]["data"][0]["xAxis"], 1);
+        assert!(series[1]["markLine"].is_null());
+        // Same pinned page-wide y-range as split view.
+        assert_eq!(opt["yAxis"]["min"], 19.0);
+        assert_eq!(opt["yAxis"]["max"], 32.0);
+        // Labels come from the FIRST location, without the emoji line.
+        assert_eq!(opt["xAxis"]["data"], serde_json::json!(["14h", "15h"]));
+        assert_eq!(opt["xAxis"]["axisLabel"]["hideOverlap"], true);
+    }
+
+    #[test]
+    fn combined_labels_have_no_emoji() {
+        // Midnight: "Fri 10"; other hours: "14h" — same rhythm as split
+        // labels minus the per-location emoji line.
+        let hours = vec![
+            hour(2026, 7, 10, 0, 15.0, 2),
+            hour(2026, 7, 10, 14, 20.0, 0),
+        ];
+        assert_eq!(time_labels(&hours), vec!["Fri 10", "14h"]);
     }
 
     #[test]
