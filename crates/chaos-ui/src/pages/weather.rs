@@ -4,6 +4,11 @@ use leptos::prelude::*;
 
 use crate::{WEATHER_LOCATION_KEY, use_client};
 
+/// Every loaded location's hourly forecast, insertion-ordered as fetches
+/// resolve; keyed by the API's resolved display name. Charts read it for
+/// the combined tooltip and the shared y-range.
+type LoadedForecasts = Vec<(String, Vec<chaos_domain::HourlyForecast>)>;
+
 /// Two-line x-axis labels: weather emoji on top, then the hour (`"14h"`), or
 /// the weekday (`"Fri"`) at midnight so day boundaries read at a glance.
 fn hourly_labels(hourly: &[chaos_domain::HourlyForecast]) -> Vec<String> {
@@ -54,6 +59,7 @@ fn y_range(everyone: &[(&str, &[chaos_domain::HourlyForecast])], fahrenheit: boo
     let (min, max) = temps.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| {
         (lo.min(t), hi.max(t))
     });
+    debug_assert!(min.is_finite(), "y_range needs at least one data point");
     ((min - 1.0).floor(), (max + 1.0).ceil())
 }
 
@@ -68,7 +74,7 @@ fn y_range(everyone: &[(&str, &[chaos_domain::HourlyForecast])], fahrenheit: boo
 fn weather_chart_option(
     own_name: &str,
     own_hourly: &[chaos_domain::HourlyForecast],
-    all: &[(String, Vec<chaos_domain::HourlyForecast>)],
+    all: &LoadedForecasts,
     fahrenheit: bool,
     colors: &crate::echarts::ChartColors,
 ) -> serde_json::Value {
@@ -112,7 +118,10 @@ fn weather_chart_option(
         .enumerate()
         .map(|(i, (name, hourly))| {
             if name == own_name {
-                own_series(hourly)
+                // Always draw the own line from the row's fresh data: a
+                // refetch could leave the shared entry transiently stale,
+                // and the x-axis labels already come from `own_hourly`.
+                own_series(own_hourly)
             } else {
                 // Line hidden, series silent; the color survives as the
                 // tooltip marker. Aligned by hour index (same equal-length
@@ -185,6 +194,7 @@ fn weather_chart_option(
 pub fn WeatherPage() -> impl IntoView {
     let places = RwSignal::new(crate::weather_places());
     let input = RwSignal::new(String::new());
+    let loaded = RwSignal::new(LoadedForecasts::new());
 
     let add = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -223,11 +233,13 @@ pub fn WeatherPage() -> impl IntoView {
                 let list = places.get();
                 if list.is_empty() {
                     // Same place the dashboard widget shows.
-                    view! { <WeatherRow location=None on_remove=None/> }.into_any()
+                    view! { <WeatherRow location=None on_remove=None loaded/> }.into_any()
                 } else {
                     list.into_iter()
                         .map(|place| {
-                            view! { <WeatherRow location=Some(place) on_remove=Some(remove)/> }
+                            view! {
+                                <WeatherRow location=Some(place) on_remove=Some(remove) loaded/>
+                            }
                         })
                         .collect_view()
                         .into_any()
@@ -240,7 +252,11 @@ pub fn WeatherPage() -> impl IntoView {
 /// One location: current conditions plus the hourly strip (48 h, scrolls
 /// sideways; midnight cells carry the weekday instead of an hour).
 #[component]
-fn WeatherRow(location: Option<String>, on_remove: Option<Callback<String>>) -> impl IntoView {
+fn WeatherRow(
+    location: Option<String>,
+    on_remove: Option<Callback<String>>,
+    loaded: RwSignal<LoadedForecasts>,
+) -> impl IntoView {
     let client = use_client();
     // A configured row asks for its place; the default row follows the
     // device preference (or the server's location when unset).
@@ -251,6 +267,31 @@ fn WeatherRow(location: Option<String>, on_remove: Option<Callback<String>>) -> 
         let client = client.clone();
         let query = query.clone();
         async move { client.weather(query.as_deref()).await }
+    });
+
+    // Publish this row's forecast into the page-wide list (charts read it
+    // for the combined tooltip and shared y-range). Upsert by resolved name
+    // so refetches don't duplicate; remember the name to unpublish when the
+    // row unmounts (location removed / page left).
+    let published = StoredValue::new(None::<String>);
+    Effect::new(move |_| {
+        let Some(Ok(weather)) = data.get() else {
+            return;
+        };
+        if weather.hourly.is_empty() {
+            return;
+        }
+        let (name, hourly) = (weather.location, weather.hourly);
+        published.set_value(Some(name.clone()));
+        loaded.update(|list| match list.iter_mut().find(|(n, _)| *n == name) {
+            Some(entry) => entry.1 = hourly.clone(),
+            None => list.push((name.clone(), hourly.clone())),
+        });
+    });
+    on_cleanup(move || {
+        if let Some(name) = published.get_value() {
+            loaded.update(|list| list.retain(|(n, _)| n != &name));
+        }
     });
 
     let remove = location.clone().zip(on_remove).map(|(name, on_remove)| {
@@ -269,7 +310,7 @@ fn WeatherRow(location: Option<String>, on_remove: Option<Callback<String>>) -> 
         <section class="weather-row">
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading forecast…"</p> }.into_any(),
-                Some(Ok(weather)) => weather_row_body(weather).into_any(),
+                Some(Ok(weather)) => weather_row_body(weather, loaded).into_any(),
                 Some(Err(err)) => {
                     let place = location.clone().unwrap_or_else(|| "default location".into());
                     view! { <p class="error">{place} ": " {err.to_string()}</p> }.into_any()
@@ -280,7 +321,7 @@ fn WeatherRow(location: Option<String>, on_remove: Option<Callback<String>>) -> 
     }
 }
 
-fn weather_row_body(weather: WeatherData) -> impl IntoView {
+fn weather_row_body(weather: WeatherData, loaded: RwSignal<LoadedForecasts>) -> impl IntoView {
     let location = weather.location.clone();
     let fahrenheit = crate::weather_fahrenheit();
     let temp = move |celsius: f64| crate::format_temp(celsius, fahrenheit);
@@ -312,9 +353,9 @@ fn weather_row_body(weather: WeatherData) -> impl IntoView {
                 view! { <p class="muted">"No hourly forecast."</p> }.into_any()
             } else {
                 let colors = crate::echarts::ChartColors::from_theme();
-                // Task 3 replaces the empty list with the page-wide signal.
                 let option = Callback::new(move |()| {
-                    weather_chart_option(&location, &hourly, &[], fahrenheit, &colors)
+                    let all = loaded.get();
+                    weather_chart_option(&location, &hourly, &all, fahrenheit, &colors)
                 });
                 view! {
                     <crate::echarts::ChartCanvas option group="weather" class="weather-chart"/>
@@ -494,6 +535,8 @@ mod tests {
         );
         // "Nijar" is index 1 in the shared list on both charts; in opt_b the
         // own series is prepended, shifting it to position 2 — same color.
+        assert_eq!(opt_a["series"][1]["name"], "Nijar");
+        assert_eq!(opt_b["series"][2]["name"], "Nijar");
         assert_eq!(opt_a["series"][1]["color"], opt_b["series"][2]["color"]);
     }
 }
