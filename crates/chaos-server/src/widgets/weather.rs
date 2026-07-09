@@ -30,12 +30,16 @@ pub async fn fetch(
          &current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m\
          &daily=weather_code,temperature_2m_max,temperature_2m_min\
          &hourly=temperature_2m,weather_code\
-         &timezone=auto&forecast_days=5",
+         &timezone=auto&forecast_days=16&past_days=16",
         lat = place.latitude,
         lon = place.longitude,
     );
     let forecast: Forecast = get_json(http, &url).await?;
 
+    let current = forecast.current;
+    // past_days extends BOTH series; only the hourly one should reach into
+    // the past — the dashboard's daily rows start today.
+    let today = current.time.date();
     let daily = forecast
         .daily
         .time
@@ -43,6 +47,7 @@ pub async fn fetch(
         .zip(forecast.daily.temperature_2m_min)
         .zip(forecast.daily.temperature_2m_max)
         .zip(forecast.daily.weather_code)
+        .filter(|(((date, _), _), _)| *date >= today)
         .map(|(((date, min_c), max_c), weather_code)| DailyForecast {
             date,
             min_c,
@@ -51,9 +56,8 @@ pub async fn fetch(
         })
         .collect();
 
-    let current = forecast.current;
-    // The hourly series starts at local midnight; keep from the current
-    // hour on (48 points bound the payload and the page).
+    // The hourly series spans past_days back through the full forecast; the
+    // UI needs to know where "now" sits in it, anchored to the local hour.
     let this_hour = {
         use chrono::Timelike;
         current
@@ -62,7 +66,7 @@ pub async fn fetch(
             .and_then(|t| t.with_second(0))
             .unwrap_or(current.time)
     };
-    let hourly = forecast
+    let hourly: Vec<HourlyForecast> = forecast
         .hourly
         .time
         .into_iter()
@@ -73,9 +77,8 @@ pub async fn fetch(
             temp_c,
             weather_code,
         })
-        .filter(|h| h.time >= this_hour)
-        .take(48)
         .collect();
+    let now_index = now_index(&hourly, this_hour);
 
     Ok(WidgetData::Weather(WeatherData {
         location: place.name,
@@ -87,7 +90,18 @@ pub async fn fetch(
         description: describe(current.weather_code).to_string(),
         daily,
         hourly,
+        now_index,
     }))
+}
+
+/// Index of the first hourly entry at or after `this_hour` — where "now"
+/// sits in a series that reaches into the past. `hourly.len()` when every
+/// entry is in the past (can't happen with a live forecast, but total).
+fn now_index(hourly: &[HourlyForecast], this_hour: chrono::NaiveDateTime) -> usize {
+    hourly
+        .iter()
+        .position(|h| h.time >= this_hour)
+        .unwrap_or(hourly.len())
 }
 
 async fn resolve(
@@ -252,4 +266,52 @@ struct DailySeries {
     weather_code: Vec<i32>,
     temperature_2m_max: Vec<f64>,
     temperature_2m_min: Vec<f64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::now_index;
+    use chaos_domain::HourlyForecast;
+    use chrono::NaiveDate;
+
+    fn hour(d: u32, h: u32) -> HourlyForecast {
+        HourlyForecast {
+            time: NaiveDate::from_ymd_opt(2026, 7, d)
+                .unwrap()
+                .and_hms_opt(h, 0, 0)
+                .unwrap(),
+            temp_c: 20.0,
+            weather_code: 0,
+        }
+    }
+
+    #[test]
+    fn now_index_finds_first_entry_at_or_after_now() {
+        let hourly = vec![hour(8, 22), hour(8, 23), hour(9, 0), hour(9, 1)];
+        let now = NaiveDate::from_ymd_opt(2026, 7, 9)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        assert_eq!(now_index(&hourly, now), 2);
+    }
+
+    #[test]
+    fn now_index_matches_exact_hour() {
+        let hourly = vec![hour(9, 13), hour(9, 14), hour(9, 15)];
+        let now = NaiveDate::from_ymd_opt(2026, 7, 9)
+            .unwrap()
+            .and_hms_opt(14, 0, 0)
+            .unwrap();
+        assert_eq!(now_index(&hourly, now), 1);
+    }
+
+    #[test]
+    fn now_index_is_len_when_everything_is_past() {
+        let hourly = vec![hour(1, 10), hour(1, 11)];
+        let now = NaiveDate::from_ymd_opt(2026, 7, 9)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        assert_eq!(now_index(&hourly, now), 2);
+    }
 }

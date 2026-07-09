@@ -53,3 +53,7 @@ check:
 
 fmt:
     cargo fmt --all
+
+# Run the test suite (nextest: parallel test execution, same as CI)
+test:
+    cargo nextest run --workspace

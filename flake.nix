@@ -209,6 +209,7 @@
             trunk
             binaryen # wasm-opt, used by trunk release builds
             cargo-tauri
+            cargo-nextest
             just
             monolith # page snapshots for the link archiver
           ]

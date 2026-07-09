@@ -211,10 +211,16 @@ pub struct WeatherData {
     /// Human description of `weather_code`.
     pub description: String,
     pub daily: Vec<DailyForecast>,
-    /// Hour-by-hour forecast from the current hour on (the weather page;
-    /// the dashboard widget only shows current + daily).
+    /// Hour-by-hour series spanning 16 days past through 16 days forecast
+    /// (the weather page; the dashboard widget only shows current + daily).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hourly: Vec<HourlyForecast>,
+    /// Where "now" sits in `hourly`: index of the first entry at or after
+    /// the location-local current hour. Approximate under the server's
+    /// response cache — it can lag by however long the entry has been
+    /// cached.
+    #[serde(default)]
+    pub now_index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

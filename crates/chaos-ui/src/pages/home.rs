@@ -175,7 +175,8 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
 /// Multi-room temperature history on ECharts (vendored, see
 /// chaos-ui/src/echarts.rs): hover tooltip with every visible room's value,
 /// click the legend to hide a room (the y-axis stays fixed — it is pinned
-/// from all series), drag a horizontal span to zoom (client-side; HA
+/// from all series), wheel to zoom around the cursor, drag to pan, pinch on
+/// touch, double-click to reset to the full range (all client-side; HA
 /// history is already full resolution for the fetched window).
 #[component]
 fn TemperatureChart(
@@ -187,60 +188,8 @@ fn TemperatureChart(
         return view! { <p class="muted">"No readings in this range."</p> }.into_any();
     }
 
-    let node = NodeRef::<leptos::html::Div>::new();
-    let chart = StoredValue::new_local(None::<crate::echarts::EChart>);
-    let failed = RwSignal::new(false);
-
-    Effect::new(move |_| {
-        let Some(el) = node.get() else {
-            return;
-        };
-        let instance = match chart.get_value() {
-            Some(instance) => instance,
-            None => match crate::echarts::init(&el) {
-                Ok(instance) => {
-                    chart.set_value(Some(instance.clone()));
-                    instance
-                }
-                // Bundle missing/init failed: show a plain message instead
-                // of a blank panel; the page still works.
-                Err(_) => {
-                    failed.set(true);
-                    return;
-                }
-            },
-        };
-        let option = crate::echarts::json(&chart_option(&series, start, end).to_string());
-        let _ = instance.set_option(&option);
-        // Keep the drag-select zoom armed (a toolbox feature, armed
-        // programmatically so no toolbox icon has to be clicked — the
-        // toolbox itself stays hidden).
-        let _ = instance.dispatch_action(&crate::echarts::json(
-            r#"{"type":"takeGlobalCursor","key":"dataZoomSelect","dataZoomSelectActive":true}"#,
-        ));
-    });
-
-    let resize = window_event_listener(leptos::ev::resize, move |_| {
-        if let Some(instance) = chart.get_value() {
-            let _ = instance.resize();
-        }
-    });
-    on_cleanup(move || {
-        resize.remove();
-        if let Some(instance) = chart.get_value() {
-            let _ = instance.dispose();
-        }
-    });
-
-    view! {
-        <div class="temp-chart" node_ref=node></div>
-        {move || {
-            failed
-                .get()
-                .then(|| view! { <p class="error">"Chart failed to load (echarts bundle missing?)"</p> })
-        }}
-    }
-    .into_any()
+    let option = Callback::new(move |()| chart_option(&series, start, end));
+    view! { <crate::echarts::ChartCanvas option class="temp-chart"/> }.into_any()
 }
 
 /// The ECharts option for the fetched series, themed from the CSS palette.
@@ -274,10 +223,10 @@ fn chart_option(
     }
     let (min, max) = ((min - 0.5).floor(), (max + 0.5).ceil());
 
-    let text = css_var("--text");
-    let muted = css_var("--muted");
-    let border = css_var("--border");
-    let surface = css_var("--surface");
+    let text = crate::echarts::css_var("--text");
+    let muted = crate::echarts::css_var("--muted");
+    let border = crate::echarts::css_var("--border");
+    let surface = crate::echarts::css_var("--surface");
 
     // Every room resampled onto one shared time grid. HA sensors report at
     // their own moments, and the axis tooltip only lists series that own a
@@ -331,22 +280,13 @@ fn chart_option(
             "borderColor": border,
             "textStyle": { "color": text },
         },
-        // The toolbox must be *rendered* for its dataZoomSelect cursor to
-        // exist ("show": false never creates the feature, so arming it was
-        // a no-op) — so it renders transparent and off-canvas, and
-        // TemperatureChart arms drag-zoom via takeGlobalCursor.
-        "toolbox": {
-            "show": true,
-            "top": -40,
-            "feature": { "dataZoom": { "yAxisIndex": "none", "iconStyle": { "opacity": 0 } } },
-        },
-        // Touch: pinch-zoom through an inside dataZoom; every mouse
-        // interaction stays off so the drag-select brush keeps the mouse.
+        // Wheel zooms around the cursor, drag pans, touch pinches; wheel
+        // never pans (moveOnMouseWheel) so scroll stays predictable.
         "dataZoom": [{
             "type": "inside",
             "xAxisIndex": 0,
-            "zoomOnMouseWheel": false,
-            "moveOnMouseMove": false,
+            "zoomOnMouseWheel": true,
+            "moveOnMouseMove": true,
             "moveOnMouseWheel": false,
         }],
         "xAxis": {
@@ -366,19 +306,6 @@ fn chart_option(
         },
         "series": series_json,
     })
-}
-
-/// A CSS custom property from the active theme (empty string if unset —
-/// ECharts then falls back to its defaults, which is survivable).
-fn css_var(name: &str) -> String {
-    web_sys::window()
-        .and_then(|w| {
-            let body = w.document()?.body()?;
-            w.get_computed_style(&body).ok().flatten()
-        })
-        .and_then(|style| style.get_property_value(name).ok())
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default()
 }
 
 /// On/off + brightness + color for one configured light. Holds its own
