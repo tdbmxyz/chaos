@@ -51,3 +51,18 @@ impl Clone for EChart {
 pub fn json(raw: &str) -> JsValue {
     js_sys::JSON::parse(raw).unwrap_or(JsValue::NULL)
 }
+
+/// A CSS custom property from the active theme (empty string if unset). Reads
+/// the DOM, so browser-only — calling it off-wasm panics (wasm-bindgen imports
+/// can't run natively). Keep it out of anything unit-tested; inject colours via
+/// `ChartColors` instead.
+pub(crate) fn css_var(name: &str) -> String {
+    web_sys::window()
+        .and_then(|w| {
+            let body = w.document()?.body()?;
+            w.get_computed_style(&body).ok().flatten()
+        })
+        .and_then(|style| style.get_property_value(name).ok())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
+}

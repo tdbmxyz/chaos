@@ -274,10 +274,10 @@ fn chart_option(
     }
     let (min, max) = ((min - 0.5).floor(), (max + 0.5).ceil());
 
-    let text = css_var("--text");
-    let muted = css_var("--muted");
-    let border = css_var("--border");
-    let surface = css_var("--surface");
+    let text = crate::echarts::css_var("--text");
+    let muted = crate::echarts::css_var("--muted");
+    let border = crate::echarts::css_var("--border");
+    let surface = crate::echarts::css_var("--surface");
 
     // Every room resampled onto one shared time grid. HA sensors report at
     // their own moments, and the axis tooltip only lists series that own a
@@ -366,19 +366,6 @@ fn chart_option(
         },
         "series": series_json,
     })
-}
-
-/// A CSS custom property from the active theme (empty string if unset —
-/// ECharts then falls back to its defaults, which is survivable).
-fn css_var(name: &str) -> String {
-    web_sys::window()
-        .and_then(|w| {
-            let body = w.document()?.body()?;
-            w.get_computed_style(&body).ok().flatten()
-        })
-        .and_then(|style| style.get_property_value(name).ok())
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default()
 }
 
 /// On/off + brightness + color for one configured light. Holds its own
