@@ -283,6 +283,10 @@ fn WeatherRow(
         }
         let (name, hourly) = (weather.location, weather.hourly);
         published.set_value(Some(name.clone()));
+        // Known edge: two place strings resolving to the same display name
+        // share one entry, and removing one row retracts the entry the other
+        // still uses — self-healing, because the survivor's `own_missing`
+        // prepend keeps its line drawn.
         loaded.update(|list| match list.iter_mut().find(|(n, _)| *n == name) {
             Some(entry) => entry.1 = hourly.clone(),
             None => list.push((name.clone(), hourly.clone())),

@@ -14,8 +14,11 @@ extern "C" {
     #[wasm_bindgen(js_namespace = echarts, catch)]
     pub fn init(el: &web_sys::HtmlElement) -> Result<EChart, JsValue>;
 
+    /// `chart.setOption(option, opts)` — option updates with update options
+    /// (we pass `replaceMerge: ["series"]` so series dropped from the option
+    /// are actually removed; plain merge mode keeps them forever).
     #[wasm_bindgen(method, js_name = setOption, catch)]
-    pub fn set_option(this: &EChart, option: &JsValue) -> Result<(), JsValue>;
+    pub fn set_option_with(this: &EChart, option: &JsValue, opts: &JsValue) -> Result<(), JsValue>;
 
     #[wasm_bindgen(method, js_name = dispatchAction, catch)]
     pub fn dispatch_action(this: &EChart, action: &JsValue) -> Result<(), JsValue>;
@@ -53,10 +56,9 @@ extern "C" {
     pub fn get_option(this: &EChart) -> JsValue;
 }
 
-// wasm-bindgen doesn't derive `Clone` for extern types by itself; the
-// instance is cached in a `StoredValue` for the component's lifetime (the
-// parent remounts TemperatureChart per data change, so the instance itself
-// never survives a data change), which needs it.
+// wasm-bindgen doesn't derive `Clone` for extern types by itself; ChartCanvas
+// caches the instance in a `StoredValue` for the component's lifetime, which
+// needs it.
 impl Clone for EChart {
     fn clone(&self) -> Self {
         use wasm_bindgen::JsCast;
@@ -212,7 +214,11 @@ pub fn ChartCanvas(
             },
         };
         let opt = json(&option.run(()).to_string());
-        let _ = instance.set_option(&opt);
+        // replaceMerge on series only: retracted locations leave the chart
+        // (plain merge would keep them in the tooltip forever), while every
+        // other component — crucially the dataZoom — merges, preserving the
+        // current zoom window as siblings stream in.
+        let _ = instance.set_option_with(&opt, &json(r#"{"replaceMerge":["series"]}"#));
         // Arm drag-select zoom (a toolbox feature, armed programmatically so no
         // toolbox icon must be clicked — the toolbox itself stays hidden).
         let _ = instance.dispatch_action(&json(
