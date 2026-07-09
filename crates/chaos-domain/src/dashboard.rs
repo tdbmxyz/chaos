@@ -216,7 +216,9 @@ pub struct WeatherData {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hourly: Vec<HourlyForecast>,
     /// Where "now" sits in `hourly`: index of the first entry at or after
-    /// the location-local current hour.
+    /// the location-local current hour. Approximate under the server's
+    /// response cache — it can lag by however long the entry has been
+    /// cached.
     #[serde(default)]
     pub now_index: usize,
 }

@@ -36,6 +36,10 @@ pub async fn fetch(
     );
     let forecast: Forecast = get_json(http, &url).await?;
 
+    let current = forecast.current;
+    // past_days extends BOTH series; only the hourly one should reach into
+    // the past — the dashboard's daily rows start today.
+    let today = current.time.date();
     let daily = forecast
         .daily
         .time
@@ -43,6 +47,7 @@ pub async fn fetch(
         .zip(forecast.daily.temperature_2m_min)
         .zip(forecast.daily.temperature_2m_max)
         .zip(forecast.daily.weather_code)
+        .filter(|(((date, _), _), _)| *date >= today)
         .map(|(((date, min_c), max_c), weather_code)| DailyForecast {
             date,
             min_c,
@@ -51,7 +56,6 @@ pub async fn fetch(
         })
         .collect();
 
-    let current = forecast.current;
     // The hourly series spans past_days back through the full forecast; the
     // UI needs to know where "now" sits in it, anchored to the local hour.
     let this_hour = {
