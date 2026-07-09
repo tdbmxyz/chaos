@@ -1275,39 +1275,6 @@ button.primary {
   font-weight: 600;
 }
 
-.hourly-strip {
-  display: flex;
-  overflow-x: auto;
-  margin-top: 0.75rem;
-  padding-bottom: 0.25rem;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-
-.hour-cell {
-  flex: none;
-  width: 3.1rem;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.15rem;
-  padding: 0.35rem 0;
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.hour-cell.day-break {
-  border-left: 1px solid var(--border);
-}
-
-.hour-cell.day-break .hour-label {
-  color: var(--accent);
-}
-
-.hour-label {
-  font-size: 0.7rem;
-}
-
 /* ---- collapsible lists (phones) ----
    Long widgets (services, HN/lobsters, releases) show three entries with
    a ▾ toggle; wider screens always show everything. */
@@ -1767,6 +1734,17 @@ body[data-theme="terminal"] .widget h2 {
 @media (max-width: 40rem) {
   .temp-chart {
     height: 240px;
+  }
+}
+
+.weather-chart {
+  height: 260px;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 40rem) {
+  .weather-chart {
+    height: 200px;
   }
 }
 
