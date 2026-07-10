@@ -40,21 +40,8 @@ pub async fn fetch(
     // past_days extends BOTH series; only the hourly one should reach into
     // the past — the dashboard's daily rows start today.
     let today = current.time.date();
-    let daily = forecast
-        .daily
-        .time
-        .into_iter()
-        .zip(forecast.daily.temperature_2m_min)
-        .zip(forecast.daily.temperature_2m_max)
-        .zip(forecast.daily.weather_code)
-        .filter(|(((date, _), _), _)| *date >= today)
-        .map(|(((date, min_c), max_c), weather_code)| DailyForecast {
-            date,
-            min_c,
-            max_c,
-            weather_code,
-        })
-        .collect();
+    let (daily, hourly) = build_series(forecast.daily, forecast.hourly);
+    let daily = daily.into_iter().filter(|d| d.date >= today).collect();
 
     // The hourly series spans past_days back through the full forecast; the
     // UI needs to know where "now" sits in it, anchored to the local hour.
@@ -66,18 +53,6 @@ pub async fn fetch(
             .and_then(|t| t.with_second(0))
             .unwrap_or(current.time)
     };
-    let hourly: Vec<HourlyForecast> = forecast
-        .hourly
-        .time
-        .into_iter()
-        .zip(forecast.hourly.temperature_2m)
-        .zip(forecast.hourly.weather_code)
-        .map(|((time, temp_c), weather_code)| HourlyForecast {
-            time,
-            temp_c,
-            weather_code,
-        })
-        .collect();
     let now_index = now_index(&hourly, this_hour);
 
     Ok(WidgetData::Weather(WeatherData {
@@ -92,6 +67,44 @@ pub async fn fetch(
         hourly,
         now_index,
     }))
+}
+
+/// Zip the raw Open-Meteo series into forecast entries, dropping any hour or
+/// day with a null value (the model horizon's ragged edge — better a shorter
+/// series than a failed fetch).
+fn build_series(
+    daily: DailySeries,
+    hourly: HourlySeries,
+) -> (Vec<DailyForecast>, Vec<HourlyForecast>) {
+    let daily = daily
+        .time
+        .into_iter()
+        .zip(daily.temperature_2m_min)
+        .zip(daily.temperature_2m_max)
+        .zip(daily.weather_code)
+        .filter_map(|(((date, min_c), max_c), weather_code)| {
+            Some(DailyForecast {
+                date,
+                min_c: min_c?,
+                max_c: max_c?,
+                weather_code: weather_code?,
+            })
+        })
+        .collect();
+    let hourly = hourly
+        .time
+        .into_iter()
+        .zip(hourly.temperature_2m)
+        .zip(hourly.weather_code)
+        .filter_map(|((time, temp_c), weather_code)| {
+            Some(HourlyForecast {
+                time,
+                temp_c: temp_c?,
+                weather_code: weather_code?,
+            })
+        })
+        .collect();
+    (daily, hourly)
 }
 
 /// Index of the first hourly entry at or after `this_hour` — where "now"
@@ -235,8 +248,8 @@ struct CurrentWeather {
 struct HourlySeries {
     #[serde(deserialize_with = "local_times")]
     time: Vec<chrono::NaiveDateTime>,
-    temperature_2m: Vec<f64>,
-    weather_code: Vec<i32>,
+    temperature_2m: Vec<Option<f64>>,
+    weather_code: Vec<Option<i32>>,
 }
 
 /// Open-Meteo local times omit the seconds (`2026-07-07T02:45`), which the
@@ -263,9 +276,9 @@ fn local_times<'de, D: serde::Deserializer<'de>>(
 #[derive(Debug, Deserialize)]
 struct DailySeries {
     time: Vec<chrono::NaiveDate>,
-    weather_code: Vec<i32>,
-    temperature_2m_max: Vec<f64>,
-    temperature_2m_min: Vec<f64>,
+    weather_code: Vec<Option<i32>>,
+    temperature_2m_max: Vec<Option<f64>>,
+    temperature_2m_min: Vec<Option<f64>>,
 }
 
 #[cfg(test)]
@@ -313,5 +326,30 @@ mod tests {
             .and_hms_opt(0, 0, 0)
             .unwrap();
         assert_eq!(now_index(&hourly, now), 2);
+    }
+
+    #[test]
+    fn forecast_tolerates_null_tail_entries() {
+        // Open-Meteo leaves nulls where its model horizon ends (observed on
+        // the 16th forecast day for some locations/timezones).
+        let raw = r#"{
+            "current": {"time": "2026-07-11T00:00", "temperature_2m": 28.0,
+                        "apparent_temperature": 28.1, "relative_humidity_2m": 44,
+                        "weather_code": 0, "wind_speed_10m": 9.5},
+            "daily": {"time": ["2026-07-11", "2026-07-12"],
+                      "weather_code": [3, null],
+                      "temperature_2m_max": [30.0, null],
+                      "temperature_2m_min": [18.0, null]},
+            "hourly": {"time": ["2026-07-11T00:00", "2026-07-11T01:00", "2026-07-11T02:00"],
+                       "temperature_2m": [20.0, null, 21.0],
+                       "weather_code": [0, null, 1]}
+        }"#;
+        let forecast: super::Forecast = serde_json::from_str(raw).expect("nulls must parse");
+        let (daily, hourly) = super::build_series(forecast.daily, forecast.hourly);
+        // Null-bearing entries are dropped, complete ones kept.
+        assert_eq!(daily.len(), 1);
+        assert_eq!(daily[0].max_c, 30.0);
+        assert_eq!(hourly.len(), 2);
+        assert_eq!(hourly[1].temp_c, 21.0);
     }
 }
