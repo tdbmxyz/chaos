@@ -163,16 +163,6 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
         let end = Utc::now();
         range.set((end - Duration::hours(hours), end));
     };
-    let today = move |_| {
-        let end = Utc::now();
-        let midnight = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = Local
-            .from_local_datetime(&midnight)
-            .single()
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or(end);
-        range.set((start, end));
-    };
     let apply = move |_| {
         let parse = |date: String, time: String| -> Option<DateTime<Utc>> {
             let naive =
@@ -195,7 +185,6 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
         <div class="home-range-picker">
             <div class="home-range-quick">
                 <button on:click=move |_| last_hours(3)>"Last 3h"</button>
-                <button on:click=today>"Today"</button>
                 <button on:click=move |_| last_hours(24)>"Last 24h"</button>
                 <button on:click=move |_| last_hours(24 * 7)>"Last 7 days"</button>
             </div>
@@ -434,7 +423,8 @@ fn chart_option(
 
     serde_json::json!({
         "animation": false,
-        "grid": { "left": 44, "right": 16, "top": 36, "bottom": 28 },
+        // Bottom clears the two-line axis labels (hour + day name).
+        "grid": { "left": 44, "right": 16, "top": 36, "bottom": 44 },
         "legend": { "top": 0, "textStyle": { "color": text }, "inactiveColor": muted },
         "tooltip": {
             "trigger": "axis",
