@@ -1,4 +1,3 @@
-mod app;
 mod calendar;
 mod dashboard;
 mod home;
@@ -7,7 +6,6 @@ mod login;
 mod settings;
 mod weather;
 
-pub use app::AppPage;
 pub use calendar::CalendarPage;
 pub use dashboard::Dashboard;
 pub use home::HomePage;

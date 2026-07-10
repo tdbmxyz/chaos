@@ -816,12 +816,26 @@ fn Bookmarks(groups: Vec<BookmarkGroup>) -> impl IntoView {
                                                 .as_deref()
                                                 .and_then(|spec| client.icon_url(spec));
                                             let title = bookmark.title.clone();
+                                            let url = bookmark.url.to_string();
+                                            let package = bookmark.android_package.clone();
+                                            let on_click = move |ev: leptos::ev::MouseEvent| {
+                                                if let Some(package) = &package
+                                                    && crate::on_android()
+                                                    && crate::open_app_native(package)
+                                                {
+                                                    // The native app claimed the tap.
+                                                    ev.prevent_default();
+                                                }
+                                                // Otherwise the anchor's target="_blank"
+                                                // does the right thing everywhere.
+                                            };
                                             view! {
                                                 <li>
                                                     <a
-                                                        href=bookmark.url.to_string()
+                                                        href=url
                                                         target="_blank"
                                                         rel="noreferrer"
+                                                        on:click=on_click
                                                     >
                                                         <crate::components::IconOrLetter
                                                             url=icon.map(|u| u.to_string())

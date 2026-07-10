@@ -17,6 +17,11 @@ pub struct Bookmark {
     /// Same icon conventions as services (`di:`, `si:`, `sh:` or URL).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Android package to launch instead of the URL when the bookmark is
+    /// tapped inside the Android shell and the app is installed (e.g.
+    /// `"xyz.tdbm.yomu"`). Everywhere else the URL opens normally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub android_package: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

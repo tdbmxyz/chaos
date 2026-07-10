@@ -5,7 +5,7 @@
 //! the API surface is exercised from exactly one place.
 
 use chaos_domain::{
-    ApiErrorBody, AppLink, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
+    ApiErrorBody, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
     CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse,
     HomeSensorInfo, LightCommand, LightState, Link, LinkPage, LinkQuery, LoginRequest,
     LoginResponse, ServiceActionRequest, ServiceWithStatus, SystemdAction, SystemdActionRequest,
@@ -77,11 +77,6 @@ impl ChaosClient {
 
     pub async fn dashboard(&self) -> Result<DashboardLayout> {
         self.get("api/v1/dashboard").await
-    }
-
-    /// Companion apps activated in the server config (empty = none).
-    pub async fn apps(&self) -> Result<Vec<AppLink>> {
-        self.get("api/v1/apps").await
     }
 
     /// Live payload of a data widget from the layout (weather, feeds…).

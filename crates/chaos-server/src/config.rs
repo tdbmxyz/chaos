@@ -38,9 +38,6 @@ pub struct Config {
     /// column (search + services + bookmarks) is derived from the fields
     /// above — see `widgets::resolve_layout`.
     pub columns: Vec<ColumnConfig>,
-    /// Companion applications ("plugins", e.g. yomu). Empty = feature off,
-    /// nothing rendered anywhere.
-    pub apps: Vec<chaos_domain::AppLink>,
     /// Home Assistant integration (Home tab: temperature history + light
     /// control). Feature is off when `base_url` is `None`.
     pub home_assistant: HomeAssistantConfig,
@@ -137,7 +134,6 @@ impl Default for Config {
             services: Vec::new(),
             bookmarks: Vec::new(),
             columns: Vec::new(),
-            apps: Vec::new(),
             home_assistant: HomeAssistantConfig::default(),
         }
     }
@@ -160,4 +156,36 @@ pub fn load() -> anyhow::Result<Config> {
         .merge(Env::prefixed("CHAOS_").split("__"))
         .extract::<Config>()?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use figment::providers::Format;
+
+    #[test]
+    fn legacy_apps_section_is_ignored_and_bookmark_android_package_parses() {
+        let toml = r#"
+            [[apps]]
+            id = "yomu"
+            title = "Yomu"
+            url = "http://zeus:4700"
+
+            [[bookmarks]]
+            title = "Main"
+            [[bookmarks.links]]
+            title = "Yomu"
+            url = "http://zeus:4700"
+            android_package = "xyz.tdbm.yomu"
+        "#;
+        let config: super::Config = figment::Figment::from(
+            figment::providers::Serialized::defaults(super::Config::default()),
+        )
+        .merge(figment::providers::Toml::string(toml))
+        .extract()
+        .expect("legacy apps key must not break config parsing");
+        assert_eq!(
+            config.bookmarks[0].links[0].android_package.as_deref(),
+            Some("xyz.tdbm.yomu")
+        );
+    }
 }

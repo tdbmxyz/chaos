@@ -38,16 +38,6 @@ title = "Grafana"
 url = "http://zeus:3000"
 icon = "di:grafana"
 
-# Companion apps ("plugins"): each entry adds a sidebar item. Web/desktop
-# embed the app's UI (the chaos theme is forwarded as ?chaos-theme=); the
-# Android shell launches the native app when android_package is installed,
-# falling back to the URL. Omit the section entirely to disable.
-[[apps]]
-id = "yomu"
-title = "Yomu"
-url = "http://zeus:4700"
-android_package = "xyz.tdbm.yomu"
-
 [[bookmarks]]
 title = "Main"
 
@@ -65,6 +55,18 @@ icon = "si:github"
 title = "Reddit"
 url = "https://reddit.com"
 icon = "si:reddit"
+
+[[bookmarks.links]]
+title = "Yomu"
+url = "http://zeus:4700"
+# Launches the native app inside the Android shell when installed;
+# opens the URL everywhere else.
+android_package = "xyz.tdbm.yomu"
+
+[[bookmarks.links]]
+title = "Home Assistant"
+url = "http://zeus:8093"
+icon = "si:homeassistant"
 
 # ---- layout (optional) ----
 # Without [[columns]] the dashboard is a single column: search bar, services,
