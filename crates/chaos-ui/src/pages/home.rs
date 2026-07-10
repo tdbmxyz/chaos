@@ -267,11 +267,13 @@ fn today_window_at(
     end: DateTime<Utc>,
 ) -> (f64, f64) {
     let span = (end - start).num_milliseconds() as f64;
-    if midnight <= start || span <= 0.0 {
+    // Outside the range on either side (custom ranges fully in the past or
+    // starting today): show the whole range rather than an empty window.
+    if midnight <= start || midnight >= end || span <= 0.0 {
         return (0.0, 100.0);
     }
     let pct = (midnight - start).num_milliseconds() as f64 / span * 100.0;
-    (pct.min(100.0), 100.0)
+    (pct, 100.0)
 }
 
 /// The ECharts option for the fetched series, themed from the CSS palette.
@@ -553,6 +555,16 @@ mod tests {
     fn today_window_falls_back_to_full_range() {
         let start = Utc.with_ymd_and_hms(2026, 7, 11, 6, 0, 0).unwrap();
         let end = Utc.with_ymd_and_hms(2026, 7, 11, 18, 0, 0).unwrap();
+        let midnight = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        assert_eq!(today_window_at(midnight, start, end), (0.0, 100.0));
+    }
+
+    #[test]
+    fn today_window_shows_a_fully_past_range_whole() {
+        // A custom range that ended before today must not zoom to an empty
+        // (100, 100) window — double-click couldn't rescue it.
+        let start = Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 8, 0, 0, 0).unwrap();
         let midnight = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
         assert_eq!(today_window_at(midnight, start, end), (0.0, 100.0));
     }
