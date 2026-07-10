@@ -1732,6 +1732,32 @@ body[data-theme="terminal"] .widget h2 {
   margin-top: 1.5rem;
 }
 
+/* ---- about page ---- */
+
+.about-versions {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1.2rem;
+  margin: 1rem 0;
+}
+
+.about-versions dt {
+  color: var(--muted);
+}
+
+.about-versions dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.about-sync.ok {
+  color: var(--up);
+}
+
+.about-sync.warn {
+  color: var(--down);
+}
+
 /* embedded companion apps */
 
 .app-frame {
