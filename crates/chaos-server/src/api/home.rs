@@ -18,14 +18,16 @@ pub async fn sensors(State(state): State<AppState>) -> Json<Vec<HomeSensorInfo>>
     let Some(home) = state.home.as_ref() else {
         return Json(Vec::new());
     };
-    let mut sensors = Vec::with_capacity(home.sensors.len());
-    for def in &home.sensors {
-        sensors.push(HomeSensorInfo {
+    // Concurrent per-sensor fetches: with HA down each label/battery call
+    // eats its full timeout, so serialized sensors would stack them.
+    let sensors = futures::future::join_all(home.sensors.iter().map(|def| async {
+        HomeSensorInfo {
             id: def.id.clone(),
             label: home.label(def).await,
             battery_pct: home.battery_pct(def).await,
-        });
-    }
+        }
+    }))
+    .await;
     Json(sensors)
 }
 

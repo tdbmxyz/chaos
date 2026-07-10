@@ -196,13 +196,41 @@ impl HomeAssistantClient {
     /// "unavailable"/"unknown" state — is `None`, never an error: battery
     /// is decoration on the sensor list, not data worth failing over.
     pub async fn battery_pct(&self, def: &HomeEntityDef) -> Option<f64> {
-        let entity_id = match &def.battery_entity_id {
-            Some(id) => id.clone(),
-            None => derive_battery_entity(&def.entity_id)?,
+        let (entity_id, configured) = match &def.battery_entity_id {
+            Some(id) => (id.clone(), true),
+            None => (derive_battery_entity(&def.entity_id)?, false),
         };
         let url = self.url(&format!("api/states/{entity_id}"));
-        let raw: HaEntityState = self.get_json(url).await.ok()?;
-        raw.state.parse::<f64>().ok()
+        match self.get_json::<HaEntityState>(url).await {
+            Ok(raw) => match raw.state.parse::<f64>() {
+                Ok(pct) => Some(pct),
+                Err(_) => {
+                    if configured {
+                        // A typo'd override should be debuggable; the
+                        // derived path is silent because a missing sibling
+                        // entity is normal.
+                        tracing::warn!(
+                            entity_id,
+                            sensor = def.id,
+                            reason = format!("state {:?} is not a number", raw.state),
+                            "configured battery entity unreadable"
+                        );
+                    }
+                    None
+                }
+            },
+            Err(reason) => {
+                if configured {
+                    tracing::warn!(
+                        entity_id,
+                        sensor = def.id,
+                        reason,
+                        "configured battery entity unreadable"
+                    );
+                }
+                None
+            }
+        }
     }
 
     async fn fetch_light_state(&self, def: &HomeEntityDef) -> Result<LightState, String> {
@@ -598,5 +626,23 @@ mod tests {
             battery_entity_id: None,
         };
         assert_eq!(ha.battery_pct(&without).await, None);
+    }
+
+    /// A sensor whose `entity_id` wouldn't derive a battery sibling still
+    /// gets a battery reading when `battery_entity_id` is explicitly
+    /// configured: the override wins, derivation isn't required.
+    #[tokio::test]
+    async fn battery_pct_uses_the_configured_override_when_derivation_would_fail() {
+        let url = stub_ha_single_entity("sensor.custom_batt").await;
+        let ha = client_with(url, vec![], vec![]);
+
+        let overridden = HomeEntityDef {
+            id: "weird".into(),
+            label: Some("Weird".into()),
+            entity_id: "sensor.weird_name".into(),
+            battery_entity_id: Some("sensor.custom_batt".into()),
+        };
+        assert_eq!(super::derive_battery_entity(&overridden.entity_id), None);
+        assert_eq!(ha.battery_pct(&overridden).await, Some(87.0));
     }
 }
