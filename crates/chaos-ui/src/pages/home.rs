@@ -280,15 +280,8 @@ fn chart_option(
             "borderColor": border,
             "textStyle": { "color": text },
         },
-        // Wheel zooms around the cursor, drag pans, touch pinches; wheel
-        // never pans (moveOnMouseWheel) so scroll stays predictable.
-        "dataZoom": [{
-            "type": "inside",
-            "xAxisIndex": 0,
-            "zoomOnMouseWheel": true,
-            "moveOnMouseMove": true,
-            "moveOnMouseWheel": false,
-        }],
+        // Shared gestures — see echarts::inside_zoom.
+        "dataZoom": crate::echarts::inside_zoom(),
         "xAxis": {
             "type": "time",
             "min": start.timestamp_millis(),

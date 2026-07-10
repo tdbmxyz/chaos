@@ -67,6 +67,21 @@ pub fn json(raw: &str) -> JsValue {
     js_sys::JSON::parse(raw).unwrap_or(JsValue::NULL)
 }
 
+/// The shared "inside" dataZoom fragment used by every chart: wheel zooms
+/// around the cursor, drag pans, touch pinches; wheel never pans
+/// (moveOnMouseWheel) so page scroll stays predictable. No start/end —
+/// ChartCanvas dispatches the default window once, so reactive re-renders
+/// leave a user-adjusted window alone.
+pub(crate) fn inside_zoom() -> serde_json::Value {
+    serde_json::json!([{
+        "type": "inside",
+        "xAxisIndex": 0,
+        "zoomOnMouseWheel": true,
+        "moveOnMouseMove": true,
+        "moveOnMouseWheel": false,
+    }])
+}
+
 /// A CSS custom property from the active theme (empty string if unset). Reads
 /// the DOM, so browser-only — calling it off-wasm panics (wasm-bindgen imports
 /// can't run natively). Keep it out of anything unit-tested; inject colours via
@@ -218,5 +233,18 @@ pub fn ChartCanvas(
                 .get()
                 .then(|| view! { <p class="error">"Chart failed to load (echarts bundle missing?)"</p> })
         }}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn inside_zoom_has_the_shared_gesture_flags() {
+        let zoom = super::inside_zoom();
+        assert_eq!(zoom[0]["type"], "inside");
+        assert_eq!(zoom[0]["zoomOnMouseWheel"], true);
+        assert_eq!(zoom[0]["moveOnMouseMove"], true);
+        assert_eq!(zoom[0]["moveOnMouseWheel"], false);
+        assert!(zoom[0]["start"].is_null());
     }
 }
