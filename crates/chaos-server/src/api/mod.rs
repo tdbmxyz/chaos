@@ -41,7 +41,6 @@ pub fn router(state: AppState) -> Router {
             "/events/{id}",
             put(calendar::update_event).delete(calendar::delete_event),
         )
-        .route("/apps", get(apps))
         .route("/services", get(services))
         .route("/services/{id}/systemd", post(service_systemd))
         .route("/dashboard", get(dashboard))
@@ -168,10 +167,6 @@ async fn widget_systemd(
         .await
         .map(Json)
         .map_err(Into::into)
-}
-
-async fn apps(State(state): State<AppState>) -> Json<Vec<chaos_domain::AppLink>> {
-    Json(state.config.apps.clone())
 }
 
 /// Start/stop an on-demand service's systemd unit, then re-check and return

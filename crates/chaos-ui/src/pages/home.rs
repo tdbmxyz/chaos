@@ -1,5 +1,6 @@
 //! The Home tab: temperature history from Home Assistant sensors (with a
-//! date/time range picker) and light control (on/off, brightness, color).
+//! date/time range picker), light control (on/off, brightness, color), and
+//! a sensor battery card summarizing low-battery devices.
 //! Empty when the server has no `home_assistant` configured.
 
 use chaos_domain::{LightCommand, LightState, RgbColor, TemperatureQuery, TemperatureSeries};
@@ -41,6 +42,14 @@ pub fn HomePage() -> impl IntoView {
         }
     });
 
+    let sensors = LocalResource::new({
+        let client = client.clone();
+        move || {
+            let client = client.clone();
+            async move { client.home_sensors().await }
+        }
+    });
+
     view! {
         <div class="home-page">
             <h2>"Home"</h2>
@@ -79,6 +88,52 @@ pub fn HomePage() -> impl IntoView {
                     }
                 }}
             </section>
+
+            <section class="home-section">
+                <h3>"Sensors"</h3>
+                {move || match sensors.get() {
+                    None => view! { <p class="muted">"Loading sensors…"</p> }.into_any(),
+                    Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                    Some(Ok(list)) if list.is_empty() => {
+                        view! { <p class="muted">"No sensors configured."</p> }.into_any()
+                    }
+                    Some(Ok(list)) => view! {
+                        <div class="sensor-list">
+                            {list.into_iter().map(|sensor| view! { <SensorRow sensor/> }).collect_view()}
+                        </div>
+                    }
+                        .into_any(),
+                }}
+            </section>
+        </div>
+    }
+}
+
+/// One sensor row: label plus its device battery (bar + percentage). An
+/// em dash when the sensor exposes no battery entity.
+#[component]
+fn SensorRow(sensor: chaos_domain::HomeSensorInfo) -> impl IntoView {
+    view! {
+        <div class="sensor-row">
+            <span class="sensor-label">{sensor.label}</span>
+            {match sensor.battery_pct {
+                Some(pct) => {
+                    let pct = pct.clamp(0.0, 100.0);
+                    view! {
+                        <span class="sensor-battery">
+                            <span class="battery-bar" class:low=move || pct < 20.0>
+                                <span
+                                    class="battery-fill"
+                                    style:width=format!("{pct:.0}%")
+                                ></span>
+                            </span>
+                            <span class="muted battery-pct">{format!("{pct:.0}%")}</span>
+                        </span>
+                    }
+                        .into_any()
+                }
+                None => view! { <span class="muted battery-pct">"—"</span> }.into_any(),
+            }}
         </div>
     }
 }
@@ -280,15 +335,8 @@ fn chart_option(
             "borderColor": border,
             "textStyle": { "color": text },
         },
-        // Wheel zooms around the cursor, drag pans, touch pinches; wheel
-        // never pans (moveOnMouseWheel) so scroll stays predictable.
-        "dataZoom": [{
-            "type": "inside",
-            "xAxisIndex": 0,
-            "zoomOnMouseWheel": true,
-            "moveOnMouseMove": true,
-            "moveOnMouseWheel": false,
-        }],
+        // Shared gestures — see echarts::inside_zoom.
+        "dataZoom": crate::echarts::inside_zoom(),
         "xAxis": {
             "type": "time",
             "min": start.timestamp_millis(),

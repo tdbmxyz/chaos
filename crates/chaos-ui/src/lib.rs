@@ -7,7 +7,7 @@ mod echarts;
 mod pages;
 
 use chaos_client::ChaosClient;
-use chaos_domain::{AppLink, User};
+use chaos_domain::User;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::{A, Route, Router, Routes};
@@ -268,18 +268,10 @@ pub(crate) fn set_api_base_override(value: Option<&str>) {
 #[derive(Clone, Copy)]
 pub struct Session(pub RwSignal<Option<User>>);
 
-/// Companion apps activated on the server (empty when the feature is off).
-#[derive(Clone, Copy)]
-pub struct Apps(pub RwSignal<Vec<AppLink>>);
-
-pub fn use_apps() -> Apps {
-    use_context::<Apps>().expect("Apps provided by App")
-}
-
 /// Ask the Android shell to launch a companion app natively. True only when
 /// the app is installed and claimed the tap; false (not installed, or no
-/// bridge) means the caller should show the embedded view instead.
-fn open_app_native(package: &str) -> bool {
+/// bridge) means the caller should let the URL open normally.
+pub(crate) fn open_app_native(package: &str) -> bool {
     use leptos::wasm_bindgen::JsCast;
     let Some(window) = web_sys::window() else {
         return false;
@@ -331,7 +323,7 @@ pub(crate) fn open_external(url: &str) -> bool {
 }
 
 /// True inside the Android shell (it injects `window.CHAOS_PLATFORM`).
-fn on_android() -> bool {
+pub(crate) fn on_android() -> bool {
     web_sys::window()
         .and_then(|w| js_sys::Reflect::get(&w, &"CHAOS_PLATFORM".into()).ok())
         .and_then(|v| v.as_string())
@@ -348,6 +340,16 @@ pub fn use_session() -> Session {
     use_context::<Session>().expect("Session provided by App")
 }
 
+/// Primary navigation destinations. The glyphs are plain Unicode (like
+/// yomu's tab bar) so no icon font or SVG set is needed.
+const NAV_PRIMARY: [(&str, &str, &str); 5] = [
+    ("/", "▦", "Dash"),
+    ("/links", "⛓", "Links"),
+    ("/weather", "☀", "Weather"),
+    ("/home", "⌂", "Home"),
+    ("/more", "≡", "More"),
+];
+
 #[component]
 pub fn App(config: AppConfig) -> impl IntoView {
     provide_context(config);
@@ -360,18 +362,6 @@ pub fn App(config: AppConfig) -> impl IntoView {
     spawn_local(async move {
         if let Ok(user) = client.me().await {
             session.0.set(Some(user));
-        }
-    });
-
-    // Companion apps: only rendered once the server says they exist.
-    let apps = Apps(RwSignal::new(Vec::new()));
-    provide_context(apps);
-    spawn_local({
-        let client = use_client();
-        async move {
-            if let Ok(list) = client.apps().await {
-                apps.0.set(list);
-            }
         }
     });
 
@@ -402,7 +392,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
         let origin = window().location().origin().unwrap_or_default();
         let external = (href.starts_with("http://") || href.starts_with("https://"))
             && !href.starts_with(&origin);
-        if external && open_external(&href) {
+        if external && !ev.default_prevented() && open_external(&href) {
             ev.prevent_default();
         }
     });
@@ -426,20 +416,14 @@ pub fn App(config: AppConfig) -> impl IntoView {
             <ShareRedirect/>
             <nav class="topbar">
                 <span class="brand">"chaos"</span>
-                <A href="/">"Dashboard"</A>
-                <A href="/links">"Links"</A>
-                <A href="/calendar">"Calendar"</A>
-                <A href="/weather">"Weather"</A>
-                <A href="/home">"Home"</A>
-                {move || {
-                    apps.0
-                        .get()
-                        .into_iter()
-                        .map(|app| view! { <AppNavEntry app/> })
-                        .collect_view()
-                }}
+                <A href="/"><span class="nav-icon">"▦"</span>"Dashboard"</A>
+                <A href="/links"><span class="nav-icon">"⛓"</span>"Links"</A>
+                <A href="/calendar"><span class="nav-icon">"▣"</span>"Calendar"</A>
+                <A href="/weather"><span class="nav-icon">"☀"</span>"Weather"</A>
+                <A href="/home"><span class="nav-icon">"⌂"</span>"Home"</A>
                 <span class="topbar-foot">
-                    <A href="/settings">"Settings"</A>
+                    <A href="/settings"><span class="nav-icon">"⚙"</span>"Settings"</A>
+                    <A href="/about"><span class="nav-icon">"ⓘ"</span>"About"</A>
                     <span class="topbar-account">
                         {move || match session.0.get() {
                             Some(user) => {
@@ -460,6 +444,17 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     </span>
                 </span>
             </nav>
+            <nav class="tabbar">
+                {NAV_PRIMARY
+                    .into_iter()
+                    .map(|(href, icon, label)| view! {
+                        <A href=href>
+                            <span class="tab-icon">{icon}</span>
+                            <span class="tab-label">{label}</span>
+                        </A>
+                    })
+                    .collect_view()}
+            </nav>
             <main>
                 <Routes fallback=|| view! { <p class="muted">"Page not found"</p> }>
                     <Route path=path!("/") view=pages::Dashboard/>
@@ -469,41 +464,12 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     <Route path=path!("/home") view=pages::HomePage/>
                     <Route path=path!("/login") view=pages::Login/>
                     <Route path=path!("/settings") view=pages::Settings/>
-                    <Route path=path!("/apps/:id") view=pages::AppPage/>
+                    <Route path=path!("/more") view=pages::MorePage/>
+                    <Route path=path!("/about") view=pages::AboutPage/>
                 </Routes>
             </main>
         </Router>
         </ServerGate>
-    }
-}
-
-/// Sidebar entry for a companion app. Inside the Android shell (with a
-/// configured package) it prefers the native app; when that isn't
-/// installed — and everywhere else — it routes to the embedded view.
-#[component]
-fn AppNavEntry(app: AppLink) -> impl IntoView {
-    let route = format!("/apps/{}", app.id);
-    match (on_android(), app.android_package) {
-        (true, Some(package)) => {
-            // Client-side navigation, not the anchor's own: only the root
-            // path resolves in the shell's asset protocol.
-            let navigate = leptos_router::hooks::use_navigate();
-            view! {
-                <a
-                    href=route.clone()
-                    on:click=move |ev| {
-                        ev.prevent_default();
-                        if !open_app_native(&package) {
-                            navigate(&route, Default::default());
-                        }
-                    }
-                >
-                    {app.title}
-                </a>
-            }
-            .into_any()
-        }
-        _ => view! { <A href=route>{app.title}</A> }.into_any(),
     }
 }
 

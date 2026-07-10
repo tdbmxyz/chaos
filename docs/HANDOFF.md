@@ -98,15 +98,14 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   location (sent as `?location=` widget override, geocoded + cached per
   place server-side) and °C/°F (pure display conversion, wire stays
   metric).
-- **Companion apps ("plugins")**: `[[apps]]` config entries
-  (id/title/url/android_package) → `GET /api/v1/apps` → sidebar items.
-  Web/desktop embed the app at `/apps/{id}` in an iframe with
-  `?chaos-theme=` forwarded (yomu maps it to its own themes — Campbell/
-  GitHub added there, rest mapped to nearest). Android shell exposes
-  `window.ChaosAndroid.openApp(pkg, url)` (launch intent, URL fallback;
-  manifest `<queries>` for package visibility). Empty apps config =
-  nothing rendered anywhere. NOTE: production yomu on zeus needs a
-  redeploy to pick up the chaos-theme handling.
+- **Companion apps ("plugins") — removed in v1.4**: the old `[[apps]]`
+  config → `GET /api/v1/apps` → sidebar iframe embed is gone. Replaced by
+  `Bookmark.android_package`: any bookmark can carry an `android_package`,
+  and the Android shell launches that app natively
+  (`window.ChaosAndroid.openApp(pkg)`) when tapped, falling back to the
+  plain URL everywhere (including Android when the app isn't installed). A
+  stray `[[apps]]` section left in an old `chaos.toml` is silently ignored,
+  not a startup error.
 - **Design (decided 2026-07-06)**: the sidebar layout IS the app — fixed
   left nav rail (Settings + account pinned to the bottom) that becomes a
   bottom tab bar on phones; the alternative layouts (columns/hub/bento)

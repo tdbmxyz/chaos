@@ -40,8 +40,8 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
     // Companion apps ("plugins" like yomu): the web UI calls
-    // window.ChaosAndroid.openApp(package) and embeds the app itself
-    // when that returns false.
+    // window.ChaosAndroid.openApp(package); when that returns false, the
+    // web UI lets the bookmark URL open normally (VIEW intent / browser).
     webView.addJavascriptInterface(AppBridge(), "ChaosAndroid")
     pendingShare?.let { deliver(it) }
     pendingShare = null
@@ -49,7 +49,7 @@ class MainActivity : TauriActivity() {
 
   inner class AppBridge {
     // True when the native app claimed the tap; false (not installed) tells
-    // the web UI to show its embedded view inside chaos instead.
+    // the web UI to let the bookmark URL open normally (VIEW intent / browser).
     @JavascriptInterface
     fun openApp(pkg: String): Boolean {
       val launch = packageManager.getLaunchIntentForPackage(pkg) ?: return false
