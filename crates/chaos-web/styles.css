@@ -52,6 +52,18 @@ body {
   color: var(--accent);
 }
 
+.nav-icon {
+  display: inline-block;
+  width: 1.3rem;
+  margin-right: 0.35rem;
+  text-align: center;
+}
+
+/* Fixed bottom tab bar — phones only (see media query). */
+.tabbar {
+  display: none;
+}
+
 .brand {
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1323,36 +1335,40 @@ button.primary {
     white-space: normal;
   }
 
-  /* Bottom bar: too many entries to fit, so it scrolls sideways instead
-     of crushing the labels. */
+  /* Sidebar is replaced by the fixed five-tab bottom bar. */
   .topbar {
-    inset: auto 0 0 0;
-    width: auto;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 0.35rem;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.9rem;
-    white-space: nowrap;
-    overflow-x: auto;
-    border-right: none;
-    border-top: 1px solid var(--border);
-  }
-
-  .topbar a,
-  .topbar button {
-    flex: none;
-  }
-
-  .brand,
-  .topbar-user {
     display: none;
   }
 
-  .topbar-foot,
-  .topbar-account {
-    display: contents;
+  .tabbar {
+    position: fixed;
+    inset: auto 0 0 0;
+    display: flex;
+    justify-content: space-around;
+    padding: 0.3rem 0 calc(0.3rem + env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    z-index: 10;
+  }
+
+  .tabbar a {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.65rem;
+    padding: 0.15rem 0.6rem;
+  }
+
+  .tabbar a[aria-current] {
+    color: var(--accent);
+  }
+
+  .tab-icon {
+    font-size: 1.15rem;
+    line-height: 1;
   }
 
   main {
@@ -1689,6 +1705,31 @@ body[data-theme="terminal"] .widget h2 {
   flex-basis: 100%;
   font-size: 0.75rem;
   margin: 0;
+}
+
+/* ---- more page (mobile) ---- */
+
+.more-page .more-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 1rem 0;
+}
+
+.more-page .more-list a {
+  color: var(--text);
+  text-decoration: none;
+  padding: 0.7rem 0.6rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.more-page .more-account {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-top: 1.5rem;
 }
 
 /* embedded companion apps */

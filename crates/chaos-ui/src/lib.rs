@@ -340,6 +340,16 @@ pub fn use_session() -> Session {
     use_context::<Session>().expect("Session provided by App")
 }
 
+/// Primary navigation destinations. The glyphs are plain Unicode (like
+/// yomu's tab bar) so no icon font or SVG set is needed.
+const NAV_PRIMARY: [(&str, &str, &str); 5] = [
+    ("/", "▦", "Dash"),
+    ("/links", "⛓", "Links"),
+    ("/weather", "☀", "Weather"),
+    ("/home", "⌂", "Home"),
+    ("/more", "≡", "More"),
+];
+
 #[component]
 pub fn App(config: AppConfig) -> impl IntoView {
     provide_context(config);
@@ -406,13 +416,14 @@ pub fn App(config: AppConfig) -> impl IntoView {
             <ShareRedirect/>
             <nav class="topbar">
                 <span class="brand">"chaos"</span>
-                <A href="/">"Dashboard"</A>
-                <A href="/links">"Links"</A>
-                <A href="/calendar">"Calendar"</A>
-                <A href="/weather">"Weather"</A>
-                <A href="/home">"Home"</A>
+                <A href="/"><span class="nav-icon">"▦"</span>"Dashboard"</A>
+                <A href="/links"><span class="nav-icon">"⛓"</span>"Links"</A>
+                <A href="/calendar"><span class="nav-icon">"▣"</span>"Calendar"</A>
+                <A href="/weather"><span class="nav-icon">"☀"</span>"Weather"</A>
+                <A href="/home"><span class="nav-icon">"⌂"</span>"Home"</A>
                 <span class="topbar-foot">
-                    <A href="/settings">"Settings"</A>
+                    <A href="/settings"><span class="nav-icon">"⚙"</span>"Settings"</A>
+                    <A href="/about"><span class="nav-icon">"ⓘ"</span>"About"</A>
                     <span class="topbar-account">
                         {move || match session.0.get() {
                             Some(user) => {
@@ -433,6 +444,17 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     </span>
                 </span>
             </nav>
+            <nav class="tabbar">
+                {NAV_PRIMARY
+                    .into_iter()
+                    .map(|(href, icon, label)| view! {
+                        <A href=href>
+                            <span class="tab-icon">{icon}</span>
+                            <span class="tab-label">{label}</span>
+                        </A>
+                    })
+                    .collect_view()}
+            </nav>
             <main>
                 <Routes fallback=|| view! { <p class="muted">"Page not found"</p> }>
                     <Route path=path!("/") view=pages::Dashboard/>
@@ -442,6 +464,8 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     <Route path=path!("/home") view=pages::HomePage/>
                     <Route path=path!("/login") view=pages::Login/>
                     <Route path=path!("/settings") view=pages::Settings/>
+                    <Route path=path!("/more") view=pages::MorePage/>
+                    <Route path=path!("/about") view=pages::AboutPage/>
                 </Routes>
             </main>
         </Router>
