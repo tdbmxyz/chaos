@@ -337,7 +337,7 @@ impl ChaosClient {
         let resp = self.check_status(req).await?;
         resp.json::<T>()
             .await
-            .map_err(|e| ClientError::Decode(e.to_string()))
+            .map_err(|e| ClientError::Decode(error_chain(e)))
     }
 
     async fn send_no_content(&self, req: reqwest::RequestBuilder) -> Result<()> {
@@ -368,5 +368,53 @@ impl ChaosClient {
             });
         }
         Ok(resp)
+    }
+}
+
+/// Flatten an error and its source chain into one line ("outer: inner:
+/// innermost"), because ClientError is stringly-typed and `Display` on
+/// reqwest errors hides the serde detail that actually names the problem.
+fn error_chain(e: impl std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut source = e.source();
+    while let Some(inner) = source {
+        out.push_str(": ");
+        out.push_str(&inner.to_string());
+        source = inner.source();
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Outer(Inner);
+    #[derive(Debug)]
+    struct Inner;
+    impl fmt::Display for Outer {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "error decoding response body")
+        }
+    }
+    impl fmt::Display for Inner {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "missing field `on` at line 1 column 12")
+        }
+    }
+    impl std::error::Error for Inner {}
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn error_chain_includes_sources() {
+        assert_eq!(
+            super::error_chain(Outer(Inner)),
+            "error decoding response body: missing field `on` at line 1 column 12"
+        );
     }
 }

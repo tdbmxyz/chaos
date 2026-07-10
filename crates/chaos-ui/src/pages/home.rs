@@ -19,7 +19,7 @@ pub fn HomePage() -> impl IntoView {
     let client = use_client();
 
     let now = Utc::now();
-    let range = RwSignal::new((now - Duration::hours(24), now));
+    let range = RwSignal::new((now - Duration::days(7), now));
 
     let temperature = LocalResource::new({
         let client = client.clone();
@@ -163,16 +163,6 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
         let end = Utc::now();
         range.set((end - Duration::hours(hours), end));
     };
-    let today = move |_| {
-        let end = Utc::now();
-        let midnight = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = Local
-            .from_local_datetime(&midnight)
-            .single()
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or(end);
-        range.set((start, end));
-    };
     let apply = move |_| {
         let parse = |date: String, time: String| -> Option<DateTime<Utc>> {
             let naive =
@@ -195,7 +185,6 @@ fn DateRangePicker(range: RwSignal<(DateTime<Utc>, DateTime<Utc>)>) -> impl Into
         <div class="home-range-picker">
             <div class="home-range-quick">
                 <button on:click=move |_| last_hours(3)>"Last 3h"</button>
-                <button on:click=today>"Today"</button>
                 <button on:click=move |_| last_hours(24)>"Last 24h"</button>
                 <button on:click=move |_| last_hours(24 * 7)>"Last 7 days"</button>
             </div>
@@ -244,7 +233,88 @@ fn TemperatureChart(
     }
 
     let option = Callback::new(move |()| chart_option(&series, start, end));
-    view! { <crate::echarts::ChartCanvas option class="temp-chart"/> }.into_any()
+    let reset = today_window(start, end);
+    view! {
+        <crate::echarts::ChartCanvas
+            option
+            reset_zoom=reset
+            tooltip_formatter="chaosTimeTooltip"
+            class="temp-chart"
+        />
+    }
+    .into_any()
+}
+
+/// Percent window of `[start, end]` covering the current local day — the
+/// chart's initial and double-click zoom. Falls back to the full range when
+/// today's midnight precedes `start` (short custom ranges).
+fn today_window(start: DateTime<Utc>, end: DateTime<Utc>) -> (f64, f64) {
+    let midnight = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let Some(midnight) = Local.from_local_datetime(&midnight).single() else {
+        return (0.0, 100.0);
+    };
+    today_window_at(midnight.with_timezone(&Utc), start, end)
+}
+
+/// Pure percent-window math for `today_window`, split out so it can be unit
+/// tested without `Local::now()`.
+fn today_window_at(
+    midnight: DateTime<Utc>,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> (f64, f64) {
+    let span = (end - start).num_milliseconds() as f64;
+    // Outside the range on either side (custom ranges fully in the past or
+    // starting today): show the whole range rather than an empty window.
+    if midnight <= start || midnight >= end || span <= 0.0 {
+        return (0.0, 100.0);
+    }
+    let pct = (midnight - start).num_milliseconds() as f64 / span * 100.0;
+    (pct, 100.0)
+}
+
+/// Leveled x-axis label templates: ECharts renders the coarsest applicable
+/// level at each tick, so day/month boundaries automatically name the day
+/// while plain hours stay short — the day is always visible on the axis
+/// without a function formatter. Boundary ticks keep the hour on the first
+/// line with the day beneath it, so days stand out without breaking the
+/// hour rhythm.
+fn time_axis_label_formatter() -> serde_json::Value {
+    serde_json::json!({
+        "year": "{HH}:{mm}\n{yyyy}",
+        "month": "{HH}:{mm}\n{MMM} {d}",
+        "day": "{HH}:{mm}\n{ee} {d}",
+        "hour": "{HH}:{mm}",
+        "minute": "{HH}:{mm}",
+    })
+}
+
+/// Millisecond timestamps of every local-timezone midnight strictly inside
+/// `(start, end)` — the day boundaries marked on the chart. Generic over the
+/// timezone so tests can pin one; the chart uses `Local`. Midnights that
+/// don't exist locally (DST edges) are skipped.
+fn day_boundaries<Tz: TimeZone>(tz: &Tz, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut day = start.with_timezone(tz).date_naive();
+    loop {
+        let Some(next) = day.succ_opt() else {
+            return out;
+        };
+        day = next;
+        let Some(midnight) = day.and_hms_opt(0, 0, 0) else {
+            return out;
+        };
+        let Some(local) = tz.from_local_datetime(&midnight).earliest() else {
+            continue;
+        };
+        let ts = local.with_timezone(&Utc);
+        if ts >= end {
+            return out;
+        }
+        if ts > start {
+            out.push(ts.timestamp_millis());
+        }
+    }
 }
 
 /// The ECharts option for the fetched series, themed from the CSS palette.
@@ -291,7 +361,9 @@ fn chart_option(
     // value is null (line simply starts later).
     let start_ms = start.timestamp_millis();
     let end_ms = end.timestamp_millis();
-    let step_ms = ((end_ms - start_ms) / 240).max(60_000);
+    // Dense enough that the default view (7 days loaded, zoomed to today)
+    // still resolves ~10-minute detail inside the zoom window.
+    let step_ms = ((end_ms - start_ms) / 1_000).max(60_000);
 
     let series_json: Vec<serde_json::Value> = series
         .iter()
@@ -325,9 +397,34 @@ fn chart_option(
         })
         .collect();
 
+    // Day boundaries as faint dotted verticals, on a dedicated unnamed
+    // series so legend-hiding a room can never take the markers with it
+    // (and no name keeps it out of the legend and tooltip).
+    let day_marks: Vec<serde_json::Value> = day_boundaries(&Local, start, end)
+        .into_iter()
+        .map(|ts| serde_json::json!({ "xAxis": ts }))
+        .collect();
+    let mut series_json = series_json;
+    if !day_marks.is_empty() {
+        series_json.push(serde_json::json!({
+            "type": "line",
+            "data": [],
+            "silent": true,
+            "markLine": {
+                "silent": true,
+                "symbol": "none",
+                "animation": false,
+                "label": { "show": false },
+                "lineStyle": { "color": border, "type": "dotted", "width": 1, "opacity": 0.55 },
+                "data": day_marks,
+            },
+        }));
+    }
+
     serde_json::json!({
         "animation": false,
-        "grid": { "left": 44, "right": 16, "top": 36, "bottom": 28 },
+        // Bottom clears the two-line axis labels (hour + day name).
+        "grid": { "left": 44, "right": 16, "top": 36, "bottom": 44 },
         "legend": { "top": 0, "textStyle": { "color": text }, "inactiveColor": muted },
         "tooltip": {
             "trigger": "axis",
@@ -341,7 +438,11 @@ fn chart_option(
             "type": "time",
             "min": start.timestamp_millis(),
             "max": end.timestamp_millis(),
-            "axisLabel": { "color": muted },
+            "axisLabel": {
+                "color": muted,
+                "hideOverlap": true,
+                "formatter": time_axis_label_formatter(),
+            },
             "axisLine": { "lineStyle": { "color": border } },
             "splitLine": { "show": false },
         },
@@ -505,4 +606,68 @@ fn parse_hex_color(hex: &str) -> Option<RgbColor> {
 
 fn to_hex_color(c: &RgbColor) -> String {
     format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::today_window_at;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn today_window_covers_the_last_day_of_a_week_range() {
+        let start = Utc.with_ymd_and_hms(2026, 7, 4, 12, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 11, 12, 0, 0).unwrap();
+        let midnight = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        let (from, to) = today_window_at(midnight, start, end);
+        assert!((from - (6.5 / 7.0 * 100.0)).abs() < 0.01);
+        assert_eq!(to, 100.0);
+    }
+
+    #[test]
+    fn today_window_falls_back_to_full_range() {
+        let start = Utc.with_ymd_and_hms(2026, 7, 11, 6, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 11, 18, 0, 0).unwrap();
+        let midnight = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        assert_eq!(today_window_at(midnight, start, end), (0.0, 100.0));
+    }
+
+    #[test]
+    fn today_window_shows_a_fully_past_range_whole() {
+        // A custom range that ended before today must not zoom to an empty
+        // (100, 100) window — double-click couldn't rescue it.
+        let start = Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 8, 0, 0, 0).unwrap();
+        let midnight = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        assert_eq!(today_window_at(midnight, start, end), (0.0, 100.0));
+    }
+
+    #[test]
+    fn axis_labels_name_the_day_at_boundaries() {
+        let fmt = super::time_axis_label_formatter();
+        // Boundary ticks: hour on the first line, day beneath it.
+        assert_eq!(fmt["day"], "{HH}:{mm}\n{ee} {d}");
+        assert_eq!(fmt["hour"], "{HH}:{mm}");
+    }
+
+    #[test]
+    fn day_boundaries_lists_local_midnights_inside_the_range() {
+        // UTC+2: local midnight is 22:00 UTC the evening before.
+        let tz = chrono::FixedOffset::east_opt(2 * 3600).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 7, 4, 12, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 11, 12, 0, 0).unwrap();
+        let marks = super::day_boundaries(&tz, start, end);
+        assert_eq!(marks.len(), 7);
+        assert_eq!(
+            marks[0],
+            Utc.with_ymd_and_hms(2026, 7, 4, 22, 0, 0)
+                .unwrap()
+                .timestamp_millis()
+        );
+        assert_eq!(
+            marks[6],
+            Utc.with_ymd_and_hms(2026, 7, 10, 22, 0, 0)
+                .unwrap()
+                .timestamp_millis()
+        );
+    }
 }
