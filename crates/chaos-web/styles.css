@@ -98,6 +98,17 @@ main {
   flex-shrink: 0;
 }
 
+.icon-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.3rem;
+  color: #fff;
+  font-size: 0.7em;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .service-card:hover {
   border-color: var(--accent);
 }

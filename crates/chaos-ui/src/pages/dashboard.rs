@@ -815,6 +815,7 @@ fn Bookmarks(groups: Vec<BookmarkGroup>) -> impl IntoView {
                                                 .icon
                                                 .as_deref()
                                                 .and_then(|spec| client.icon_url(spec));
+                                            let title = bookmark.title.clone();
                                             view! {
                                                 <li>
                                                     <a
@@ -822,17 +823,11 @@ fn Bookmarks(groups: Vec<BookmarkGroup>) -> impl IntoView {
                                                         target="_blank"
                                                         rel="noreferrer"
                                                     >
-                                                        {icon
-                                                            .map(|url| {
-                                                                view! {
-                                                                    <img
-                                                                        class="bookmark-icon"
-                                                                        src=url.to_string()
-                                                                        loading="lazy"
-                                                                        alt=""
-                                                                    />
-                                                                }
-                                                            })}
+                                                        <crate::components::IconOrLetter
+                                                            url=icon.map(|u| u.to_string())
+                                                            title=title
+                                                            class="bookmark-icon"
+                                                        />
                                                         {bookmark.title}
                                                     </a>
                                                 </li>

@@ -1,6 +1,71 @@
 use chaos_domain::{HealthState, ServiceWithStatus, SystemdAction};
 use leptos::prelude::*;
 
+/// An icon `<img>` that degrades to a letter tile when the image fails to
+/// load (icon source has no such slug, upstream 404, offline). The tile
+/// shows the title's first letter on a background picked deterministically
+/// from the title, so a service keeps its color across reloads.
+#[component]
+pub fn IconOrLetter(
+    /// Resolved icon URL (already through `icon_url`); None renders the tile.
+    url: Option<String>,
+    title: String,
+    /// CSS class of the img/tile, e.g. "service-icon" or "bookmark-icon".
+    class: &'static str,
+) -> impl IntoView {
+    let failed = RwSignal::new(false);
+    let letter = title
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
+    let color = TILE_PALETTE[hash_str(&title) as usize % TILE_PALETTE.len()];
+    view! {
+        {move || match (url.clone(), failed.get()) {
+            (Some(url), false) => {
+                view! {
+                    <img
+                        class=class
+                        src=url
+                        loading="lazy"
+                        alt=""
+                        on:error=move |_| failed.set(true)
+                    />
+                }
+                    .into_any()
+            }
+            _ => {
+                view! {
+                    <span class=format!("{class} icon-letter") style:background=color>
+                        {letter.clone()}
+                    </span>
+                }
+                    .into_any()
+            }
+        }}
+    }
+}
+
+const TILE_PALETTE: [&str; 6] = [
+    "#5b6ee1", "#b45bcf", "#3f9d6b", "#c2703d", "#4f93b8", "#b8564f",
+];
+
+fn hash_str(s: &str) -> u32 {
+    // FNV-1a, tiny and deterministic — only picks a palette slot.
+    s.bytes()
+        .fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tile_color_is_deterministic() {
+        let a = super::hash_str("llamacpp");
+        assert_eq!(a, super::hash_str("llamacpp"));
+        assert_ne!(super::hash_str("a"), super::hash_str("b"));
+    }
+}
+
 /// Start/stop plumbing for on-demand services (those with a systemd unit):
 /// a busy flag shared across the grid and the callback running the action,
 /// keyed by service id. Tiles without a unit never show controls.
@@ -97,12 +162,10 @@ fn ServiceCard(service: ServiceWithStatus, controls: ServiceControls) -> impl In
         }
     });
 
+    let title = service.def.title.clone();
     view! {
         <a class="service-card" href=service.def.url.to_string() target="_blank" rel="noreferrer">
-            {icon
-                .map(|url| {
-                    view! { <img class="service-icon" src=url.to_string() loading="lazy" alt=""/> }
-                })}
+            <IconOrLetter url=icon.map(|u| u.to_string()) title=title class="service-icon"/>
             <span class="service-title">{service.def.title}</span>
             <span class="service-latency muted">{state_label_detail(state, latency)}</span>
             {action}
