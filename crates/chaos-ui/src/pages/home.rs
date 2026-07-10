@@ -41,6 +41,14 @@ pub fn HomePage() -> impl IntoView {
         }
     });
 
+    let sensors = LocalResource::new({
+        let client = client.clone();
+        move || {
+            let client = client.clone();
+            async move { client.home_sensors().await }
+        }
+    });
+
     view! {
         <div class="home-page">
             <h2>"Home"</h2>
@@ -79,6 +87,52 @@ pub fn HomePage() -> impl IntoView {
                     }
                 }}
             </section>
+
+            <section class="home-section">
+                <h3>"Sensors"</h3>
+                {move || match sensors.get() {
+                    None => view! { <p class="muted">"Loading sensors…"</p> }.into_any(),
+                    Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                    Some(Ok(list)) if list.is_empty() => {
+                        view! { <p class="muted">"No sensors configured."</p> }.into_any()
+                    }
+                    Some(Ok(list)) => view! {
+                        <div class="sensor-list">
+                            {list.into_iter().map(|sensor| view! { <SensorRow sensor/> }).collect_view()}
+                        </div>
+                    }
+                        .into_any(),
+                }}
+            </section>
+        </div>
+    }
+}
+
+/// One sensor row: label plus its device battery (bar + percentage). An
+/// em dash when the sensor exposes no battery entity.
+#[component]
+fn SensorRow(sensor: chaos_domain::HomeSensorInfo) -> impl IntoView {
+    view! {
+        <div class="sensor-row">
+            <span class="sensor-label">{sensor.label}</span>
+            {match sensor.battery_pct {
+                Some(pct) => {
+                    let pct = pct.clamp(0.0, 100.0);
+                    view! {
+                        <span class="sensor-battery">
+                            <span class="battery-bar" class:low=move || pct < 20.0>
+                                <span
+                                    class="battery-fill"
+                                    style:width=format!("{pct:.0}%")
+                                ></span>
+                            </span>
+                            <span class="muted battery-pct">{format!("{pct:.0}%")}</span>
+                        </span>
+                    }
+                        .into_any()
+                }
+                None => view! { <span class="muted battery-pct">"—"</span> }.into_any(),
+            }}
         </div>
     }
 }

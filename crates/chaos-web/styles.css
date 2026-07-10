@@ -1827,3 +1827,58 @@ body[data-theme="terminal"] .widget h2 {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- home sensors (battery) ---- */
+
+.sensor-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  padding: 0.25rem 0.9rem;
+  max-width: 28rem;
+}
+
+.sensor-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.45rem 0;
+}
+
+.sensor-row + .sensor-row {
+  border-top: 1px solid var(--border);
+}
+
+.sensor-battery {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.battery-bar {
+  width: 3.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.battery-fill {
+  display: block;
+  height: 100%;
+  background: var(--up);
+}
+
+.battery-bar.low .battery-fill {
+  background: var(--down);
+}
+
+.battery-pct {
+  font-variant-numeric: tabular-nums;
+  min-width: 2.6rem;
+  text-align: right;
+}
