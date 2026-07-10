@@ -137,16 +137,8 @@ fn weather_chart_option(
             "borderColor": border,
             "textStyle": { "color": text },
         },
-        // Wheel zooms around the cursor, drag pans, touch pinches. No
-        // start/end here: ChartCanvas dispatches the default window once,
-        // so reactive re-renders don't snap a user-adjusted window back.
-        "dataZoom": [{
-            "type": "inside",
-            "xAxisIndex": 0,
-            "zoomOnMouseWheel": true,
-            "moveOnMouseMove": true,
-            "moveOnMouseWheel": false,
-        }],
+        // Shared gestures — see echarts::inside_zoom.
+        "dataZoom": crate::echarts::inside_zoom(),
         "xAxis": {
             "type": "category",
             "data": labels,
@@ -252,14 +244,8 @@ fn combined_chart_option(
             "borderColor": border,
             "textStyle": { "color": text },
         },
-        // Same gestures as the split charts; no start/end (see split view).
-        "dataZoom": [{
-            "type": "inside",
-            "xAxisIndex": 0,
-            "zoomOnMouseWheel": true,
-            "moveOnMouseMove": true,
-            "moveOnMouseWheel": false,
-        }],
+        // Shared gestures — see echarts::inside_zoom.
+        "dataZoom": crate::echarts::inside_zoom(),
         "xAxis": {
             "type": "category",
             "data": labels,

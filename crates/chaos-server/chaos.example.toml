@@ -38,16 +38,6 @@ title = "Grafana"
 url = "http://zeus:3000"
 icon = "di:grafana"
 
-# Companion apps ("plugins"): each entry adds a sidebar item. Web/desktop
-# embed the app's UI (the chaos theme is forwarded as ?chaos-theme=); the
-# Android shell launches the native app when android_package is installed,
-# falling back to the URL. Omit the section entirely to disable.
-[[apps]]
-id = "yomu"
-title = "Yomu"
-url = "http://zeus:4700"
-android_package = "xyz.tdbm.yomu"
-
 [[bookmarks]]
 title = "Main"
 
@@ -65,6 +55,18 @@ icon = "si:github"
 title = "Reddit"
 url = "https://reddit.com"
 icon = "si:reddit"
+
+[[bookmarks.links]]
+title = "Yomu"
+url = "http://zeus:4700"
+# Launches the native app inside the Android shell when installed;
+# opens the URL everywhere else.
+android_package = "xyz.tdbm.yomu"
+
+[[bookmarks.links]]
+title = "Home Assistant"
+url = "http://zeus:8093"
+icon = "si:homeassistant"
 
 # ---- layout (optional) ----
 # Without [[columns]] the dashboard is a single column: search bar, services,
@@ -128,3 +130,23 @@ limit = 6
 [[columns.widgets]]
 type = "server_stats"
 # mounts = ["/", "/data"]   # limit the disk list; empty shows every filesystem
+
+# Home Assistant integration (Home tab: temperature history + light
+# control). Omit the whole section (or leave base_url unset) to disable it.
+# [home_assistant]
+# base_url = "http://zeus:8093"
+# token_file = "/run/agenix/chaos-ha-token"
+#
+# [[home_assistant.sensors]]
+# id = "salon"
+# label = "Salon"
+# entity_id = "sensor.salon_temp_hmd_sensor_temperature"
+# Each sensor may set battery_entity_id; otherwise chaos derives it from
+# entity_id (..._temperature -> ..._battery) and shows a battery level
+# on the Home tab when the entity exists.
+# battery_entity_id = "sensor.salon_temp_hmd_sensor_battery"
+#
+# [[home_assistant.lights]]
+# id = "lamp"
+# label = "Lamp"
+# entity_id = "light.lamp"
