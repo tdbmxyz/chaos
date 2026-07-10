@@ -287,15 +287,45 @@ fn today_window_at(
 /// Leveled x-axis label templates: ECharts renders the coarsest applicable
 /// level at each tick, so day/month boundaries automatically name the day
 /// while plain hours stay short — the day is always visible on the axis
-/// without a function formatter.
+/// without a function formatter. Boundary ticks keep the hour on the first
+/// line with the day beneath it, so days stand out without breaking the
+/// hour rhythm.
 fn time_axis_label_formatter() -> serde_json::Value {
     serde_json::json!({
-        "year": "{yyyy}",
-        "month": "{MMM} {d}",
-        "day": "{ee} {d}",
+        "year": "{HH}:{mm}\n{yyyy}",
+        "month": "{HH}:{mm}\n{MMM} {d}",
+        "day": "{HH}:{mm}\n{ee} {d}",
         "hour": "{HH}:{mm}",
         "minute": "{HH}:{mm}",
     })
+}
+
+/// Millisecond timestamps of every local-timezone midnight strictly inside
+/// `(start, end)` — the day boundaries marked on the chart. Generic over the
+/// timezone so tests can pin one; the chart uses `Local`. Midnights that
+/// don't exist locally (DST edges) are skipped.
+fn day_boundaries<Tz: TimeZone>(tz: &Tz, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut day = start.with_timezone(tz).date_naive();
+    loop {
+        let Some(next) = day.succ_opt() else {
+            return out;
+        };
+        day = next;
+        let Some(midnight) = day.and_hms_opt(0, 0, 0) else {
+            return out;
+        };
+        let Some(local) = tz.from_local_datetime(&midnight).earliest() else {
+            continue;
+        };
+        let ts = local.with_timezone(&Utc);
+        if ts >= end {
+            return out;
+        }
+        if ts > start {
+            out.push(ts.timestamp_millis());
+        }
+    }
 }
 
 /// The ECharts option for the fetched series, themed from the CSS palette.
@@ -377,6 +407,30 @@ fn chart_option(
             })
         })
         .collect();
+
+    // Day boundaries as faint dotted verticals, on a dedicated unnamed
+    // series so legend-hiding a room can never take the markers with it
+    // (and no name keeps it out of the legend and tooltip).
+    let day_marks: Vec<serde_json::Value> = day_boundaries(&Local, start, end)
+        .into_iter()
+        .map(|ts| serde_json::json!({ "xAxis": ts }))
+        .collect();
+    let mut series_json = series_json;
+    if !day_marks.is_empty() {
+        series_json.push(serde_json::json!({
+            "type": "line",
+            "data": [],
+            "silent": true,
+            "markLine": {
+                "silent": true,
+                "symbol": "none",
+                "animation": false,
+                "label": { "show": false },
+                "lineStyle": { "color": border, "type": "dotted", "width": 1, "opacity": 0.55 },
+                "data": day_marks,
+            },
+        }));
+    }
 
     serde_json::json!({
         "animation": false,
@@ -600,7 +654,30 @@ mod tests {
     #[test]
     fn axis_labels_name_the_day_at_boundaries() {
         let fmt = super::time_axis_label_formatter();
-        assert_eq!(fmt["day"], "{ee} {d}");
+        // Boundary ticks: hour on the first line, day beneath it.
+        assert_eq!(fmt["day"], "{HH}:{mm}\n{ee} {d}");
         assert_eq!(fmt["hour"], "{HH}:{mm}");
+    }
+
+    #[test]
+    fn day_boundaries_lists_local_midnights_inside_the_range() {
+        // UTC+2: local midnight is 22:00 UTC the evening before.
+        let tz = chrono::FixedOffset::east_opt(2 * 3600).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 7, 4, 12, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 11, 12, 0, 0).unwrap();
+        let marks = super::day_boundaries(&tz, start, end);
+        assert_eq!(marks.len(), 7);
+        assert_eq!(
+            marks[0],
+            Utc.with_ymd_and_hms(2026, 7, 4, 22, 0, 0)
+                .unwrap()
+                .timestamp_millis()
+        );
+        assert_eq!(
+            marks[6],
+            Utc.with_ymd_and_hms(2026, 7, 10, 22, 0, 0)
+                .unwrap()
+                .timestamp_millis()
+        );
     }
 }
