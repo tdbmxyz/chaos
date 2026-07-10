@@ -342,7 +342,9 @@ fn chart_option(
     // value is null (line simply starts later).
     let start_ms = start.timestamp_millis();
     let end_ms = end.timestamp_millis();
-    let step_ms = ((end_ms - start_ms) / 240).max(60_000);
+    // Dense enough that the default view (7 days loaded, zoomed to today)
+    // still resolves ~10-minute detail inside the zoom window.
+    let step_ms = ((end_ms - start_ms) / 1_000).max(60_000);
 
     let series_json: Vec<serde_json::Value> = series
         .iter()
