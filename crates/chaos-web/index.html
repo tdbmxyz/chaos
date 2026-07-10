@@ -14,6 +14,27 @@
     <link rel="manifest" href="/assets/manifest.json" />
     <!-- Self-hosted ECharts (Home tab chart); pinned, no CDN. -->
     <script src="/vendor/echarts.min.js"></script>
+    <script>
+      // Axis-tooltip formatter for time-axis charts: header carries the full
+      // day + time (the default header hides the date at hour granularity),
+      // body lists each visible series with its colored marker.
+      window.chaosTimeTooltip = function (params) {
+        if (!Array.isArray(params) || params.length === 0) return "";
+        var d = new Date(params[0].axisValue);
+        var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+        var header = days[d.getDay()] + " " + d.getDate() + " " + months[d.getMonth()]
+          + ", " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+        var lines = params
+          .filter(function (p) { return p.value != null && p.value[1] != null; })
+          .map(function (p) {
+            return p.marker + " " + p.seriesName + "  <b>" + p.value[1] + "</b>";
+          });
+        return "<div>" + header + "</div>" + lines.join("<br/>");
+      };
+    </script>
   </head>
   <body></body>
 </html>

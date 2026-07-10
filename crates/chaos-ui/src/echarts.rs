@@ -129,6 +129,27 @@ fn zoom_to(chart: &EChart, (start, end): (f64, f64)) {
     )));
 }
 
+/// Graft a JS function defined on `window` (e.g. a tooltip formatter — the
+/// JSON option bridge can't carry functions) onto the parsed option object
+/// at `target.key`. Silently a no-op when the function is missing, so a
+/// stale index.html degrades to ECharts' default formatting.
+fn attach_window_fn(option: &JsValue, target: &str, key: &str, window_fn: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let func = js_sys::Reflect::get(&window, &window_fn.into())
+        .ok()
+        .filter(|f| !f.is_undefined());
+    let Some(func) = func else {
+        return;
+    };
+    if let Ok(obj) = js_sys::Reflect::get(option, &target.into())
+        && !obj.is_undefined()
+    {
+        let _ = js_sys::Reflect::set(&obj, &key.into(), &func);
+    }
+}
+
 /// A mounted ECharts instance: owns init, option updates, zoom gestures,
 /// resize, and disposal. `option` is re-run reactively, so a builder that
 /// reads signals re-renders the chart. When `group` is set, the chart joins
@@ -144,6 +165,9 @@ pub fn ChartCanvas(
     #[prop(optional, into)] group: Option<&'static str>,
     // `into`: pass a bare `(start, end)` tuple or omit for the full range.
     #[prop(optional, into)] reset_zoom: Option<(f64, f64)>,
+    // `into`: pass a bare `"chaosTimeTooltip"` window-function name, or omit
+    // to use ECharts' default tooltip formatting.
+    #[prop(optional, into)] tooltip_formatter: Option<&'static str>,
     class: &'static str,
 ) -> impl IntoView {
     let reset_zoom = reset_zoom.unwrap_or((0.0, 100.0));
@@ -195,6 +219,11 @@ pub fn ChartCanvas(
             },
         };
         let opt = json(&option.run(()).to_string());
+        // Runs on every reactive option rebuild — required, since each
+        // rebuild produces a fresh JS object with no formatter attached.
+        if let Some(name) = tooltip_formatter {
+            attach_window_fn(&opt, "tooltip", "formatter", name);
+        }
         // replaceMerge on series only: retracted locations leave the chart
         // (plain merge would keep them in the tooltip forever), while every
         // other component — crucially the dataZoom — merges, preserving the

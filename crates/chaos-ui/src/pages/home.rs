@@ -245,7 +245,15 @@ fn TemperatureChart(
 
     let option = Callback::new(move |()| chart_option(&series, start, end));
     let reset = today_window(start, end);
-    view! { <crate::echarts::ChartCanvas option reset_zoom=reset class="temp-chart"/> }.into_any()
+    view! {
+        <crate::echarts::ChartCanvas
+            option
+            reset_zoom=reset
+            tooltip_formatter="chaosTimeTooltip"
+            class="temp-chart"
+        />
+    }
+    .into_any()
 }
 
 /// Percent window of `[start, end]` covering the current local day — the
@@ -274,6 +282,20 @@ fn today_window_at(
     }
     let pct = (midnight - start).num_milliseconds() as f64 / span * 100.0;
     (pct, 100.0)
+}
+
+/// Leveled x-axis label templates: ECharts renders the coarsest applicable
+/// level at each tick, so day/month boundaries automatically name the day
+/// while plain hours stay short — the day is always visible on the axis
+/// without a function formatter.
+fn time_axis_label_formatter() -> serde_json::Value {
+    serde_json::json!({
+        "year": "{yyyy}",
+        "month": "{MMM} {d}",
+        "day": "{ee} {d}",
+        "hour": "{HH}:{mm}",
+        "minute": "{HH}:{mm}",
+    })
 }
 
 /// The ECharts option for the fetched series, themed from the CSS palette.
@@ -370,7 +392,11 @@ fn chart_option(
             "type": "time",
             "min": start.timestamp_millis(),
             "max": end.timestamp_millis(),
-            "axisLabel": { "color": muted },
+            "axisLabel": {
+                "color": muted,
+                "hideOverlap": true,
+                "formatter": time_axis_label_formatter(),
+            },
             "axisLine": { "lineStyle": { "color": border } },
             "splitLine": { "show": false },
         },
@@ -567,5 +593,12 @@ mod tests {
         let end = Utc.with_ymd_and_hms(2026, 7, 8, 0, 0, 0).unwrap();
         let midnight = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
         assert_eq!(today_window_at(midnight, start, end), (0.0, 100.0));
+    }
+
+    #[test]
+    fn axis_labels_name_the_day_at_boundaries() {
+        let fmt = super::time_axis_label_formatter();
+        assert_eq!(fmt["day"], "{ee} {d}");
+        assert_eq!(fmt["hour"], "{HH}:{mm}");
     }
 }
