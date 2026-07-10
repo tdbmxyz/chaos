@@ -24,6 +24,10 @@ body {
   /* Native widgets (select popups, scrollbars, date pickers) follow the
      theme instead of defaulting to the light UA palette. */
   color-scheme: dark;
+  /* Belt-and-braces: no screen should ever show a page-level horizontal
+     scrollbar. Wide content must scroll/wrap inside its own container
+     instead (see the per-element fixes below). */
+  overflow-x: hidden;
 }
 
 .topbar {
@@ -667,10 +671,14 @@ button.primary {
   display: flex;
   gap: 0.5rem;
   margin-top: 0.6rem;
+  /* Up to 7 cards with content-based minimum widths can exceed a narrow
+     dashboard column; scroll the strip itself rather than the page. */
+  overflow-x: auto;
 }
 
 .weather-day {
-  flex: 1;
+  flex: 1 0 auto;
+  min-width: 3.4rem;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -727,7 +735,10 @@ button.primary {
    they align across rows instead of raggedly following the title. */
 .feed-meta {
   display: grid;
-  grid-template-columns: max-content 3.6rem 6.2rem 2.2rem;
+  /* minmax(0, ...) lets the source column shrink below its content size
+     instead of forcing the row (and the page) wider than the viewport when
+     the source is a long domain name; .feed-source ellipsizes the overflow. */
+  grid-template-columns: minmax(0, max-content) 3.6rem 6.2rem 2.2rem;
   gap: 0.6rem;
   font-variant-numeric: tabular-nums;
 }
@@ -741,7 +752,7 @@ button.primary {
 /* Plain feeds usually carry only some of the parts: collapse the empty
    columns instead of reserving aggregator-sized space. */
 .widget-feed .feed-meta {
-  grid-template-columns: repeat(4, max-content);
+  grid-template-columns: repeat(4, minmax(0, max-content));
 }
 
 .widget-feed .feed-meta span:empty {
@@ -1249,6 +1260,7 @@ button.primary {
 
 .weather-add {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
@@ -1333,6 +1345,7 @@ button.primary {
   .feed-list a {
     flex: 1 1 100%;
     white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   /* Sidebar is replaced by the fixed five-tab bottom bar. */
@@ -1602,6 +1615,12 @@ body[data-theme="terminal"] .widget h2 {
 
 /* aggregator meta (HN / lobsters): source label links to the discussion */
 
+.feed-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .feed-list .feed-meta a.feed-source {
   color: inherit;
 }
@@ -1795,11 +1814,13 @@ body[data-theme="terminal"] .widget h2 {
 
 .home-range-quick {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
 .home-range-custom {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
 }
