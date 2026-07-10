@@ -1777,23 +1777,6 @@ body[data-theme="terminal"] .widget h2 {
   color: var(--down);
 }
 
-/* embedded companion apps */
-
-.app-frame {
-  display: block;
-  width: 100%;
-  height: calc(100vh - 3.5rem);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: var(--bg);
-}
-
-@media (max-width: 40rem) {
-  .app-frame {
-    height: calc(100vh - 7.5rem);
-  }
-}
-
 /* ---- home tab ---- */
 
 .home-section {

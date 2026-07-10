@@ -1,5 +1,6 @@
 //! The Home tab: temperature history from Home Assistant sensors (with a
-//! date/time range picker) and light control (on/off, brightness, color).
+//! date/time range picker), light control (on/off, brightness, color), and
+//! a sensor battery card summarizing low-battery devices.
 //! Empty when the server has no `home_assistant` configured.
 
 use chaos_domain::{LightCommand, LightState, RgbColor, TemperatureQuery, TemperatureSeries};
