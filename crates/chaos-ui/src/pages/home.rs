@@ -19,7 +19,7 @@ pub fn HomePage() -> impl IntoView {
     let client = use_client();
 
     let now = Utc::now();
-    let range = RwSignal::new((now - Duration::hours(24), now));
+    let range = RwSignal::new((now - Duration::days(7), now));
 
     let temperature = LocalResource::new({
         let client = client.clone();
@@ -244,7 +244,34 @@ fn TemperatureChart(
     }
 
     let option = Callback::new(move |()| chart_option(&series, start, end));
-    view! { <crate::echarts::ChartCanvas option class="temp-chart"/> }.into_any()
+    let reset = today_window(start, end);
+    view! { <crate::echarts::ChartCanvas option reset_zoom=reset class="temp-chart"/> }.into_any()
+}
+
+/// Percent window of `[start, end]` covering the current local day — the
+/// chart's initial and double-click zoom. Falls back to the full range when
+/// today's midnight precedes `start` (short custom ranges).
+fn today_window(start: DateTime<Utc>, end: DateTime<Utc>) -> (f64, f64) {
+    let midnight = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let Some(midnight) = Local.from_local_datetime(&midnight).single() else {
+        return (0.0, 100.0);
+    };
+    today_window_at(midnight.with_timezone(&Utc), start, end)
+}
+
+/// Pure percent-window math for `today_window`, split out so it can be unit
+/// tested without `Local::now()`.
+fn today_window_at(
+    midnight: DateTime<Utc>,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> (f64, f64) {
+    let span = (end - start).num_milliseconds() as f64;
+    if midnight <= start || span <= 0.0 {
+        return (0.0, 100.0);
+    }
+    let pct = (midnight - start).num_milliseconds() as f64 / span * 100.0;
+    (pct.min(100.0), 100.0)
 }
 
 /// The ECharts option for the fetched series, themed from the CSS palette.
@@ -505,4 +532,28 @@ fn parse_hex_color(hex: &str) -> Option<RgbColor> {
 
 fn to_hex_color(c: &RgbColor) -> String {
     format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::today_window_at;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn today_window_covers_the_last_day_of_a_week_range() {
+        let start = Utc.with_ymd_and_hms(2026, 7, 4, 12, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 11, 12, 0, 0).unwrap();
+        let midnight = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        let (from, to) = today_window_at(midnight, start, end);
+        assert!((from - (6.5 / 7.0 * 100.0)).abs() < 0.01);
+        assert_eq!(to, 100.0);
+    }
+
+    #[test]
+    fn today_window_falls_back_to_full_range() {
+        let start = Utc.with_ymd_and_hms(2026, 7, 11, 6, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 11, 18, 0, 0).unwrap();
+        let midnight = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        assert_eq!(today_window_at(midnight, start, end), (0.0, 100.0));
+    }
 }
