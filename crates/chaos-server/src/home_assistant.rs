@@ -191,6 +191,20 @@ impl HomeAssistantClient {
         }
     }
 
+    /// Battery percentage of a sensor, when it has a battery entity
+    /// (configured or derived). Any failure — no entity, HA unreachable,
+    /// "unavailable"/"unknown" state — is `None`, never an error: battery
+    /// is decoration on the sensor list, not data worth failing over.
+    pub async fn battery_pct(&self, def: &HomeEntityDef) -> Option<f64> {
+        let entity_id = match &def.battery_entity_id {
+            Some(id) => id.clone(),
+            None => derive_battery_entity(&def.entity_id)?,
+        };
+        let url = self.url(&format!("api/states/{entity_id}"));
+        let raw: HaEntityState = self.get_json(url).await.ok()?;
+        raw.state.parse::<f64>().ok()
+    }
+
     async fn fetch_light_state(&self, def: &HomeEntityDef) -> Result<LightState, String> {
         let url = self.url(&format!("api/states/{}", def.entity_id));
         let raw: HaEntityState = self.get_json(url).await?;
@@ -313,6 +327,22 @@ impl HomeAssistantClient {
     }
 }
 
+/// Battery sibling of a temperature entity: `..._temperature` →
+/// `..._battery`, keeping Home Assistant's numeric dedup suffix
+/// (`..._temperature_2` → `..._battery_2`). None when the id doesn't end
+/// in the pattern.
+fn derive_battery_entity(entity_id: &str) -> Option<String> {
+    if let Some(base) = entity_id.strip_suffix("_temperature") {
+        return Some(format!("{base}_battery"));
+    }
+    let (rest, n) = entity_id.rsplit_once('_')?;
+    if !n.chars().all(|c| c.is_ascii_digit()) || n.is_empty() {
+        return None;
+    }
+    let base = rest.strip_suffix("_temperature")?;
+    Some(format!("{base}_battery_{n}"))
+}
+
 fn to_light_state(def: &HomeEntityDef, label: String, raw: &HaEntityState) -> LightState {
     LightState {
         id: def.id.clone(),
@@ -354,6 +384,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use axum::extract::Path;
     use chaos_domain::LightCommand;
 
     use super::*;
@@ -364,6 +395,7 @@ mod tests {
             id: "lamp".into(),
             label: Some("Lamp".into()),
             entity_id: "light.lamp".into(),
+            battery_entity_id: None,
         }
     }
 
@@ -404,7 +436,13 @@ mod tests {
         )
     }
 
-    fn client(base_url: Url) -> HomeAssistantClient {
+    /// Boots a client against `base_url` with the given sensors/lights,
+    /// sharing the token-file plumbing every test needs.
+    fn client_with(
+        base_url: Url,
+        sensors: Vec<HomeEntityDef>,
+        lights: Vec<HomeEntityDef>,
+    ) -> HomeAssistantClient {
         let token = std::env::temp_dir().join(format!(
             "chaos-ha-test-token-{}-{:p}",
             std::process::id(),
@@ -414,11 +452,15 @@ mod tests {
         HomeAssistantClient::new(&HomeAssistantConfig {
             base_url: Some(base_url),
             token_file: Some(token),
-            sensors: vec![],
-            lights: vec![light_def()],
+            sensors,
+            lights,
         })
         .expect("building client")
         .expect("client is configured")
+    }
+
+    fn client(base_url: Url) -> HomeAssistantClient {
+        client_with(base_url, vec![], vec![light_def()])
     }
 
     /// HA reports `off` for a while after turn_on (async confirmation):
@@ -492,5 +534,69 @@ mod tests {
 
         assert!(state.on, "the adjustment must not report a stale off");
         assert!(fetches.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[test]
+    fn battery_entity_derived_by_suffix_swap() {
+        assert_eq!(
+            super::derive_battery_entity("sensor.timmerflotte_temp_hmd_sensor_temperature"),
+            Some("sensor.timmerflotte_temp_hmd_sensor_battery".into())
+        );
+        assert_eq!(
+            super::derive_battery_entity("sensor.foo_temperature_2"),
+            Some("sensor.foo_battery_2".into())
+        );
+        assert_eq!(super::derive_battery_entity("sensor.foo_humidity"), None);
+        assert_eq!(
+            super::derive_battery_entity("sensor.foo_temperature_x2"),
+            None
+        );
+    }
+
+    /// Stub HA serving a single fixed entity id with `{"state": "87"}`;
+    /// everything else 404s, matching how HA answers unknown entities.
+    async fn stub_ha_single_entity(entity_id: &'static str) -> Url {
+        let app = axum::Router::new().route(
+            "/api/states/{id}",
+            axum::routing::get(move |Path(id): Path<String>| async move {
+                if id == entity_id {
+                    Ok(axum::Json(
+                        serde_json::json!({ "state": "87", "attributes": {} }),
+                    ))
+                } else {
+                    Err(axum::http::StatusCode::NOT_FOUND)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binding stub ha");
+        let addr = listener.local_addr().expect("stub ha addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serving stub ha");
+        });
+        format!("http://{addr}/").parse().expect("stub ha url")
+    }
+
+    #[tokio::test]
+    async fn battery_pct_reads_the_derived_entity_and_tolerates_absence() {
+        let url = stub_ha_single_entity("sensor.salon_battery").await;
+        let ha = client_with(url, vec![], vec![]);
+
+        let with_battery = HomeEntityDef {
+            id: "salon".into(),
+            label: Some("Salon".into()),
+            entity_id: "sensor.salon_temperature".into(),
+            battery_entity_id: None,
+        };
+        assert_eq!(ha.battery_pct(&with_battery).await, Some(87.0));
+
+        let without = HomeEntityDef {
+            id: "cave".into(),
+            label: Some("Cave".into()),
+            entity_id: "sensor.cave_temperature".into(),
+            battery_entity_id: None,
+        };
+        assert_eq!(ha.battery_pct(&without).await, None);
     }
 }

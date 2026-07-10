@@ -71,6 +71,12 @@ pub struct HomeEntityDef {
     #[serde(default)]
     pub label: Option<String>,
     pub entity_id: String,
+    /// Battery entity for this sensor. When omitted it is derived from
+    /// `entity_id` by suffix swap (`..._temperature` → `..._battery`,
+    /// `..._temperature_2` → `..._battery_2`); set it explicitly when the
+    /// names don't follow that pattern.
+    #[serde(default)]
+    pub battery_entity_id: Option<String>,
 }
 
 /// One dashboard column as written in configuration. Widget instance ids are

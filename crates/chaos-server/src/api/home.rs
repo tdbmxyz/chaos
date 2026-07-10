@@ -23,6 +23,7 @@ pub async fn sensors(State(state): State<AppState>) -> Json<Vec<HomeSensorInfo>>
         sensors.push(HomeSensorInfo {
             id: def.id.clone(),
             label: home.label(def).await,
+            battery_pct: home.battery_pct(def).await,
         });
     }
     Json(sensors)

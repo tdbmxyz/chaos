@@ -8,10 +8,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// A configured temperature sensor, as shown in the Home tab's sensor list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HomeSensorInfo {
     pub id: String,
     pub label: String,
+    /// Battery level 0–100 of the sensor device, when it exposes one
+    /// (auto-derived `*_battery` sibling entity or a configured override).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
