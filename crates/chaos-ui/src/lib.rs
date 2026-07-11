@@ -301,6 +301,13 @@ pub(crate) fn set_api_base_override(value: Option<&str>) {
 #[derive(Clone, Copy)]
 pub struct Session(pub RwSignal<Option<User>>);
 
+/// One HTTP client for the whole app, provided as context at `App`.
+/// `use_client()` clones it per call (reqwest clients are `Arc`s inside),
+/// so components share the connection pool instead of building a new
+/// `reqwest::Client` on every call.
+#[derive(Clone)]
+struct SharedClient(ChaosClient);
+
 /// Ask the Android shell to launch a companion app natively. True only when
 /// the app is installed and claimed the tap; false (not installed, or no
 /// bridge) means the caller should let the URL open normally.
@@ -365,8 +372,16 @@ pub(crate) fn on_android() -> bool {
 
 pub fn use_client() -> ChaosClient {
     let config = use_context::<AppConfig>().expect("AppConfig provided by the shell");
+    // The token is read per call, not per app: it changes on login/logout
+    // and callers must always see the current one (matches the previous
+    // behavior, where the whole client was rebuilt per call).
     let token = config.persist_token.then(stored_token).flatten();
-    ChaosClient::new(config.api_base).with_token(token)
+    match use_context::<SharedClient>() {
+        Some(SharedClient(client)) => client.with_token(token),
+        // Components rendered outside App (tests, shells) fall back to a
+        // one-off client.
+        None => ChaosClient::new(config.api_base).with_token(token),
+    }
 }
 
 pub fn use_session() -> Session {
@@ -400,7 +415,9 @@ const NAV_PRIMARY: [(&str, &str, &str); 5] = [
 
 #[component]
 pub fn App(config: AppConfig) -> impl IntoView {
+    let api_base = config.api_base.clone();
     provide_context(config);
+    provide_context(SharedClient(ChaosClient::new(api_base)));
 
     let session = Session(RwSignal::new(None));
     provide_context(session);
