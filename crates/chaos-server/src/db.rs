@@ -433,7 +433,10 @@ impl Db {
             if let Some(q) = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
                 // Substring match over the link fields, plus full-text match
                 // over archived page content.
-                let pattern = format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"));
+                let pattern = format!(
+                    "%{}%",
+                    q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+                );
                 qb.push(" AND (l.title LIKE ");
                 qb.push_bind(pattern.clone());
                 qb.push(" ESCAPE '\\' OR l.description LIKE ");
@@ -830,6 +833,55 @@ mod tests {
             db.delete_link(link.id).await,
             Err(DbError::NotFound)
         ));
+    }
+
+    /// LIKE metacharacters in the search query must match literally:
+    /// `%`, `_`, and — the regression — `\` itself. An unescaped `\`
+    /// under ESCAPE '\' turns the following `%` into a literal percent,
+    /// so searching for a backslash finds percent signs instead.
+    #[tokio::test]
+    async fn search_escapes_like_metacharacters_literally() {
+        let db = Db::in_memory().await.unwrap();
+
+        let titled = |title: &str, url: &str| CreateLinkRequest {
+            url: url.parse().unwrap(),
+            title: Some(title.into()),
+            description: None,
+            collection_id: None,
+            tags: vec![],
+        };
+        db.create_link(&titled("50% off", "https://example.com/percent"), false, None)
+            .await
+            .unwrap();
+        db.create_link(&titled("c:\\temp", "https://example.com/backslash"), false, None)
+            .await
+            .unwrap();
+        db.create_link(&titled("my_var", "https://example.com/underscore"), false, None)
+            .await
+            .unwrap();
+        db.create_link(&titled("myxvar", "https://example.com/decoy"), false, None)
+            .await
+            .unwrap();
+
+        let search = |q: &str| LinkQuery {
+            q: Some(q.into()),
+            ..Default::default()
+        };
+
+        // A lone backslash must find "c:\temp", not the "%" title.
+        let backslash = db.list_links(&search("\\")).await.unwrap();
+        assert_eq!(backslash.total, 1, "backslash must match literally");
+        assert_eq!(backslash.items[0].title, "c:\\temp");
+
+        // Literal `%`: only the percent title, not everything.
+        let percent = db.list_links(&search("50%")).await.unwrap();
+        assert_eq!(percent.total, 1);
+        assert_eq!(percent.items[0].title, "50% off");
+
+        // Literal `_`: must not wildcard-match "myxvar".
+        let underscore = db.list_links(&search("my_var")).await.unwrap();
+        assert_eq!(underscore.total, 1);
+        assert_eq!(underscore.items[0].title, "my_var");
     }
 
     #[tokio::test]
