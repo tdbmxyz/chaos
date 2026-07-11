@@ -20,6 +20,14 @@ dir = "archives"
 monolith_bin = "monolith"
 timeout_secs = 120
 
+# Scheduled database backups: a consistent snapshot (VACUUM INTO) of the
+# SQLite file every interval, pruned to the `keep` newest. Off by default.
+# [backup]
+# enabled = true
+# dir = "backups"        # chaos-<timestamp>.db files land here
+# interval_hours = 24
+# keep = 14
+
 [[services]]
 id = "jellyfin"
 title = "Jellyfin"

@@ -123,8 +123,10 @@ cross-origin (bearer instead of the cookie).
       own usage vs pool capacity, multi-mounts deduped) + 1h CPU/memory
       sparklines (30s sampler, only spawned when the widget exists)
 - [ ] Todo/groceries widget (shared household lists, pairs with calendar)
-- [ ] Global quick-search across services, links and events (Ctrl-K)
-- [ ] Scheduled SQLite backup/export
+- [x] Global quick-search across services, links and events (Ctrl-K):
+      `GET /api/v1/search` + overlay (debounced, grouped, arrow-key nav)
+- [x] Scheduled SQLite backup/export: `[backup]` config, VACUUM INTO
+      snapshots with retention pruning
 
 ## Deferred / explicitly out of scope
 

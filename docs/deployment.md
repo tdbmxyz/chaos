@@ -181,6 +181,26 @@ Omit the section to keep notifications off. `service_alerts` and
 `calendar_reminders` (both default `true`) toggle the halves
 independently.
 
+## Backups
+
+Enable scheduled SQLite backups with the `[backup]` section
+(`services.chaos.settings.backup` on NixOS):
+
+```nix
+services.chaos.settings.backup = {
+  enabled = true;
+  # dir defaults to "backups" → /var/lib/chaos/backups under the module.
+  interval_hours = 24;
+  keep = 14;
+};
+```
+
+Each run writes a consistent `chaos-<timestamp>.db` snapshot via SQLite's
+`VACUUM INTO` (safe under WAL, no downtime) and prunes to the `keep`
+newest. Restoring = stopping the service and copying a snapshot over
+`db_path`. Page archives (`[archive] dir`) and icons are plain files —
+include `/var/lib/chaos` in the host's regular backup for those.
+
 ## Desktop and phone apps
 
 The web UI served by the server is the primary interface; the Tauri shells
