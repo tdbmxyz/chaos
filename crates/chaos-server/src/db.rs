@@ -54,23 +54,28 @@ impl Db {
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .foreign_keys(true);
-        Self::with_options(options).await
+        Self::with_options(options, 4).await
     }
 
-    /// In-memory database for tests.
+    /// In-memory database for tests. Every SQLite `:memory:` connection is
+    /// its own independent database, so the pool must be capped at one
+    /// connection — a second one would be fresh and unmigrated.
     #[cfg(test)]
     pub async fn in_memory() -> Result<Self> {
         use std::str::FromStr;
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
             .expect("valid memory dsn")
             .foreign_keys(true);
-        Self::with_options(options).await
+        Self::with_options(options, 1).await
     }
 
-    async fn with_options(options: SqliteConnectOptions) -> Result<Self> {
+    async fn with_options(options: SqliteConnectOptions, max_connections: u32) -> Result<Self> {
         let pool = SqlitePoolOptions::new()
-            // A single writer avoids SQLITE_BUSY surprises; reads are cheap.
-            .max_connections(4)
+            // SQLite still allows only one writer at a time; with WAL,
+            // reads on the other pooled connections run concurrently and a
+            // contended writer waits on sqlx's default 5s busy_timeout
+            // instead of failing with SQLITE_BUSY.
+            .max_connections(max_connections)
             .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
@@ -1149,5 +1154,18 @@ mod tests {
             .unwrap();
         assert_eq!(page.total, 3);
         assert_eq!(page.items.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn in_memory_pool_is_one_shared_database() {
+        let db = Db::in_memory().await.unwrap();
+        // Concurrent queries force the pool to open extra connections when
+        // max_connections > 1. Every extra `:memory:` connection is a
+        // fresh, unmigrated database, so one of these fails with
+        // "no such table: collections" until the pool is capped at 1.
+        let results = futures::future::join_all((0..8).map(|_| db.list_collections())).await;
+        for result in results {
+            result.expect("every pooled connection must see the migrated schema");
+        }
     }
 }
