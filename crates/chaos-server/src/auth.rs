@@ -6,6 +6,10 @@
 //! *local-password* identity. An external IdP (authentik/OIDC) later adds
 //! another way to mint a session without touching anything downstream.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use axum::extract::FromRequestParts;
@@ -38,6 +42,109 @@ pub fn verify_password(password: &str, phc: &str) -> bool {
                 .is_ok()
         })
         .unwrap_or(false)
+}
+
+/// Verify a login attempt. On a user miss (`stored_hash` is `None`) the
+/// password is still verified — against a dummy hash — so the unknown-user
+/// path costs the same ~100 ms of argon2 as the known-user path and login
+/// timing does not reveal which usernames exist.
+pub fn verify_login(stored_hash: Option<&str>, password: &str) -> bool {
+    match stored_hash {
+        Some(hash) => verify_password(password, hash),
+        None => {
+            let _ = verify_password(password, dummy_hash());
+            false
+        }
+    }
+}
+
+/// A valid argon2 PHC hash of a random token, generated once per process.
+/// Nothing can ever match it; it only exists to burn verification time.
+fn dummy_hash() -> &'static str {
+    static DUMMY: OnceLock<String> = OnceLock::new();
+    DUMMY.get_or_init(|| hash_password(&new_token()).expect("hashing dummy password"))
+}
+
+// ---- failed-login throttle ----
+
+/// Failures a `username|ip` pair gets before delays kick in.
+const THROTTLE_FREE_FAILURES: u32 = 3;
+const THROTTLE_BASE_DELAY: Duration = Duration::from_millis(500);
+const THROTTLE_MAX_DELAY: Duration = Duration::from_secs(30);
+/// A pair with no failures for this long is forgotten.
+const THROTTLE_RESET: Duration = Duration::from_secs(15 * 60);
+
+/// Delay owed after `failures` consecutive failures: nothing for the first
+/// few (typos), then exponential backoff capped at [`THROTTLE_MAX_DELAY`].
+fn throttle_delay(failures: u32) -> Duration {
+    if failures < THROTTLE_FREE_FAILURES {
+        return Duration::ZERO;
+    }
+    let exponent = (failures - THROTTLE_FREE_FAILURES).min(6);
+    (THROTTLE_BASE_DELAY * 2u32.pow(exponent)).min(THROTTLE_MAX_DELAY)
+}
+
+/// In-memory failed-login tracker, keyed by `username|ip` (see
+/// [`throttle_key`]). Single-instance servers only need process memory:
+/// a restart forgiving old failures is fine.
+#[derive(Default)]
+pub struct LoginThrottle {
+    attempts: Mutex<HashMap<String, (u32, Instant)>>,
+}
+
+impl LoginThrottle {
+    /// How long this attempt must wait before being processed.
+    pub fn delay(&self, key: &str) -> Duration {
+        let mut attempts = self.attempts.lock().expect("throttle lock");
+        match attempts.get(key) {
+            Some((failures, last)) if last.elapsed() < THROTTLE_RESET => throttle_delay(*failures),
+            Some(_) => {
+                attempts.remove(key);
+                Duration::ZERO
+            }
+            None => Duration::ZERO,
+        }
+    }
+
+    pub fn record_failure(&self, key: &str) {
+        let mut attempts = self.attempts.lock().expect("throttle lock");
+        let entry = attempts
+            .entry(key.to_string())
+            .or_insert((0, Instant::now()));
+        entry.0 = entry.0.saturating_add(1);
+        entry.1 = Instant::now();
+    }
+
+    /// Successful login: the pair starts fresh.
+    pub fn clear(&self, key: &str) {
+        self.attempts.lock().expect("throttle lock").remove(key);
+    }
+}
+
+pub fn throttle_key(username: &str, ip: Option<&str>) -> String {
+    format!(
+        "{}|{}",
+        username.trim().to_lowercase(),
+        ip.unwrap_or("unknown")
+    )
+}
+
+/// Best-effort client address for throttling: the reverse proxy's
+/// `X-Forwarded-For` (first hop) or `X-Real-IP`. Spoofable by direct LAN
+/// clients, but combined with the username key it still stops dumb loops.
+pub fn client_ip(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|ip| ip.trim().to_string())
+        .filter(|ip| !ip.is_empty())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|ip| ip.trim().to_string())
+        })
 }
 
 /// Opaque session token: 244 bits of OS randomness, hex-encoded.
@@ -122,5 +229,60 @@ mod tests {
         assert_eq!(request_token(&headers).as_deref(), Some("cookie-tok"));
         headers.insert(header::AUTHORIZATION, "Bearer bearer-tok".parse().unwrap());
         assert_eq!(request_token(&headers).as_deref(), Some("bearer-tok"));
+    }
+
+    #[test]
+    fn unknown_user_still_pays_a_password_verification() {
+        // The dummy hash is a real argon2 PHC string, so the user-miss path
+        // costs the same as a real verification.
+        assert!(PasswordHash::new(dummy_hash()).is_ok());
+        assert!(!verify_login(None, "hunter2"));
+
+        let hash = hash_password("hunter2").expect("hash");
+        assert!(verify_login(Some(&hash), "hunter2"));
+        assert!(!verify_login(Some(&hash), "wrong"));
+    }
+
+    #[test]
+    fn throttle_delay_backs_off_after_free_failures() {
+        use std::time::Duration;
+        assert_eq!(throttle_delay(0), Duration::ZERO);
+        assert_eq!(throttle_delay(2), Duration::ZERO);
+        assert_eq!(throttle_delay(3), Duration::from_millis(500));
+        assert_eq!(throttle_delay(4), Duration::from_secs(1));
+        assert_eq!(throttle_delay(5), Duration::from_secs(2));
+        // Capped, even for absurd counts.
+        assert_eq!(throttle_delay(60), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn failed_attempts_are_tracked_per_key_and_cleared_on_success() {
+        use std::time::Duration;
+        let throttle = LoginThrottle::default();
+        assert_eq!(throttle.delay("tibo|1.2.3.4"), Duration::ZERO);
+        for _ in 0..3 {
+            throttle.record_failure("tibo|1.2.3.4");
+        }
+        assert_eq!(throttle.delay("tibo|1.2.3.4"), Duration::from_millis(500));
+        // Another user/IP pair is unaffected.
+        assert_eq!(throttle.delay("tibo|5.6.7.8"), Duration::ZERO);
+        throttle.clear("tibo|1.2.3.4");
+        assert_eq!(throttle.delay("tibo|1.2.3.4"), Duration::ZERO);
+    }
+
+    #[test]
+    fn throttle_key_normalizes_username_and_defaults_ip() {
+        assert_eq!(throttle_key(" Tibo ", Some("1.2.3.4")), "tibo|1.2.3.4");
+        assert_eq!(throttle_key("tibo", None), "tibo|unknown");
+    }
+
+    #[test]
+    fn client_ip_prefers_forwarded_for() {
+        let mut headers = axum::http::HeaderMap::new();
+        assert_eq!(client_ip(&headers), None);
+        headers.insert("x-real-ip", "10.0.0.9".parse().unwrap());
+        assert_eq!(client_ip(&headers).as_deref(), Some("10.0.0.9"));
+        headers.insert("x-forwarded-for", "1.2.3.4, 10.0.0.1".parse().unwrap());
+        assert_eq!(client_ip(&headers).as_deref(), Some("1.2.3.4"));
     }
 }

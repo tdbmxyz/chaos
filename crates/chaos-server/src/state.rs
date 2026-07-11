@@ -27,6 +27,8 @@ pub struct AppState {
     pub ics: Arc<FeedCache>,
     /// Home Assistant client, when the Home tab is configured.
     pub home: Option<Arc<HomeAssistantClient>>,
+    /// Failed-login backoff tracker (in-memory, per username+IP).
+    pub login_throttle: Arc<crate::auth::LoginThrottle>,
 }
 
 impl AppState {
@@ -42,6 +44,7 @@ impl AppState {
             widgets,
             ics: Arc::new(FeedCache::default()),
             home,
+            login_throttle: Arc::new(crate::auth::LoginThrottle::default()),
         })
     }
 }

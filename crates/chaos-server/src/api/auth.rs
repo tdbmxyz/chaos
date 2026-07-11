@@ -9,23 +9,32 @@ use chrono::{Duration, Utc};
 
 use crate::api::ApiError;
 use crate::auth::{
-    AuthUser, SESSION_COOKIE, SESSION_DAYS, new_token, request_token, token_hash, verify_password,
+    AuthUser, SESSION_COOKIE, SESSION_DAYS, client_ip, new_token, request_token, throttle_key,
+    token_hash, verify_login,
 };
 use crate::state::AppState;
 
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    // Same rejection for unknown user and wrong password.
-    let (user, stored_hash) = state
-        .db
-        .user_with_password(&req.username)
-        .await
-        .map_err(|_| ApiError::Unauthorized)?;
-    if !verify_password(&req.password, &stored_hash) {
+    // Repeated failures for the same username+IP earn an increasing delay.
+    let key = throttle_key(&req.username, client_ip(&headers).as_deref());
+    let delay = state.login_throttle.delay(&key);
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+
+    // Same rejection — and the same argon2 cost — for unknown user and
+    // wrong password (see verify_login).
+    let found = state.db.user_with_password(&req.username).await.ok();
+    if !verify_login(found.as_ref().map(|(_, hash)| hash.as_str()), &req.password) {
+        state.login_throttle.record_failure(&key);
         return Err(ApiError::Unauthorized);
     }
+    let (user, _) = found.expect("verify_login returns false when the user is missing");
+    state.login_throttle.clear(&key);
 
     let token = new_token();
     state
