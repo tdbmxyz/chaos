@@ -59,8 +59,13 @@ impl<K: Eq + Hash + Clone, V: Clone> StaleCache<K, V> {
     }
 
     /// Insert or refresh a value. When the cache is full and the key is
-    /// new, the oldest-written entry is evicted, bounding growth from
-    /// user-controlled keys.
+    /// new, the oldest-*written* entry is evicted (reads don't refresh
+    /// `seq`), bounding growth from user-controlled keys. Fine for these
+    /// small caches; it is not an LRU.
+    ///
+    /// TODO: no single-flight — concurrent misses on the same expired key
+    /// each hit the upstream and race to insert. Harmless at current load;
+    /// coalesce here if that ever changes.
     pub async fn insert(&self, key: K, value: V) {
         let mut inner = self.inner.write().await;
         inner.seq += 1;
