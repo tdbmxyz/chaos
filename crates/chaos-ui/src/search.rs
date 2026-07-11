@@ -110,7 +110,12 @@ pub fn QuickSearch(open: RwSignal<bool>) -> impl IntoView {
                     activate.run(hit);
                 }
             }
-            "Escape" => close(),
+            "Escape" => {
+                // Don't let the window-level Modal listener see this press:
+                // Ctrl-K over an open dialog must not discard the dialog.
+                ev.stop_propagation();
+                close();
+            }
             _ => {}
         }
     };

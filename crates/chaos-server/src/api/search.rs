@@ -77,7 +77,7 @@ async fn aggregate(
                 now + Duration::days(EVENT_WINDOW_DAYS),
             )
             .await?;
-            filter_events(&merged, q)
+            filter_events(&merged, q, now)
         }
         None => Vec::new(),
     };
@@ -141,10 +141,16 @@ fn filter_bookmarks(groups: &[&BookmarkGroup], q: &str) -> Vec<SearchHit> {
         .collect()
 }
 
-fn filter_events(events: &[CalendarEvent], q: &str) -> Vec<SearchHit> {
-    events
-        .iter()
-        .filter(|e| matches(&e.title, q))
+fn filter_events(events: &[CalendarEvent], q: &str, now: chrono::DateTime<Utc>) -> Vec<SearchHit> {
+    // merged_events sorts ascending, so a recurring event would fill the
+    // group with weeks-old occurrences; the upcoming ones come first here.
+    let hits = |future: bool| {
+        events
+            .iter()
+            .filter(move |e| (e.starts_at >= now) == future && matches(&e.title, q))
+    };
+    hits(true)
+        .chain(hits(false).rev())
         .take(GROUP_LIMIT)
         .map(|e| SearchHit {
             kind: SearchKind::Event,
@@ -276,5 +282,61 @@ mod tests {
         assert_eq!(filter_services(&services, "SERVICE").len(), GROUP_LIMIT);
         assert_eq!(filter_services(&services, "svc-14").len(), 1);
         assert!(filter_services(&services, "nope").is_empty());
+    }
+
+    #[test]
+    fn events_prefer_upcoming_occurrences_over_stale_past_ones() {
+        use chrono::{Duration, TimeZone};
+        let now = Utc.with_ymd_and_hms(2026, 7, 11, 12, 0, 0).unwrap();
+        // A recurring event: many past occurrences, a few upcoming — the
+        // group must not fill with the old ones (merged_events sorts
+        // ascending, so the naive take() would).
+        let events: Vec<CalendarEvent> = (-20..3)
+            .map(|d| CalendarEvent {
+                id: None,
+                calendar_id: uuid::Uuid::nil(),
+                calendar_name: "perso".into(),
+                color: None,
+                title: "Standup".into(),
+                description: None,
+                location: None,
+                starts_at: now + Duration::days(d),
+                ends_at: now + Duration::days(d) + Duration::hours(1),
+                all_day: false,
+            })
+            .collect();
+
+        let hits = filter_events(&events, "standup", now);
+        assert_eq!(hits.len(), GROUP_LIMIT);
+        // The three upcoming occurrences (d = 0, 1, 2) lead the group,
+        // then the most recent past ones.
+        assert!(
+            hits[0]
+                .subtitle
+                .as_deref()
+                .unwrap()
+                .starts_with("Sat 11 Jul")
+        );
+        assert!(
+            hits[1]
+                .subtitle
+                .as_deref()
+                .unwrap()
+                .starts_with("Sun 12 Jul")
+        );
+        assert!(
+            hits[2]
+                .subtitle
+                .as_deref()
+                .unwrap()
+                .starts_with("Mon 13 Jul")
+        );
+        assert!(
+            hits[3]
+                .subtitle
+                .as_deref()
+                .unwrap()
+                .starts_with("Fri 10 Jul")
+        );
     }
 }
