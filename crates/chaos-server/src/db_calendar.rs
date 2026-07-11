@@ -6,7 +6,7 @@ use chaos_domain::{Calendar, CalendarKind, CalendarRequest, Event, EventRequest}
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::db::{Db, DbError, Result, trimmed};
+use crate::db::{Db, DbError, MAX_NAME_LEN, MAX_TEXT_LEN, Result, trimmed, validate_len};
 use crate::db_auth::parse_uuid;
 
 impl Db {
@@ -226,6 +226,10 @@ fn validate_calendar(req: &CalendarRequest) -> Result<()> {
     if req.name.trim().is_empty() {
         return Err(DbError::Constraint("name cannot be empty".into()));
     }
+    validate_len("name", &req.name, MAX_NAME_LEN)?;
+    if let Some(url) = &req.ics_url {
+        validate_len("ics_url", url, MAX_TEXT_LEN)?;
+    }
     if req.kind == CalendarKind::Ics && req.ics_url.as_deref().unwrap_or("").trim().is_empty() {
         return Err(DbError::Constraint("feed calendars need an ics_url".into()));
     }
@@ -235,6 +239,13 @@ fn validate_calendar(req: &CalendarRequest) -> Result<()> {
 fn validate_event(req: &EventRequest) -> Result<()> {
     if req.title.trim().is_empty() {
         return Err(DbError::Constraint("title cannot be empty".into()));
+    }
+    validate_len("title", &req.title, MAX_NAME_LEN)?;
+    if let Some(description) = &req.description {
+        validate_len("description", description, MAX_TEXT_LEN)?;
+    }
+    if let Some(location) = &req.location {
+        validate_len("location", location, MAX_NAME_LEN)?;
     }
     if req.ends_at <= req.starts_at {
         return Err(DbError::Constraint("event must end after it starts".into()));
@@ -461,6 +472,59 @@ mod tests {
                     color: None,
                     kind: CalendarKind::Ics,
                     ics_url: None,
+                },
+            )
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn oversized_calendar_and_event_fields_are_refused() {
+        let (db, user_id, calendar) = setup().await;
+
+        assert!(matches!(
+            db.create_calendar(
+                user_id,
+                &CalendarRequest {
+                    name: "Feeds".into(),
+                    color: None,
+                    kind: CalendarKind::Ics,
+                    ics_url: Some(format!("https://example.com/{}", "x".repeat(5000))),
+                },
+            )
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+
+        assert!(matches!(
+            db.create_event(
+                user_id,
+                &EventRequest {
+                    calendar_id: calendar.id,
+                    title: "x".repeat(513),
+                    description: None,
+                    location: None,
+                    starts_at: ts(9),
+                    ends_at: ts(10),
+                    all_day: false,
+                },
+            )
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+
+        assert!(matches!(
+            db.create_event(
+                user_id,
+                &EventRequest {
+                    calendar_id: calendar.id,
+                    title: "Fine".into(),
+                    description: Some("x".repeat(5000)),
+                    location: None,
+                    starts_at: ts(9),
+                    ends_at: ts(10),
+                    all_day: false,
                 },
             )
             .await,

@@ -97,6 +97,9 @@ impl Db {
 
     pub async fn create_collection(&self, req: &CollectionRequest) -> Result<Collection> {
         validate_name(&req.name)?;
+        if let Some(description) = &req.description {
+            validate_len("description", description, MAX_TEXT_LEN)?;
+        }
         let id = Uuid::now_v7();
         sqlx::query(
             "INSERT INTO collections (id, name, description, color, parent_id, created_at)
@@ -116,6 +119,9 @@ impl Db {
 
     pub async fn update_collection(&self, id: Uuid, req: &CollectionRequest) -> Result<Collection> {
         validate_name(&req.name)?;
+        if let Some(description) = &req.description {
+            validate_len("description", description, MAX_TEXT_LEN)?;
+        }
         // Walk + UPDATE share one transaction, closing the check-then-act
         // race on this row. Deferred BEGIN means two concurrent re-parents
         // of *different* collections could still cross into a cycle; that
@@ -202,6 +208,13 @@ impl Db {
         archive: bool,
         created_by: Option<Uuid>,
     ) -> Result<Link> {
+        if let Some(title) = &req.title {
+            validate_len("title", title, MAX_NAME_LEN)?;
+        }
+        if let Some(description) = &req.description {
+            validate_len("description", description, MAX_TEXT_LEN)?;
+        }
+        validate_len("url", req.url.as_str(), MAX_TEXT_LEN)?;
         let id = Uuid::now_v7();
         let now = Utc::now();
         let title = trimmed(&req.title)
@@ -235,6 +248,10 @@ impl Db {
 
     pub async fn update_link(&self, id: Uuid, req: &UpdateLinkRequest) -> Result<Link> {
         validate_name(&req.title)?;
+        if let Some(description) = &req.description {
+            validate_len("description", description, MAX_TEXT_LEN)?;
+        }
+        validate_len("url", req.url.as_str(), MAX_TEXT_LEN)?;
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "UPDATE links SET url = ?, title = ?, description = ?, collection_id = ?,
@@ -581,11 +598,24 @@ fn fts_match_query(q: &str) -> String {
         .join(" ")
 }
 
+/// Sanity caps on free-text inputs — generous for humans, hostile to blobs.
+pub(crate) const MAX_NAME_LEN: usize = 512;
+pub(crate) const MAX_TEXT_LEN: usize = 4096;
+
+pub(crate) fn validate_len(field: &str, value: &str, max: usize) -> Result<()> {
+    if value.chars().count() > max {
+        return Err(DbError::Constraint(format!(
+            "{field} is too long (max {max} characters)"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_name(name: &str) -> Result<()> {
     if name.trim().is_empty() {
         return Err(DbError::Constraint("name must not be empty".into()));
     }
-    Ok(())
+    validate_len("name", name, MAX_NAME_LEN)
 }
 
 /// Trim-or-None: user-supplied optional text normalized for storage.
@@ -1171,5 +1201,66 @@ mod tests {
         for result in results {
             result.expect("every pooled connection must see the migrated schema");
         }
+    }
+
+    #[tokio::test]
+    async fn oversized_inputs_are_refused() {
+        let db = Db::in_memory().await.unwrap();
+        let long_name = "x".repeat(MAX_NAME_LEN + 1);
+        let long_text = "x".repeat(MAX_TEXT_LEN + 1);
+
+        assert!(matches!(
+            db.create_collection(&CollectionRequest {
+                name: long_name.clone(),
+                description: None,
+                color: None,
+                parent_id: None,
+            })
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+
+        assert!(matches!(
+            db.create_link(
+                &CreateLinkRequest {
+                    url: "https://example.com".parse().unwrap(),
+                    title: Some(long_name.clone()),
+                    description: None,
+                    collection_id: None,
+                    tags: vec![],
+                },
+                false,
+                None,
+            )
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+
+        assert!(matches!(
+            db.create_link(
+                &CreateLinkRequest {
+                    url: "https://example.com".parse().unwrap(),
+                    title: None,
+                    description: Some(long_text.clone()),
+                    collection_id: None,
+                    tags: vec![],
+                },
+                false,
+                None,
+            )
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+
+        // At the limit everything still works.
+        let ok = db
+            .create_collection(&CollectionRequest {
+                name: "x".repeat(MAX_NAME_LEN),
+                description: Some("y".repeat(MAX_TEXT_LEN)),
+                color: None,
+                parent_id: None,
+            })
+            .await;
+        assert!(ok.is_ok());
     }
 }
