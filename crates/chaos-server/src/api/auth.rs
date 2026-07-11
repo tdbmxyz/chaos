@@ -48,7 +48,11 @@ pub async fn login(
     tracing::info!(username = user.username, "login");
 
     Ok((
-        session_cookie_headers(&token, SESSION_DAYS * 24 * 60 * 60),
+        session_cookie_headers(
+            &token,
+            SESSION_DAYS * 24 * 60 * 60,
+            state.config.secure_cookies,
+        ),
         Json(LoginResponse { token, user }),
     )
         .into_response())
@@ -59,19 +63,50 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
         let _ = state.db.delete_session(&token_hash(&token)).await;
     }
     // Expire the cookie either way.
-    (session_cookie_headers("", 0), Json(serde_json::json!({}))).into_response()
+    (
+        session_cookie_headers("", 0, state.config.secure_cookies),
+        Json(serde_json::json!({})),
+    )
+        .into_response()
 }
 
 pub async fn me(AuthUser(user): AuthUser) -> Json<User> {
     Json(user)
 }
 
-fn session_cookie_headers(token: &str, max_age_secs: i64) -> HeaderMap {
-    let cookie =
+fn session_cookie_headers(token: &str, max_age_secs: i64, secure: bool) -> HeaderMap {
+    let mut cookie =
         format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}");
+    if secure {
+        cookie.push_str("; Secure");
+    }
     let mut headers = HeaderMap::new();
     if let Ok(value) = HeaderValue::from_str(&cookie) {
         headers.insert(header::SET_COOKIE, value);
     }
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::header;
+
+    fn cookie(headers: &HeaderMap) -> &str {
+        headers
+            .get(header::SET_COOKIE)
+            .expect("set-cookie present")
+            .to_str()
+            .expect("ascii cookie")
+    }
+
+    #[test]
+    fn session_cookie_secure_flag_follows_config() {
+        let plain = session_cookie_headers("tok", 60, false);
+        assert!(!cookie(&plain).contains("Secure"));
+        assert!(cookie(&plain).contains("HttpOnly"));
+
+        let secure = session_cookie_headers("tok", 60, true);
+        assert!(cookie(&secure).ends_with("; Secure"));
+    }
 }

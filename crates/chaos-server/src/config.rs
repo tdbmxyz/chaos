@@ -41,6 +41,10 @@ pub struct Config {
     /// Home Assistant integration (Home tab: temperature history + light
     /// control). Feature is off when `base_url` is `None`.
     pub home_assistant: HomeAssistantConfig,
+    /// Append `Secure` to the session cookie. Turn on when the server is
+    /// reached over HTTPS (reverse proxy with TLS); off by default because
+    /// plain-http LAN setups would otherwise lose their session cookie.
+    pub secure_cookies: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -135,6 +139,7 @@ impl Default for Config {
             bookmarks: Vec::new(),
             columns: Vec::new(),
             home_assistant: HomeAssistantConfig::default(),
+            secure_cookies: false,
         }
     }
 }
@@ -187,5 +192,19 @@ mod tests {
             config.bookmarks[0].links[0].android_package.as_deref(),
             Some("xyz.tdbm.yomu")
         );
+    }
+
+    #[test]
+    fn secure_cookies_defaults_off_and_parses() {
+        let config = super::Config::default();
+        assert!(!config.secure_cookies);
+
+        let config: super::Config = figment::Figment::from(
+            figment::providers::Serialized::defaults(super::Config::default()),
+        )
+        .merge(figment::providers::Toml::string("secure_cookies = true"))
+        .extract()
+        .expect("secure_cookies must parse");
+        assert!(config.secure_cookies);
     }
 }
