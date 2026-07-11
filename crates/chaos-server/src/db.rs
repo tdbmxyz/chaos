@@ -114,8 +114,11 @@ impl Db {
 
     pub async fn update_collection(&self, id: Uuid, req: &CollectionRequest) -> Result<Collection> {
         validate_name(&req.name)?;
-        // Walk + UPDATE share one transaction so a concurrent re-parent
-        // cannot slip a cycle in between the check and the write.
+        // Walk + UPDATE share one transaction, closing the check-then-act
+        // race on this row. Deferred BEGIN means two concurrent re-parents
+        // of *different* collections could still cross into a cycle; that
+        // needs BEGIN IMMEDIATE and hasn't been worth it for a single-user
+        // deployment.
         let mut tx = self.pool.begin().await?;
         if let Some(parent_id) = req.parent_id {
             ensure_no_collection_cycle(&mut tx, id, parent_id).await?;
