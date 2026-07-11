@@ -124,7 +124,11 @@ impl WidgetHub {
             }
             Err(reason) => {
                 if let Some(data) = self.cache.get_stale(&cache_key).await {
-                    tracing::warn!(key = cache_key, reason, "refresh failed, serving stale data");
+                    tracing::warn!(
+                        key = cache_key,
+                        reason,
+                        "refresh failed, serving stale data"
+                    );
                     return Ok(data);
                 }
                 tracing::warn!(key = cache_key, reason, "fetch failed");

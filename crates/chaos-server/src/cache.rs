@@ -99,7 +99,10 @@ mod tests {
     async fn fresh_within_ttl_stale_after() {
         let cache = StaleCache::new(4);
         cache.insert("k", 1u32).await;
-        assert_eq!(cache.get_fresh(&"k", Duration::from_secs(60)).await, Some(1));
+        assert_eq!(
+            cache.get_fresh(&"k", Duration::from_secs(60)).await,
+            Some(1)
+        );
         // A zero TTL makes any entry stale without sleeping.
         assert_eq!(cache.get_fresh(&"k", Duration::ZERO).await, None);
         assert_eq!(cache.get_stale(&"k").await, Some(1));
@@ -108,7 +111,10 @@ mod tests {
     #[tokio::test]
     async fn missing_keys_yield_nothing() {
         let cache: StaleCache<&str, u32> = StaleCache::new(4);
-        assert_eq!(cache.get_fresh(&"nope", Duration::from_secs(60)).await, None);
+        assert_eq!(
+            cache.get_fresh(&"nope", Duration::from_secs(60)).await,
+            None
+        );
         assert_eq!(cache.get_stale(&"nope").await, None);
     }
 

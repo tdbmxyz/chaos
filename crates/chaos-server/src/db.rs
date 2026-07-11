@@ -422,7 +422,9 @@ impl Db {
                 // over archived page content.
                 let pattern = format!(
                     "%{}%",
-                    q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+                    q.replace('\\', "\\\\")
+                        .replace('%', "\\%")
+                        .replace('_', "\\_")
                 );
                 qb.push(" AND (l.title LIKE ");
                 qb.push_bind(pattern.clone());
@@ -798,7 +800,10 @@ mod tests {
         let own = db.update_collection(a.id, &req("A", Some(a.id))).await;
         assert!(matches!(own, Err(DbError::Constraint(_))));
         // A legal re-parent (C under A directly) still works.
-        let moved = db.update_collection(c.id, &req("C", Some(a.id))).await.unwrap();
+        let moved = db
+            .update_collection(c.id, &req("C", Some(a.id)))
+            .await
+            .unwrap();
         assert_eq!(moved.parent_id, Some(a.id));
     }
 
@@ -892,15 +897,27 @@ mod tests {
             collection_id: None,
             tags: vec![],
         };
-        db.create_link(&titled("50% off", "https://example.com/percent"), false, None)
-            .await
-            .unwrap();
-        db.create_link(&titled("c:\\temp", "https://example.com/backslash"), false, None)
-            .await
-            .unwrap();
-        db.create_link(&titled("my_var", "https://example.com/underscore"), false, None)
-            .await
-            .unwrap();
+        db.create_link(
+            &titled("50% off", "https://example.com/percent"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        db.create_link(
+            &titled("c:\\temp", "https://example.com/backslash"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        db.create_link(
+            &titled("my_var", "https://example.com/underscore"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
         db.create_link(&titled("myxvar", "https://example.com/decoy"), false, None)
             .await
             .unwrap();
@@ -928,7 +945,12 @@ mod tests {
         let backslash = db.list_links(&search("\\")).await.unwrap();
         assert_eq!(backslash.total, 2, "backslash must match literally");
         assert!(backslash.items.iter().any(|l| l.title == "c:\\temp"));
-        assert!(backslash.items.iter().any(|l| l.title == "quarterly report"));
+        assert!(
+            backslash
+                .items
+                .iter()
+                .any(|l| l.title == "quarterly report")
+        );
 
         // Literal `%`: only the percent title, not everything.
         let percent = db.list_links(&search("50%")).await.unwrap();
@@ -943,7 +965,10 @@ mod tests {
         // The description arm uses the same pattern, and backslash
         // followed by `%` in one query is the original failure shape.
         let mixed = db.list_links(&search("c:\\data, 100%")).await.unwrap();
-        assert_eq!(mixed.total, 1, "backslash+percent must match the description");
+        assert_eq!(
+            mixed.total, 1,
+            "backslash+percent must match the description"
+        );
         assert_eq!(mixed.items[0].title, "quarterly report");
     }
 
