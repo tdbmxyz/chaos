@@ -197,7 +197,13 @@ fn parse_datetime(prop: &ical::property::Property) -> Option<(DateTime<Utc>, boo
                 .any(|(k, v)| k == "VALUE" && v.iter().any(|s| s == "DATE"))
         });
     if is_date {
-        let date = NaiveDate::parse_from_str(&raw[..8.min(raw.len())], "%Y%m%d").ok()?;
+        // Known limitation: all-day events are pinned to UTC midnight, so
+        // viewers in negative-UTC-offset zones see them start a day early.
+        // Fixing this means plumbing a display timezone through the whole
+        // calendar API — deliberately out of scope here.
+        let date = raw
+            .get(..8)
+            .and_then(|s| NaiveDate::parse_from_str(s, "%Y%m%d").ok())?;
         return Some((Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0)?), true));
     }
 
@@ -260,6 +266,13 @@ fn expand(event: &RawEvent, start: DateTime<Utc>, end: DateTime<Utc>, out: &mut 
         .after(window_start)
         .before(window_end)
         .all(MAX_OCCURRENCES);
+    if result.limited {
+        tracing::debug!(
+            title = event.title,
+            limit = MAX_OCCURRENCES,
+            "recurrence expansion truncated at MAX_OCCURRENCES"
+        );
+    }
     for date in result.dates {
         let starts_at = date.with_timezone(&Utc);
         if starts_at < end && starts_at + duration > start {
@@ -339,6 +352,18 @@ END:VCALENDAR\r\n";
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].title, "Standup");
         assert_eq!(out[0].description.as_deref(), Some("Daily sync"));
+    }
+
+    #[test]
+    fn parse_datetime_survives_multibyte_date_values() {
+        // 9 bytes: byte index 8 falls inside the two-byte 'é', so a naive
+        // `&raw[..8]` slice panics. Must return None instead.
+        let prop = ical::property::Property {
+            name: "DTSTART".into(),
+            params: Some(vec![("VALUE".into(), vec!["DATE".into()])]),
+            value: Some("2026071é".into()),
+        };
+        assert!(parse_datetime(&prop).is_none());
     }
 
     /// Serves `body` at /feed.ics on an ephemeral port; returns the URL.
