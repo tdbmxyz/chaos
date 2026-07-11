@@ -101,6 +101,9 @@ pub struct AlertTracker {
 
 impl AlertTracker {
     pub fn observe(&mut self, state: HealthState) -> Option<ServiceAlert> {
+        // Down and Degraded collapse into one "unhealthy" state on purpose:
+        // escalating from 5xx to unreachable while already notified would
+        // only add noise — the alert body carries the detail instead.
         let down = match state {
             HealthState::Down | HealthState::Degraded => true,
             HealthState::Up => false,
@@ -455,6 +458,18 @@ mod tests {
         assert_eq!(t.observe(Paused), None);
         assert_eq!(t.observe(Up), None, "streak restarted by the neutral state");
         assert_eq!(t.observe(Up), Some(ServiceAlert::Recovered));
+    }
+
+    #[test]
+    fn escalation_within_unhealthy_stays_silent() {
+        use HealthState::*;
+        let mut t = AlertTracker::default();
+        assert_eq!(t.observe(Degraded), None);
+        assert_eq!(t.observe(Degraded), Some(ServiceAlert::Down));
+        // Degraded worsening to Down is still "unhealthy, already told":
+        // deliberate noise reduction, the alert body carries the detail.
+        assert_eq!(t.observe(Down), None);
+        assert_eq!(t.observe(Down), None);
     }
 
     #[test]

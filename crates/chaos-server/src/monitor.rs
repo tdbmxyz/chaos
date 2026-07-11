@@ -57,7 +57,13 @@ async fn run(state: AppState) {
                         .or_default()
                         .observe(status.state)
                 {
-                    alerts.push((service.title.clone(), alert, status.error.clone()));
+                    // Degraded has no `error`; carry the HTTP status so the
+                    // phone notification says "HTTP 503", not just "failing".
+                    let detail = status
+                        .error
+                        .clone()
+                        .or_else(|| status.http_status.map(|code| format!("HTTP {code}")));
+                    alerts.push((service.title.clone(), alert, detail));
                 }
                 statuses.insert(service.id.clone(), status);
             }
