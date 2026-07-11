@@ -9,6 +9,7 @@ use leptos::task::spawn_local;
 use uuid::Uuid;
 
 use crate::components::Modal;
+use crate::hooks::debounce_signal;
 use crate::use_client;
 
 type CollectionsResource = LocalResource<chaos_client::Result<Vec<Collection>>>;
@@ -24,6 +25,34 @@ fn clamp_page(page: u32, total: u64, page_size: u32) -> u32 {
     page.min(pages - 1)
 }
 
+/// The list query for the current filters and page. When the filters differ
+/// from the previous query the page index is discarded — a filter change
+/// must show the first page. Deriving that here (instead of an effect that
+/// resets the page after the fact) means one filter change produces exactly
+/// one query value instead of a stale-page fetch followed by a reset fetch.
+fn effective_query(
+    prev: Option<&LinkQuery>,
+    collection_id: Option<Uuid>,
+    tag: Option<String>,
+    q: Option<String>,
+    page_index: u32,
+) -> LinkQuery {
+    let filters_changed =
+        prev.is_some_and(|p| p.collection_id != collection_id || p.tag != tag || p.q != q);
+    let offset = if filters_changed {
+        0
+    } else {
+        page_index * PAGE_SIZE
+    };
+    LinkQuery {
+        collection_id,
+        tag,
+        q,
+        limit: Some(PAGE_SIZE),
+        offset: Some(offset),
+    }
+}
+
 /// Links page: collection sidebar, tag filters, search, quick-add, link list
 /// and the edit dialogs. All mutations bump `refresh` to re-run the resources.
 #[component]
@@ -31,16 +60,24 @@ pub fn Links() -> impl IntoView {
     let refresh = RwSignal::new(0u32);
     let selected_collection = RwSignal::new(None::<Uuid>);
     let selected_tag = RwSignal::new(None::<String>);
-    let search = RwSignal::new(String::new());
+    let search_input = RwSignal::new(String::new());
+    let search = debounce_signal(search_input, Duration::from_millis(250));
     let page_index = RwSignal::new(0u32);
     let editing_link = RwSignal::new(None::<Link>);
     let editing_collection = RwSignal::new(None::<Collection>);
 
-    // Changing any filter jumps back to the first page.
-    let filters = Memo::new(move |_| (selected_collection.get(), selected_tag.get(), search.get()));
-    Effect::new(move |prev: Option<()>| {
-        filters.track();
-        if prev.is_some() {
+    let query = Memo::new(move |prev: Option<&LinkQuery>| {
+        effective_query(
+            prev,
+            selected_collection.get(),
+            selected_tag.get(),
+            Some(search.get()).filter(|q| !q.trim().is_empty()),
+            page_index.get(),
+        )
+    });
+    // Keep the pager display honest after a filter change discarded the page.
+    Effect::new(move |_| {
+        if query.get().offset == Some(0) {
             page_index.set(0);
         }
     });
@@ -50,13 +87,7 @@ pub fn Links() -> impl IntoView {
         let client = client.clone();
         move || {
             refresh.track();
-            let query = LinkQuery {
-                collection_id: selected_collection.get(),
-                tag: selected_tag.get(),
-                q: Some(search.get()).filter(|q| !q.trim().is_empty()),
-                limit: Some(PAGE_SIZE),
-                offset: Some(page_index.get() * PAGE_SIZE),
-            };
+            let query = query.get();
             let client = client.clone();
             async move { client.list_links(&query).await }
         }
@@ -91,8 +122,8 @@ pub fn Links() -> impl IntoView {
                     <input
                         type="search"
                         placeholder="Search links (includes archived page text)…"
-                        prop:value=search
-                        on:input=move |ev| search.set(event_target_value(&ev))
+                        prop:value=search_input
+                        on:input=move |ev| search_input.set(event_target_value(&ev))
                     />
                 </div>
                 <TagFilter tags selected=selected_tag/>
@@ -932,6 +963,33 @@ mod tests {
         assert!(excluded.contains(&b), "direct child is excluded");
         assert!(excluded.contains(&c), "grandchild is excluded");
         assert!(!excluded.contains(&sibling), "unrelated roots stay offered");
+    }
+
+    #[test]
+    fn effective_query_keeps_page_for_same_filters() {
+        let first = effective_query(None, None, Some("rust".into()), None, 2);
+        assert_eq!(first.offset, Some(2 * PAGE_SIZE));
+
+        let next = effective_query(Some(&first), None, Some("rust".into()), None, 3);
+        assert_eq!(next.offset, Some(3 * PAGE_SIZE));
+        assert_eq!(next.limit, Some(PAGE_SIZE));
+    }
+
+    #[test]
+    fn effective_query_resets_page_when_any_filter_changes() {
+        let base = effective_query(None, None, None, None, 4);
+        assert_eq!(base.offset, Some(4 * PAGE_SIZE));
+
+        let by_tag = effective_query(Some(&base), None, Some("rust".into()), None, 4);
+        assert_eq!(by_tag.offset, Some(0));
+
+        let by_search = effective_query(Some(&base), None, None, Some("query".into()), 4);
+        assert_eq!(by_search.offset, Some(0));
+
+        // Note: chaos-ui's uuid dep has no `v7` feature, so build one from
+        // raw bytes instead of Uuid::now_v7().
+        let by_collection = effective_query(Some(&base), Some(Uuid::from_u128(1)), None, None, 4);
+        assert_eq!(by_collection.offset, Some(0));
     }
 
     #[test]

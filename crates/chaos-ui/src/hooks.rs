@@ -21,6 +21,28 @@ pub(crate) fn use_interval_tick(interval: Duration) -> RwSignal<u32> {
     tick
 }
 
+/// A read-only signal that follows `source` once it has been stable for
+/// `delay` (a trailing debounce): typing in the search box only queries the
+/// server after the user pauses.
+pub(crate) fn debounce_signal(source: RwSignal<String>, delay: Duration) -> Signal<String> {
+    let out = RwSignal::new(source.get_untracked());
+    let generation = StoredValue::new(0u64);
+    Effect::new(move |_| {
+        let value = source.get();
+        let current = generation.with_value(|g| *g + 1);
+        generation.set_value(current);
+        set_timeout(
+            move || {
+                if generation.get_value() == current {
+                    out.set(value);
+                }
+            },
+            delay,
+        );
+    });
+    out.into()
+}
+
 /// A [`LocalResource`] re-run every `interval`, whenever the dashboard-wide
 /// [`RefreshTick`] bumps, and whenever `version` (an action's success
 /// counter, see [`use_action`]) changes. Pass `None` for resources without
