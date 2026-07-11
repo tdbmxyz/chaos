@@ -101,18 +101,26 @@ pub async fn events(
         .map(|(event, calendar_name, color)| local_event(event, calendar_name, color))
         .collect();
 
-    for calendar in state.db.list_calendars(user.id).await? {
-        if calendar.kind != CalendarKind::Ics {
-            continue;
-        }
-        let Some(url) = &calendar.ics_url else {
-            continue;
-        };
-        match state
-            .ics
-            .events(calendar.id, url, query.start, query.end)
-            .await
-        {
+    // ICS feeds are fetched concurrently: a broken feed costs one timeout,
+    // not one timeout per feed (same pattern as api/home.rs sensors).
+    let feeds: Vec<_> = state
+        .db
+        .list_calendars(user.id)
+        .await?
+        .into_iter()
+        .filter(|calendar| calendar.kind == CalendarKind::Ics && calendar.ics_url.is_some())
+        .collect();
+    let results = futures::future::join_all(feeds.iter().map(|calendar| {
+        state.ics.events(
+            calendar.id,
+            calendar.ics_url.as_deref().expect("filtered above"),
+            query.start,
+            query.end,
+        )
+    }))
+    .await;
+    for (calendar, result) in feeds.into_iter().zip(results) {
+        match result {
             Ok(feed_events) => out.extend(
                 feed_events
                     .into_iter()
