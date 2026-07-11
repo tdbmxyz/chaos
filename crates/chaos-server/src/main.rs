@@ -12,6 +12,7 @@ mod ics;
 mod import;
 mod metadata;
 mod monitor;
+mod notify;
 mod state;
 mod widgets;
 

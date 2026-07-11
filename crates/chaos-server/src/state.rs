@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::home_assistant::HomeAssistantClient;
 use crate::ics::FeedCache;
+use crate::notify::Notifier;
 use crate::widgets::WidgetHub;
 
 /// Shared application state, cheap to clone (all `Arc`s / pools inside).
@@ -29,12 +30,18 @@ pub struct AppState {
     pub home: Option<Arc<HomeAssistantClient>>,
     /// Failed-login backoff tracker (in-memory, per username+IP).
     pub login_throttle: Arc<crate::auth::LoginThrottle>,
+    /// ntfy publisher, when `[notifications]` is configured. Not yet read
+    /// outside tests — wired up by Task 3 (service alerts) and Task 4
+    /// (calendar reminders) of the notifications plan.
+    #[allow(dead_code)]
+    pub notifier: Option<Arc<Notifier>>,
 }
 
 impl AppState {
     pub fn new(config: Config, db: Db) -> anyhow::Result<Self> {
         let widgets = Arc::new(WidgetHub::new(&config));
         let home = HomeAssistantClient::new(&config.home_assistant)?.map(Arc::new);
+        let notifier = Notifier::new(&config.notifications)?.map(Arc::new);
         Ok(Self {
             config: Arc::new(config),
             db,
@@ -45,6 +52,7 @@ impl AppState {
             ics: Arc::new(FeedCache::default()),
             home,
             login_throttle: Arc::new(crate::auth::LoginThrottle::default()),
+            notifier,
         })
     }
 }
