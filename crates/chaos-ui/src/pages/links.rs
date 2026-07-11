@@ -216,8 +216,28 @@ fn with_depth(collections: &[Collection]) -> Vec<(usize, Collection)> {
     out
 }
 
+/// `root` plus every collection nested under it (breadth-first) — none of
+/// these may become `root`'s parent without creating a cycle. Robust to
+/// pre-existing cycle data via the visited check.
+fn descendant_ids(collections: &[Collection], root: Uuid) -> Vec<Uuid> {
+    let mut out = vec![root];
+    let mut i = 0;
+    while i < out.len() {
+        let parent = out[i];
+        let children: Vec<Uuid> = collections
+            .iter()
+            .filter(|c| c.parent_id == Some(parent) && !out.contains(&c.id))
+            .map(|c| c.id)
+            .collect();
+        out.extend(children);
+        i += 1;
+    }
+    out
+}
+
 /// Options of a collection <select>, hierarchy shown by indentation.
-/// `exclude` drops one collection (a collection cannot be its own parent).
+/// `exclude` drops a collection and its whole subtree (parenting under a
+/// descendant would create a cycle which with_depth can never render).
 #[component]
 fn CollectionOptions(
     collections: CollectionsResource,
@@ -225,19 +245,24 @@ fn CollectionOptions(
     exclude: Option<Uuid>,
 ) -> impl IntoView {
     move || match collections.get() {
-        Some(Ok(list)) => with_depth(&list)
-            .into_iter()
-            .filter(|(_, c)| Some(c.id) != exclude)
-            .map(|(depth, c)| {
-                let label = format!("{}{}", "\u{a0}\u{a0}".repeat(depth), c.name);
-                view! {
-                    <option value=c.id.to_string() selected=current == Some(c.id)>
-                        {label}
-                    </option>
-                }
-            })
-            .collect_view()
-            .into_any(),
+        Some(Ok(list)) => {
+            let excluded = exclude
+                .map(|id| descendant_ids(&list, id))
+                .unwrap_or_default();
+            with_depth(&list)
+                .into_iter()
+                .filter(|(_, c)| !excluded.contains(&c.id))
+                .map(|(depth, c)| {
+                    let label = format!("{}{}", "\u{a0}\u{a0}".repeat(depth), c.name);
+                    view! {
+                        <option value=c.id.to_string() selected=current == Some(c.id)>
+                            {label}
+                        </option>
+                    }
+                })
+                .collect_view()
+                .into_any()
+        }
         _ => ().into_any(),
     }
 }
@@ -863,6 +888,18 @@ fn EditCollectionModal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+
+    fn coll(id: Uuid, parent_id: Option<Uuid>) -> Collection {
+        Collection {
+            id,
+            name: "c".into(),
+            description: None,
+            color: None,
+            parent_id,
+            created_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn clamp_page_pulls_a_stranded_index_back_to_the_last_page() {
@@ -874,5 +911,35 @@ mod tests {
         assert_eq!(clamp_page(3, 0, 50), 0);
         // In-range indexes are untouched.
         assert_eq!(clamp_page(0, 10, 50), 0);
+    }
+
+    #[test]
+    fn descendant_ids_cover_the_subtree_but_not_siblings() {
+        let (a, b, c, sibling) = (
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            Uuid::from_u128(4),
+        );
+        let list = vec![
+            coll(a, None),
+            coll(b, Some(a)),
+            coll(c, Some(b)),
+            coll(sibling, None),
+        ];
+        let excluded = descendant_ids(&list, a);
+        assert!(excluded.contains(&a), "the collection itself is excluded");
+        assert!(excluded.contains(&b), "direct child is excluded");
+        assert!(excluded.contains(&c), "grandchild is excluded");
+        assert!(!excluded.contains(&sibling), "unrelated roots stay offered");
+    }
+
+    #[test]
+    fn descendant_ids_terminates_on_pre_existing_cycle_data() {
+        // If bad data already contains a cycle, the walk must not spin.
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let list = vec![coll(a, Some(b)), coll(b, Some(a))];
+        let excluded = descendant_ids(&list, a);
+        assert!(excluded.contains(&a) && excluded.contains(&b));
     }
 }
