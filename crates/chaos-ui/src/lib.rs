@@ -7,6 +7,7 @@ mod date_util;
 mod echarts;
 mod hooks;
 mod pages;
+mod search;
 
 use chaos_client::ChaosClient;
 use chaos_domain::User;
@@ -440,6 +441,18 @@ pub fn App(config: AppConfig) -> impl IntoView {
     provide_context(theme);
     Effect::new(move |_| apply_theme(&theme.0.get()));
 
+    // Global quick-search: Ctrl-K (Cmd-K on mac) toggles the overlay from
+    // anywhere. Window-level listener, removed on unmount like the click
+    // interceptor below.
+    let search_open = RwSignal::new(false);
+    let search_keys = window_event_listener(leptos::ev::keydown, move |ev| {
+        if (ev.ctrl_key() || ev.meta_key()) && ev.key().eq_ignore_ascii_case("k") {
+            ev.prevent_default();
+            search_open.update(|o| *o = !*o);
+        }
+    });
+    on_cleanup(move || search_keys.remove());
+
     // Inside a shell, clicking an outbound link must not navigate the
     // webview: one document-level interceptor reroutes every external
     // http(s) anchor through the system opener (covers all target="_blank"
@@ -473,6 +486,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
         <ServerGate>
         <Router>
             <ShareRedirect/>
+            <search::QuickSearch open=search_open/>
             <nav class="topbar">
                 <span class="brand">"chaos"</span>
                 <A href="/"><span class="nav-icon">"▦"</span>"Dashboard"</A>
@@ -480,6 +494,15 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <A href="/calendar"><span class="nav-icon">"▣"</span>"Calendar"</A>
                 <A href="/weather"><span class="nav-icon">"☀"</span>"Weather"</A>
                 <A href="/home"><span class="nav-icon">"⌂"</span>"Home"</A>
+                <button
+                    class="topbar-search"
+                    title="Search (Ctrl-K)"
+                    on:click=move |_| search_open.set(true)
+                >
+                    <span class="nav-icon">"⌕"</span>
+                    "Search"
+                    <kbd>"Ctrl K"</kbd>
+                </button>
                 <span class="topbar-foot">
                     <A href="/settings"><span class="nav-icon">"⚙"</span>"Settings"</A>
                     <A href="/about"><span class="nav-icon">"ⓘ"</span>"About"</A>
@@ -513,6 +536,10 @@ pub fn App(config: AppConfig) -> impl IntoView {
                         </A>
                     })
                     .collect_view()}
+                <button class="tab-search" on:click=move |_| search_open.set(true)>
+                    <span class="tab-icon">"⌕"</span>
+                    <span class="tab-label">"Search"</span>
+                </button>
             </nav>
             <main>
                 <Routes fallback=|| view! { <p class="muted">"Page not found"</p> }>
