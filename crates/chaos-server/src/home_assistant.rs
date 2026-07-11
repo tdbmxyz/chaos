@@ -152,6 +152,10 @@ impl HomeAssistantClient {
         for changes in raw {
             if let Some(entity_id) = changes.first().and_then(|c| c.entity_id.clone()) {
                 by_entity.insert(entity_id, changes);
+            } else if !changes.is_empty() {
+                tracing::warn!(
+                    "history array without entity_id on its first entry; dropping it"
+                );
             }
         }
 
