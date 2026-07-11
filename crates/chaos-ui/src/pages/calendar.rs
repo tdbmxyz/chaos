@@ -127,9 +127,7 @@ fn CalendarView() -> impl IntoView {
 
     let shift = move |delta: i32| {
         month.update(|(year, m)| {
-            let total = *year * 12 + (*m as i32 - 1) + delta;
-            *year = total.div_euclid(12);
-            *m = (total.rem_euclid(12) + 1) as u32;
+            (*year, *m) = crate::date_util::shift_month(*year, *m, delta);
         });
     };
 
@@ -270,9 +268,13 @@ fn CalendarView() -> impl IntoView {
 
 /// UTC range covering the 6-week grid shown for (year, month), in local time.
 fn grid_utc_range((year, month): (i32, u32)) -> (DateTime<Utc>, DateTime<Utc>) {
-    let first = NaiveDate::from_ymd_opt(year, month, 1).unwrap_or_default();
-    let start = first - Days::new(first.weekday().num_days_from_monday() as u64);
-    (local_midnight(start), local_midnight(start + Days::new(42)))
+    // The fallback is unreachable through the UI (shift_month only produces
+    // valid months); NaiveDate::default() keeps the function total.
+    let start = crate::date_util::grid_start(year, month).unwrap_or_default();
+    (
+        local_midnight(start),
+        local_midnight(start + Days::new(crate::date_util::GRID_DAYS)),
+    )
 }
 
 fn local_midnight(date: NaiveDate) -> DateTime<Utc> {
@@ -326,9 +328,8 @@ fn MonthGrid(
     events: Vec<CalendarEvent>,
 ) -> impl IntoView {
     let mut by_day: HashMap<NaiveDate, Vec<CalendarEvent>> = HashMap::new();
-    let first = NaiveDate::from_ymd_opt(month.0, month.1, 1).unwrap_or_default();
-    let start = first - Days::new(first.weekday().num_days_from_monday() as u64);
-    for i in 0..42u64 {
+    let start = crate::date_util::grid_start(month.0, month.1).unwrap_or_default();
+    for i in 0..crate::date_util::GRID_DAYS {
         let day = start + Days::new(i);
         by_day.insert(
             day,
@@ -342,7 +343,7 @@ fn MonthGrid(
                 .into_iter()
                 .map(|day| view! { <span class="calendar-weekday muted">{day}</span> })
                 .collect_view()}
-            {(0..42u64)
+            {(0..crate::date_util::GRID_DAYS)
                 .map(|i| {
                     let day = start + Days::new(i);
                     let day_events = by_day.remove(&day).unwrap_or_default();

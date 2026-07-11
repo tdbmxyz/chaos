@@ -4,7 +4,7 @@ use chaos_domain::{
     BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, ServerStats, SystemdAction,
     SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
 };
-use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -483,9 +483,7 @@ fn CalendarWidget() -> impl IntoView {
 
     let shift = move |delta: i32| {
         month.update(|(year, m)| {
-            let total = *year * 12 + (*m as i32 - 1) + delta;
-            *year = total.div_euclid(12);
-            *m = (total.rem_euclid(12) + 1) as u32;
+            (*year, *m) = crate::date_util::shift_month(*year, *m, delta);
         });
     };
 
@@ -527,26 +525,21 @@ fn CalendarWidget() -> impl IntoView {
 
 /// Six fixed weeks around the shown month, starting on Monday.
 fn calendar_cells((year, month): (i32, u32), today: NaiveDate) -> impl IntoView {
-    let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
+    let Some(days) = crate::date_util::month_grid(year, month) else {
         return ().into_any();
     };
-    let offset = first.weekday().num_days_from_monday() as u64;
-    let start = first - Days::new(offset);
-
-    (0..42u64)
-        .map(|i| {
-            let date = start + Days::new(i);
-            let mut class = String::from("calendar-cell");
-            if date.month() != month {
-                class.push_str(" other");
-            }
-            if date == today {
-                class.push_str(" today");
-            }
-            view! { <span class=class>{date.day()}</span> }
-        })
-        .collect_view()
-        .into_any()
+    days.map(|date| {
+        let mut class = String::from("calendar-cell");
+        if date.month() != month {
+            class.push_str(" other");
+        }
+        if date == today {
+            class.push_str(" today");
+        }
+        view! { <span class=class>{date.day()}</span> }
+    })
+    .collect_view()
+    .into_any()
 }
 
 #[component]
