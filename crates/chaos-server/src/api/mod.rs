@@ -7,6 +7,7 @@ mod error;
 mod home;
 mod icons;
 mod links;
+mod search;
 mod services;
 mod widgets;
 
@@ -67,6 +68,7 @@ pub fn router(state: AppState) -> Router {
             put(collections::update).delete(collections::delete),
         )
         .route("/tags", get(links::tags))
+        .route("/search", get(search::search))
         .with_state(state.clone());
 
     let mut app = Router::new().nest("/api/v1", api);

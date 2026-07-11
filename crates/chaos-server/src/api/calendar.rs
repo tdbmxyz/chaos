@@ -92,10 +92,23 @@ pub async fn events(
     if query.end <= query.start {
         return Err(ApiError::Unprocessable("end must be after start".into()));
     }
+    Ok(Json(
+        merged_events(&state, user.id, query.start, query.end).await?,
+    ))
+}
 
+/// Merged events (local + ICS feeds) of one user's calendars in
+/// [start, end), sorted by start. Shared by the events endpoint and the
+/// global quick-search.
+pub(crate) async fn merged_events(
+    state: &AppState,
+    user_id: Uuid,
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<CalendarEvent>, ApiError> {
     let mut out: Vec<CalendarEvent> = state
         .db
-        .events_between(user.id, query.start, query.end)
+        .events_between(user_id, start, end)
         .await?
         .into_iter()
         .map(|(event, calendar_name, color)| local_event(event, calendar_name, color))
@@ -105,7 +118,7 @@ pub async fn events(
     // not one timeout per feed (same pattern as api/home.rs sensors).
     let feeds: Vec<_> = state
         .db
-        .list_calendars(user.id)
+        .list_calendars(user_id)
         .await?
         .into_iter()
         .filter(|calendar| calendar.kind == CalendarKind::Ics && calendar.ics_url.is_some())
@@ -114,8 +127,8 @@ pub async fn events(
         state.ics.events(
             calendar.id,
             calendar.ics_url.as_deref().expect("filtered above"),
-            query.start,
-            query.end,
+            start,
+            end,
         )
     }))
     .await;
@@ -133,7 +146,7 @@ pub async fn events(
     }
 
     out.sort_by_key(|event| event.starts_at);
-    Ok(Json(out))
+    Ok(out)
 }
 
 /// Drop the cached copy of every ICS feed the user subscribes to, so the
