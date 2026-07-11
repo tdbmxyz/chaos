@@ -136,7 +136,7 @@ fn ServicesWidget() -> impl IntoView {
     // Re-render only when the payload actually changes; a poll returning
     // identical data must not tear down the grid (that recreated every
     // service icon <img> and reset IconOrLetter fallback state). Errors are
-    // stringified because chaos_client::Error is not PartialEq.
+    // stringified because chaos_client::ClientError is not PartialEq.
     let services = Memo::new(move |_| services.get().map(|r| r.map_err(|e| e.to_string())));
 
     let run = Callback::new(move |(id, action): (String, SystemdAction)| {
