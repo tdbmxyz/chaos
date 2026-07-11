@@ -73,6 +73,11 @@ const THROTTLE_BASE_DELAY: Duration = Duration::from_millis(500);
 const THROTTLE_MAX_DELAY: Duration = Duration::from_secs(30);
 /// A pair with no failures for this long is forgotten.
 const THROTTLE_RESET: Duration = Duration::from_secs(15 * 60);
+/// Bound on tracked pairs: a spray of random usernames/XFF values must not
+/// grow the map forever. Expired entries are pruned first; if every entry
+/// is live the map is simply full and new pairs go untracked until one
+/// expires — losing throttle precision under attack beats losing memory.
+const THROTTLE_MAX_PAIRS: usize = 1024;
 
 /// Delay owed after `failures` consecutive failures: nothing for the first
 /// few (typos), then exponential backoff capped at [`THROTTLE_MAX_DELAY`].
@@ -108,6 +113,12 @@ impl LoginThrottle {
 
     pub fn record_failure(&self, key: &str) {
         let mut attempts = self.attempts.lock().expect("throttle lock");
+        if !attempts.contains_key(key) && attempts.len() >= THROTTLE_MAX_PAIRS {
+            attempts.retain(|_, (_, last)| last.elapsed() < THROTTLE_RESET);
+            if attempts.len() >= THROTTLE_MAX_PAIRS {
+                return;
+            }
+        }
         let entry = attempts
             .entry(key.to_string())
             .or_insert((0, Instant::now()));
@@ -268,6 +279,23 @@ mod tests {
         assert_eq!(throttle.delay("tibo|5.6.7.8"), Duration::ZERO);
         throttle.clear("tibo|1.2.3.4");
         assert_eq!(throttle.delay("tibo|1.2.3.4"), Duration::ZERO);
+    }
+
+    #[test]
+    fn throttle_map_is_bounded_against_key_spray() {
+        let throttle = LoginThrottle::default();
+        for i in 0..(THROTTLE_MAX_PAIRS + 100) {
+            throttle.record_failure(&format!("user{i}|1.2.3.4"));
+        }
+        let len = throttle.attempts.lock().unwrap().len();
+        assert!(
+            len <= THROTTLE_MAX_PAIRS,
+            "spraying unique keys must not grow the map past the cap (got {len})"
+        );
+        // Known pairs keep being tracked.
+        throttle.record_failure("user1|1.2.3.4");
+        let (failures, _) = throttle.attempts.lock().unwrap()["user1|1.2.3.4"];
+        assert_eq!(failures, 2);
     }
 
     #[test]
