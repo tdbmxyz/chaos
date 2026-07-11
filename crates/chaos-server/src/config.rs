@@ -30,6 +30,9 @@ pub struct Config {
     pub search_url: Option<String>,
     pub monitor: MonitorConfig,
     pub archive: ArchiveConfig,
+    /// Scheduled database backups (`VACUUM INTO` snapshots). Off unless
+    /// `enabled = true`.
+    pub backup: BackupConfig,
     /// Services shown (and polled) on the dashboard.
     pub services: Vec<ServiceDef>,
     /// Static bookmark groups shown on the dashboard.
@@ -154,6 +157,32 @@ impl Default for ArchiveConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct BackupConfig {
+    /// Master switch for the scheduled backup task.
+    pub enabled: bool,
+    /// Directory where snapshots land (`chaos-<timestamp>.db`). Relative
+    /// paths resolve against the working directory (`/var/lib/chaos`
+    /// under the NixOS module), like `db_path` and `archive.dir`.
+    pub dir: PathBuf,
+    /// Hours between two snapshots (clamped to at least 1).
+    pub interval_hours: u64,
+    /// How many snapshots to keep; older ones are pruned after each run.
+    pub keep: usize,
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dir: PathBuf::from("backups"),
+            interval_hours: 24,
+            keep: 14,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MonitorConfig {
     /// Seconds between two polling sweeps.
     pub interval_secs: u64,
@@ -171,6 +200,7 @@ impl Default for Config {
             search_url: None,
             monitor: MonitorConfig::default(),
             archive: ArchiveConfig::default(),
+            backup: BackupConfig::default(),
             services: Vec::new(),
             bookmarks: Vec::new(),
             columns: Vec::new(),
@@ -275,5 +305,27 @@ mod tests {
         let default = super::Config::default();
         assert!(default.notifications.ntfy_url.is_none());
         assert_eq!(default.notifications.reminder_lead_minutes, 15);
+    }
+
+    #[test]
+    fn backup_section_parses_and_defaults_are_sane() {
+        let toml = r#"
+            [backup]
+            enabled = true
+        "#;
+        let config: super::Config = figment::Figment::from(
+            figment::providers::Serialized::defaults(super::Config::default()),
+        )
+        .merge(figment::providers::Toml::string(toml))
+        .extract()
+        .expect("backup section must parse");
+        assert!(config.backup.enabled);
+        assert_eq!(config.backup.dir, std::path::PathBuf::from("backups"));
+        assert_eq!(config.backup.interval_hours, 24);
+        assert_eq!(config.backup.keep, 14);
+        assert!(
+            !super::Config::default().backup.enabled,
+            "backups are opt-in"
+        );
     }
 }

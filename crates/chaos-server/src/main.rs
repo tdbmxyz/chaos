@@ -1,6 +1,7 @@
 mod api;
 mod archiver;
 mod auth;
+mod backup;
 mod cache;
 mod config;
 mod db;
@@ -63,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
 
     monitor::spawn(state.clone());
     archiver::spawn(state.clone());
+    backup::spawn(state.clone());
     if state.notifier.is_some() && state.config.notifications.calendar_reminders {
         notify::spawn_reminders(state.clone());
     }
