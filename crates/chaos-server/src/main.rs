@@ -6,6 +6,7 @@ mod db;
 mod db_auth;
 mod db_calendar;
 mod home_assistant;
+mod http_util;
 mod ics;
 mod import;
 mod metadata;
