@@ -86,7 +86,7 @@ impl EventDraft {
             calendar_id: Some(event.calendar_id),
             title: event.title.clone(),
             location: event.location.clone().unwrap_or_default(),
-            description: String::new(),
+            description: event.description.clone().unwrap_or_default(),
             all_day: event.all_day,
             start_date,
             start_time: starts.time(),
@@ -813,5 +813,38 @@ fn CalendarsDialog(calendars: Vec<Calendar>, on_done: Callback<bool>) -> impl In
                 </div>
             </form>
         </Modal>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Editing must load every event field into the draft: updates are
+    /// full-replacement PUTs, so a field the draft drops is a field the
+    /// save deletes.
+    #[test]
+    fn edit_carries_over_the_description() {
+        let event = CalendarEvent {
+            id: Some(Uuid::from_u128(1)),
+            calendar_id: Uuid::from_u128(2),
+            calendar_name: "Perso".into(),
+            color: None,
+            title: "Dentist".into(),
+            description: Some("Bring the x-rays".into()),
+            location: Some("12 rue des Lilas".into()),
+            starts_at: Utc.with_ymd_and_hms(2026, 7, 11, 9, 0, 0).unwrap(),
+            ends_at: Utc.with_ymd_and_hms(2026, 7, 11, 10, 0, 0).unwrap(),
+            all_day: false,
+        };
+
+        let draft = EventDraft::edit(&event);
+
+        assert_eq!(draft.title, "Dentist");
+        assert_eq!(draft.location, "12 rue des Lilas");
+        assert_eq!(
+            draft.description, "Bring the x-rays",
+            "editing an event must not blank its description"
+        );
     }
 }
