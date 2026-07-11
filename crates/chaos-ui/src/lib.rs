@@ -3,6 +3,7 @@
 //! (like where the API lives) is injected from the outside via [`AppConfig`].
 
 mod components;
+mod date_util;
 mod echarts;
 mod pages;
 
