@@ -114,8 +114,11 @@ impl Db {
 
     pub async fn update_collection(&self, id: Uuid, req: &CollectionRequest) -> Result<Collection> {
         validate_name(&req.name)?;
+        // Walk + UPDATE share one transaction so a concurrent re-parent
+        // cannot slip a cycle in between the check and the write.
+        let mut tx = self.pool.begin().await?;
         if let Some(parent_id) = req.parent_id {
-            self.ensure_no_collection_cycle(id, parent_id).await?;
+            ensure_no_collection_cycle(&mut tx, id, parent_id).await?;
         }
         let result = sqlx::query(
             "UPDATE collections SET name = ?, description = ?, color = ?, parent_id = ?
@@ -131,12 +134,13 @@ impl Db {
         .bind(&req.color)
         .bind(req.parent_id.map(|p| p.to_string()))
         .bind(id.to_string())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_reference_err)?;
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound);
         }
+        tx.commit().await?;
         self.get_collection(id).await
     }
 
@@ -159,31 +163,6 @@ impl Db {
             .await?
             .ok_or(DbError::NotFound)?;
         Collection::try_from(row)
-    }
-
-    /// Reject a `parent_id` that would make `id` an ancestor of itself.
-    async fn ensure_no_collection_cycle(&self, id: Uuid, new_parent: Uuid) -> Result<()> {
-        let mut cursor = Some(new_parent.to_string());
-        let id = id.to_string();
-        // Bounded walk: deeper nesting than this is certainly a data bug.
-        for _ in 0..64 {
-            let Some(current) = cursor else {
-                return Ok(());
-            };
-            if current == id {
-                return Err(DbError::Constraint(
-                    "collection cannot be its own ancestor".into(),
-                ));
-            }
-            cursor = sqlx::query_scalar::<_, Option<String>>(
-                "SELECT parent_id FROM collections WHERE id = ?",
-            )
-            .bind(current)
-            .fetch_optional(&self.pool)
-            .await?
-            .flatten();
-        }
-        Err(DbError::Constraint("collection nesting too deep".into()))
     }
 
     // ---- tags ----
@@ -513,6 +492,36 @@ impl Db {
     }
 }
 
+/// Reject a `parent_id` that would make `id` an ancestor of itself. Runs on
+/// the caller's transaction so the walk and the subsequent UPDATE are atomic.
+async fn ensure_no_collection_cycle(
+    conn: &mut sqlx::SqliteConnection,
+    id: Uuid,
+    new_parent: Uuid,
+) -> Result<()> {
+    let mut cursor = Some(new_parent.to_string());
+    let id = id.to_string();
+    // Bounded walk: deeper nesting than this is certainly a data bug.
+    for _ in 0..64 {
+        let Some(current) = cursor else {
+            return Ok(());
+        };
+        if current == id {
+            return Err(DbError::Constraint(
+                "collection cannot be its own ancestor".into(),
+            ));
+        }
+        cursor = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT parent_id FROM collections WHERE id = ?",
+        )
+        .bind(current)
+        .fetch_optional(&mut *conn)
+        .await?
+        .flatten();
+    }
+    Err(DbError::Constraint("collection nesting too deep".into()))
+}
+
 /// Replace the tag set of a link: upsert tag names, rewrite the junction
 /// rows, drop tags that no longer tag anything.
 async fn set_link_tags(
@@ -758,6 +767,31 @@ mod tests {
         let remaining = db.list_collections().await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].parent_id, None);
+    }
+
+    #[tokio::test]
+    async fn cycle_guard_spans_grandchildren() {
+        let db = Db::in_memory().await.unwrap();
+        let req = |name: &str, parent_id: Option<Uuid>| CollectionRequest {
+            name: name.into(),
+            description: None,
+            color: None,
+            parent_id,
+        };
+
+        let a = db.create_collection(&req("A", None)).await.unwrap();
+        let b = db.create_collection(&req("B", Some(a.id))).await.unwrap();
+        let c = db.create_collection(&req("C", Some(b.id))).await.unwrap();
+
+        // A cannot be re-parented under its grandchild…
+        let deep = db.update_collection(a.id, &req("A", Some(c.id))).await;
+        assert!(matches!(deep, Err(DbError::Constraint(_))));
+        // …nor under itself.
+        let own = db.update_collection(a.id, &req("A", Some(a.id))).await;
+        assert!(matches!(own, Err(DbError::Constraint(_))));
+        // A legal re-parent (C under A directly) still works.
+        let moved = db.update_collection(c.id, &req("C", Some(a.id))).await.unwrap();
+        assert_eq!(moved.parent_id, Some(a.id));
     }
 
     #[tokio::test]
