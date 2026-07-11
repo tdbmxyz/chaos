@@ -5,6 +5,7 @@
 mod components;
 mod date_util;
 mod echarts;
+mod hooks;
 mod pages;
 
 use chaos_client::ChaosClient;

@@ -6,7 +6,6 @@ use chaos_domain::{
 };
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 
 use crate::components::ServiceGrid;
 use crate::use_client;
@@ -16,10 +15,6 @@ const SERVICES_REFRESH: Duration = Duration::from_secs(30);
 /// dashboard picks the fresh cache up.
 const WIDGET_REFRESH: Duration = Duration::from_secs(300);
 
-/// Bumped by the manual refresh button; every widget resource tracks it.
-#[derive(Clone, Copy)]
-struct RefreshTick(RwSignal<u32>);
-
 /// Busy flag + action dispatcher backing the systemd control buttons.
 type SystemdControls = (RwSignal<bool>, Callback<(String, SystemdAction)>);
 
@@ -27,7 +22,7 @@ type SystemdControls = (RwSignal<bool>, Callback<(String, SystemdAction)>);
 pub fn Dashboard() -> impl IntoView {
     let client = use_client();
     let refresh = RwSignal::new(0u32);
-    provide_context(RefreshTick(refresh));
+    provide_context(crate::hooks::RefreshTick(refresh));
 
     let layout = LocalResource::new({
         let client = client.clone();
@@ -103,31 +98,23 @@ fn WidgetView(instance: WidgetInstance) -> impl IntoView {
 #[component]
 fn ServicesWidget() -> impl IntoView {
     let client = use_client();
-    let refresh = use_context::<RefreshTick>();
-
-    let tick = RwSignal::new(0u32);
-    if let Ok(handle) = set_interval_with_handle(move || tick.update(|n| *n += 1), SERVICES_REFRESH)
-    {
-        on_cleanup(move || handle.clear());
-    }
 
     // Bumped after a start/stop of an on-demand service so its tile flips
     // to the fresh state right away instead of on the next poll.
-    let version = RwSignal::new(0u32);
-    let busy = RwSignal::new(false);
-    let action_error = RwSignal::new(None::<String>);
+    let (action, run) = crate::hooks::use_action({
+        let client = client.clone();
+        move |(id, action): (String, SystemdAction)| {
+            let client = client.clone();
+            async move { client.service_action(&id, action).await }
+        }
+    });
     // Owned here, not inside Collapsible, so an expanded list stays expanded
     // when the 30s poll re-renders the widget body.
     let collapsed = RwSignal::new(true);
 
-    let services = LocalResource::new({
+    let services = crate::hooks::use_polled_resource(SERVICES_REFRESH, Some(action.version), {
         let client = client.clone();
         move || {
-            tick.track();
-            version.track();
-            if let Some(RefreshTick(refresh)) = refresh {
-                refresh.track();
-            }
             let client = client.clone();
             async move { client.services().await }
         }
@@ -139,30 +126,17 @@ fn ServicesWidget() -> impl IntoView {
     // stringified because chaos_client::ClientError is not PartialEq.
     let services = Memo::new(move |_| services.get().map(|r| r.map_err(|e| e.to_string())));
 
-    let run = Callback::new(move |(id, action): (String, SystemdAction)| {
-        let client = client.clone();
-        busy.set(true);
-        action_error.set(None);
-        spawn_local(async move {
-            match client.service_action(&id, action).await {
-                Ok(_) => version.update(|n| *n += 1),
-                Err(err) => action_error.set(Some(err.to_string())),
-            }
-            busy.set(false);
-        });
-    });
-
     view! {
         <section class="widget widget-services">
             <h2>"Services"</h2>
-            {move || action_error.get().map(|err| view! { <p class="error">{err}</p> })}
+            {move || action.error.get().map(|err| view! { <p class="error">{err}</p> })}
             {move || match services.get() {
                 None => view! { <p class="muted">"Checking services…"</p> }.into_any(),
                 Some(Ok(list)) => {
                     let count = list.len();
                     view! {
                         <Collapsible count collapsed>
-                            <ServiceGrid services=list controls=(busy, run)/>
+                            <ServiceGrid services=list controls=(action.busy, run)/>
                         </Collapsible>
                     }
                         .into_any()
@@ -180,12 +154,6 @@ fn ServicesWidget() -> impl IntoView {
 #[component]
 fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     let client = use_client();
-    let refresh = use_context::<RefreshTick>();
-
-    let tick = RwSignal::new(0u32);
-    if let Ok(handle) = set_interval_with_handle(move || tick.update(|n| *n += 1), WIDGET_REFRESH) {
-        on_cleanup(move || handle.clear());
-    }
 
     // Kind class so layout variants can reorder/span widgets in CSS.
     let kind = match &widget {
@@ -223,15 +191,14 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     // Device preference: weather follows the location set on /settings.
     let weather_location =
         matches!(widget, Widget::Weather { .. }).then(|| crate::pref(crate::WEATHER_LOCATION_KEY));
-    let data = LocalResource::new(move || {
-        tick.track();
-        if let Some(RefreshTick(refresh)) = refresh {
-            refresh.track();
-        }
+    let data = crate::hooks::use_polled_resource(WIDGET_REFRESH, None, {
         let client = client.clone();
-        let id = id.clone();
-        let location = weather_location.clone().flatten();
-        async move { client.widget_data(&id, location.as_deref()).await }
+        move || {
+            let client = client.clone();
+            let id = id.clone();
+            let location = weather_location.clone().flatten();
+            async move { client.widget_data(&id, location.as_deref()).await }
+        }
     });
 
     // WidgetData is PartialEq; skip subtree rebuilds when a refresh returns
@@ -335,29 +302,28 @@ fn Collapsible(count: usize, collapsed: RwSignal<bool>, children: Children) -> i
 #[component]
 fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
     let client = use_client();
-    let refresh = use_context::<RefreshTick>();
     let title = title.unwrap_or_else(|| "Service control".into());
 
     // Unit states change on their own (crashes, timers), so poll like the
-    // services grid does; `version` bumps after our own control actions.
-    let tick = RwSignal::new(0u32);
-    if let Ok(handle) = set_interval_with_handle(move || tick.update(|n| *n += 1), SERVICES_REFRESH)
-    {
-        on_cleanup(move || handle.clear());
-    }
-    let version = RwSignal::new(0u32);
-    let busy = RwSignal::new(false);
-    let action_error = RwSignal::new(None::<String>);
+    // services grid does; a successful control action bumps the version.
+    let (action, run) = crate::hooks::use_action({
+        let client = client.clone();
+        let id = id.clone();
+        move |(unit, action): (String, SystemdAction)| {
+            let client = client.clone();
+            let id = id.clone();
+            async move {
+                client
+                    .systemd_action(&id, &SystemdActionRequest { unit, action })
+                    .await
+            }
+        }
+    });
 
-    let data = LocalResource::new({
+    let data = crate::hooks::use_polled_resource(SERVICES_REFRESH, Some(action.version), {
         let client = client.clone();
         let id = id.clone();
         move || {
-            tick.track();
-            version.track();
-            if let Some(RefreshTick(refresh)) = refresh {
-                refresh.track();
-            }
             let client = client.clone();
             let id = id.clone();
             async move { client.widget_data(&id, None).await }
@@ -368,31 +334,14 @@ fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
     // their control buttons) when they do.
     let data = Memo::new(move |_| data.get().map(|r| r.map_err(|e| e.to_string())));
 
-    let run = Callback::new(move |(unit, action): (String, SystemdAction)| {
-        let client = client.clone();
-        let id = id.clone();
-        busy.set(true);
-        action_error.set(None);
-        spawn_local(async move {
-            match client
-                .systemd_action(&id, &SystemdActionRequest { unit, action })
-                .await
-            {
-                Ok(_) => version.update(|n| *n += 1),
-                Err(err) => action_error.set(Some(err.to_string())),
-            }
-            busy.set(false);
-        });
-    });
-
     view! {
         <section class="widget widget-systemd">
             <h2>{title}</h2>
-            {move || action_error.get().map(|err| view! { <p class="error">{err}</p> })}
+            {move || action.error.get().map(|err| view! { <p class="error">{err}</p> })}
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
                 Some(Ok(WidgetData::Systemd { units })) => {
-                    systemd_rows(units, Some((busy, run))).into_any()
+                    systemd_rows(units, Some((action.busy, run))).into_any()
                 }
                 Some(Ok(_)) => view! { <p class="error">"Unexpected widget data"</p> }.into_any(),
                 Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
