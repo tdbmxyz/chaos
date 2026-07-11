@@ -27,18 +27,31 @@ pub(crate) fn use_interval_tick(interval: Duration) -> RwSignal<u32> {
 pub(crate) fn debounce_signal(source: RwSignal<String>, delay: Duration) -> Signal<String> {
     let out = RwSignal::new(source.get_untracked());
     let generation = StoredValue::new(0u64);
+    // Like use_interval_tick, the pending timer is cleared on owner
+    // disposal (and superseded runs are also fenced by `generation`).
+    let pending = StoredValue::new(None::<TimeoutHandle>);
     Effect::new(move |_| {
         let value = source.get();
         let current = generation.with_value(|g| *g + 1);
         generation.set_value(current);
-        set_timeout(
+        let handle = set_timeout_with_handle(
             move || {
                 if generation.get_value() == current {
                     out.set(value);
                 }
             },
             delay,
-        );
+        )
+        .ok();
+        if let Some(previous) = pending.with_value(|p| *p) {
+            previous.clear();
+        }
+        pending.set_value(handle);
+    });
+    on_cleanup(move || {
+        if let Some(handle) = pending.with_value(|p| *p) {
+            handle.clear();
+        }
     });
     out.into()
 }

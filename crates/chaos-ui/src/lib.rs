@@ -379,8 +379,12 @@ pub fn use_client() -> ChaosClient {
     match use_context::<SharedClient>() {
         Some(SharedClient(client)) => client.with_token(token),
         // Components rendered outside App (tests, shells) fall back to a
-        // one-off client.
-        None => ChaosClient::new(config.api_base).with_token(token),
+        // one-off client. Logged so a refactor that loses the context shows
+        // up instead of silently rebuilding a client per call.
+        None => {
+            leptos::logging::debug_warn!("use_client: no SharedClient in context");
+            ChaosClient::new(config.api_base).with_token(token)
+        }
     }
 }
 

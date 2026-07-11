@@ -71,9 +71,11 @@ mod tests {
 /// keyed by service id. Tiles without a unit never show controls.
 pub type ServiceControls = (RwSignal<bool>, Callback<(String, SystemdAction)>);
 
-/// Centered dialog over a click-to-close backdrop. Accessible by
-/// construction: announced as a modal dialog, focused on open, closed by
-/// Escape — every dialog in the app goes through this component.
+/// Centered dialog over a click-to-close backdrop. Every dialog in the app
+/// goes through this component: announced as a modal dialog, focused on
+/// open, closed by Escape. Not a full WAI-ARIA dialog — there is no focus
+/// trap and no focus return to the trigger; accepted for this app's
+/// single-modal pages.
 #[component]
 pub fn Modal(
     title: String,
