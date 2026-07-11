@@ -52,6 +52,9 @@ impl Db {
     }
 
     pub async fn user_by_username(&self, username: &str) -> Result<User> {
+        // Case folding happens in Rust: SQLite's NOCASE is ASCII-only and
+        // create_user stores Unicode-lowercased names. The collation stays
+        // only to cover rows that predate that normalization.
         let row =
             sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE username = ? COLLATE NOCASE")
                 .bind(username.trim().to_lowercase())
@@ -62,6 +65,7 @@ impl Db {
     }
 
     /// User plus stored password hash, for login verification.
+    /// Folds case in Rust like `user_by_username` (NOCASE is ASCII-only).
     pub async fn user_with_password(&self, username: &str) -> Result<(User, String)> {
         let row =
             sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE username = ? COLLATE NOCASE")
