@@ -222,10 +222,7 @@ mod tests {
         let found = db.user_by_username("ÉMILE").await.expect("lookup by name");
         assert_eq!(found.id, user.id);
 
-        let (found, hash) = db
-            .user_with_password("Émile")
-            .await
-            .expect("login lookup");
+        let (found, hash) = db.user_with_password("Émile").await.expect("login lookup");
         assert_eq!(found.id, user.id);
         assert_eq!(hash, "phc-string");
     }
