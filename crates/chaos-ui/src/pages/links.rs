@@ -117,10 +117,22 @@ pub fn Links() -> impl IntoView {
                         let current = page_index;
                         // Deleting the last item of the last page leaves the
                         // index past the end; pull it back (outside this render
-                        // pass), which refetches the last valid page.
+                        // pass), which refetches the last valid page. The write
+                        // only ever lowers the index: a filter change may reset
+                        // it to 0 before this stale timeout fires, and that
+                        // reset must win.
                         let clamped = clamp_page(current.get_untracked(), total, PAGE_SIZE);
                         if clamped != current.get_untracked() {
-                            set_timeout(move || current.set(clamped), Duration::ZERO);
+                            set_timeout(
+                                move || {
+                                    current.update(|p| {
+                                        if *p > clamped {
+                                            *p = clamped;
+                                        }
+                                    })
+                                },
+                                Duration::ZERO,
+                            );
                         }
                         view! {
                             <p class="muted links-count">
