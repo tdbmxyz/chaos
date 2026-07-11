@@ -556,10 +556,11 @@ fn LinkList(
     }
     view! {
         <ul class="link-list">
-            {links
-                .into_iter()
-                .map(|link| view! { <LinkItem link editing refresh/> })
-                .collect_view()}
+            <For
+                each=move || links.clone()
+                key=|link| link.id
+                children=move |link| view! { <LinkItem link editing refresh/> }
+            />
         </ul>
     }
     .into_any()

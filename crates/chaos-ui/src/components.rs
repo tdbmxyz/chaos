@@ -104,10 +104,11 @@ pub fn ServiceGrid(services: Vec<ServiceWithStatus>, controls: ServiceControls) 
 
     view! {
         <div class="service-grid">
-            {services
-                .into_iter()
-                .map(|service| view! { <ServiceCard service controls/> })
-                .collect_view()}
+            <For
+                each=move || services.clone()
+                key=|service| service.def.id.clone()
+                children=move |service| view! { <ServiceCard service controls/> }
+            />
         </div>
     }
     .into_any()

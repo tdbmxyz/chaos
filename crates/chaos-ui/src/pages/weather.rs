@@ -314,18 +314,22 @@ pub fn WeatherPage() -> impl IntoView {
                     // Same place the dashboard widget shows.
                     view! { <WeatherRow location=None on_remove=None loaded combined/> }.into_any()
                 } else {
-                    list.into_iter()
-                        .map(|place| {
-                            view! {
-                                <WeatherRow
-                                    location=Some(place)
-                                    on_remove=Some(remove)
-                                    loaded
-                                    combined
-                                />
+                    view! {
+                        <For
+                            each=move || places.get()
+                            key=|place| place.clone()
+                            children=move |place| {
+                                view! {
+                                    <WeatherRow
+                                        location=Some(place)
+                                        on_remove=Some(remove)
+                                        loaded
+                                        combined
+                                    />
+                                }
                             }
-                        })
-                        .collect_view()
+                        />
+                    }
                         .into_any()
                 }
             }}
