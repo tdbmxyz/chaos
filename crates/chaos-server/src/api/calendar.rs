@@ -13,6 +13,35 @@ use crate::api::ApiError;
 use crate::auth::AuthUser;
 use crate::state::AppState;
 
+/// One wire event; local events carry their id, feed occurrences don't
+/// (feeds are read-only, there is nothing to address).
+#[allow(clippy::too_many_arguments)]
+fn calendar_event(
+    id: Option<Uuid>,
+    calendar_id: Uuid,
+    calendar_name: String,
+    color: Option<String>,
+    title: String,
+    description: Option<String>,
+    location: Option<String>,
+    starts_at: chrono::DateTime<chrono::Utc>,
+    ends_at: chrono::DateTime<chrono::Utc>,
+    all_day: bool,
+) -> CalendarEvent {
+    CalendarEvent {
+        id,
+        calendar_id,
+        calendar_name,
+        color,
+        title,
+        description,
+        location,
+        starts_at,
+        ends_at,
+        all_day,
+    }
+}
+
 pub async fn list(
     AuthUser(user): AuthUser,
     State(state): State<AppState>,
@@ -65,17 +94,19 @@ pub async fn events(
         .events_between(user.id, query.start, query.end)
         .await?
         .into_iter()
-        .map(|(event, calendar_name, color)| CalendarEvent {
-            id: Some(event.id),
-            calendar_id: event.calendar_id,
-            calendar_name,
-            color,
-            title: event.title,
-            description: event.description,
-            location: event.location,
-            starts_at: event.starts_at,
-            ends_at: event.ends_at,
-            all_day: event.all_day,
+        .map(|(event, calendar_name, color)| {
+            calendar_event(
+                Some(event.id),
+                event.calendar_id,
+                calendar_name,
+                color,
+                event.title,
+                event.description,
+                event.location,
+                event.starts_at,
+                event.ends_at,
+                event.all_day,
+            )
         })
         .collect();
 
@@ -91,17 +122,19 @@ pub async fn events(
             .events(calendar.id, url, query.start, query.end)
             .await
         {
-            Ok(feed_events) => out.extend(feed_events.into_iter().map(|event| CalendarEvent {
-                id: None,
-                calendar_id: calendar.id,
-                calendar_name: calendar.name.clone(),
-                color: calendar.color.clone(),
-                title: event.title,
-                description: event.description,
-                location: event.location,
-                starts_at: event.starts_at,
-                ends_at: event.ends_at,
-                all_day: event.all_day,
+            Ok(feed_events) => out.extend(feed_events.into_iter().map(|event| {
+                calendar_event(
+                    None,
+                    calendar.id,
+                    calendar.name.clone(),
+                    calendar.color.clone(),
+                    event.title,
+                    event.description,
+                    event.location,
+                    event.starts_at,
+                    event.ends_at,
+                    event.all_day,
+                )
             })),
             Err(reason) => {
                 tracing::warn!(calendar = calendar.name, reason, "ics feed unavailable");
