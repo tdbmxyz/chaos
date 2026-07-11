@@ -8,9 +8,9 @@ use chaos_domain::{
     ApiErrorBody, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
     CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse,
     HomeSensorInfo, LightCommand, LightState, Link, LinkPage, LinkQuery, LoginRequest,
-    LoginResponse, ServiceActionRequest, ServiceWithStatus, SystemdAction, SystemdActionRequest,
-    TagWithCount, TemperatureQuery, TemperatureSeries, UpdateLinkRequest, User, WeatherData,
-    WidgetData,
+    LoginResponse, SearchResults, ServiceActionRequest, ServiceWithStatus, SystemdAction,
+    SystemdActionRequest, TagWithCount, TemperatureQuery, TemperatureSeries, UpdateLinkRequest,
+    User, WeatherData, WidgetData,
 };
 use url::Url;
 use uuid::Uuid;
@@ -77,6 +77,14 @@ impl ChaosClient {
 
     pub async fn dashboard(&self) -> Result<DashboardLayout> {
         self.get("api/v1/dashboard").await
+    }
+
+    /// Global quick-search across services, bookmarks, links and — when
+    /// signed in — calendar events. Empty/whitespace queries return the
+    /// empty result set.
+    pub async fn search(&self, q: &str) -> Result<SearchResults> {
+        let req = self.http.get(self.url("api/v1/search")?).query(&[("q", q)]);
+        self.send(req).await
     }
 
     /// Live payload of a data widget from the layout (weather, feeds…).
