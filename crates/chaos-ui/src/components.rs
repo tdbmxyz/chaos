@@ -71,19 +71,52 @@ mod tests {
 /// keyed by service id. Tiles without a unit never show controls.
 pub type ServiceControls = (RwSignal<bool>, Callback<(String, SystemdAction)>);
 
-/// Centered dialog over a click-to-close backdrop.
+/// Centered dialog over a click-to-close backdrop. Accessible by
+/// construction: announced as a modal dialog, focused on open, closed by
+/// Escape — every dialog in the app goes through this component.
 #[component]
 pub fn Modal(
     title: String,
     #[prop(into)] on_close: Callback<()>,
     children: Children,
 ) -> impl IntoView {
+    let dialog = NodeRef::<leptos::html::Div>::new();
+
+    // Move focus into the dialog when it mounts so keyboard and
+    // screen-reader users land inside it.
+    Effect::new(move |_| {
+        if let Some(el) = dialog.get() {
+            let _ = el.focus();
+        }
+    });
+
+    // Escape closes from anywhere while the dialog is up.
+    let escape = window_event_listener(leptos::ev::keydown, move |ev| {
+        if ev.key() == "Escape" {
+            on_close.run(());
+        }
+    });
+    on_cleanup(move || escape.remove());
+
+    let label = title.clone();
     view! {
         <div class="modal-backdrop" on:click=move |_| on_close.run(())>
-            <div class="modal" on:click=|ev| ev.stop_propagation()>
+            <div
+                class="modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label=label
+                tabindex="-1"
+                node_ref=dialog
+                on:click=|ev| ev.stop_propagation()
+            >
                 <div class="modal-head">
                     <h3>{title}</h3>
-                    <button class="modal-close" on:click=move |_| on_close.run(())>
+                    <button
+                        class="modal-close"
+                        aria-label="Close dialog"
+                        on:click=move |_| on_close.run(())
+                    >
                         "✕"
                     </button>
                 </div>
