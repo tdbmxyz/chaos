@@ -86,20 +86,13 @@ pub async fn icon(
 }
 
 async fn fetch_icon(state: &AppState, url: &str) -> Result<Vec<u8>, ApiError> {
-    let resp = state
-        .fetcher
-        .get(url)
-        .send()
+    let bytes = crate::http_util::get_body_capped(&state.fetcher, url, MAX_ICON_BYTES)
         .await
         .map_err(|_| ApiError::NotFound)?;
-    if !resp.status().is_success() {
-        return Err(ApiError::NotFound);
-    }
-    let bytes = resp.bytes().await.map_err(|_| ApiError::NotFound)?;
     // An empty body (some favicon services answer 200 with nothing) must
     // not be cached forever as "the icon".
-    if bytes.is_empty() || bytes.len() > MAX_ICON_BYTES {
+    if bytes.is_empty() {
         return Err(ApiError::NotFound);
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
