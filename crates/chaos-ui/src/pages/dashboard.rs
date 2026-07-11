@@ -116,6 +116,9 @@ fn ServicesWidget() -> impl IntoView {
     let version = RwSignal::new(0u32);
     let busy = RwSignal::new(false);
     let action_error = RwSignal::new(None::<String>);
+    // Owned here, not inside Collapsible, so an expanded list stays expanded
+    // when the 30s poll re-renders the widget body.
+    let collapsed = RwSignal::new(true);
 
     let services = LocalResource::new({
         let client = client.clone();
@@ -129,6 +132,12 @@ fn ServicesWidget() -> impl IntoView {
             async move { client.services().await }
         }
     });
+
+    // Re-render only when the payload actually changes; a poll returning
+    // identical data must not tear down the grid (that recreated every
+    // service icon <img> and reset IconOrLetter fallback state). Errors are
+    // stringified because chaos_client::Error is not PartialEq.
+    let services = Memo::new(move |_| services.get().map(|r| r.map_err(|e| e.to_string())));
 
     let run = Callback::new(move |(id, action): (String, SystemdAction)| {
         let client = client.clone();
@@ -152,14 +161,14 @@ fn ServicesWidget() -> impl IntoView {
                 Some(Ok(list)) => {
                     let count = list.len();
                     view! {
-                        <Collapsible count>
+                        <Collapsible count collapsed>
                             <ServiceGrid services=list controls=(busy, run)/>
                         </Collapsible>
                     }
                         .into_any()
                 }
                 Some(Err(err)) => {
-                    view! { <p class="error">"Could not reach chaos server: " {err.to_string()}</p> }
+                    view! { <p class="error">"Could not reach chaos server: " {err}</p> }
                         .into_any()
                 }
             }}
@@ -225,6 +234,14 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         async move { client.widget_data(&id, location.as_deref()).await }
     });
 
+    // WidgetData is PartialEq; skip subtree rebuilds when a refresh returns
+    // the same cached payload (the server caches these widgets anyway).
+    let data = Memo::new(move |_| data.get().map(|r| r.map_err(|e| e.to_string())));
+
+    // One signal for whichever Collapsible arm renders (Feed or Releases);
+    // owned here so poll-driven rebuilds keep the user's expand state.
+    let collapsed = RwSignal::new(true);
+
     view! {
         <section class=format!("widget widget-{kind}")>
             <h2>{title}</h2>
@@ -236,7 +253,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 Some(Ok(WidgetData::Feed { items })) => {
                     let count = items.len();
                     view! {
-                        <Collapsible count>
+                        <Collapsible count collapsed>
                             <ul class="feed-list">
                                 {items.into_iter().map(feed_item_view).collect_view()}
                             </ul>
@@ -247,7 +264,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 Some(Ok(WidgetData::Releases { items })) => {
                     let count = items.len();
                     view! {
-                        <Collapsible count>
+                        <Collapsible count collapsed>
                         <ul class="feed-list">
                             {items
                                 .into_iter()
@@ -281,7 +298,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 // Systemd widgets render through SystemdWidget; this arm only
                 // exists for exhaustiveness.
                 Some(Ok(WidgetData::Systemd { units })) => systemd_rows(units, None).into_any(),
-                Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
             }}
         </section>
     }
@@ -290,9 +307,11 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
 /// Wrapper collapsing a long list to its first three entries on phones —
 /// the hiding and the ▾/▴ toggle are CSS, scoped to the narrow layout, so
 /// wider screens always show everything.
+/// The `collapsed` signal is owned by the widget (not this component) so
+/// the user's expand/collapse choice survives the poll-driven rebuilds of
+/// the widget body.
 #[component]
-fn Collapsible(count: usize, children: Children) -> impl IntoView {
-    let collapsed = RwSignal::new(true);
+fn Collapsible(count: usize, collapsed: RwSignal<bool>, children: Children) -> impl IntoView {
     view! {
         <div class="collapsible" class:collapsed=move || collapsed.get()>
             {children()}
@@ -345,6 +364,10 @@ fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
         }
     });
 
+    // Unit states rarely change between polls; only rebuild the rows (and
+    // their control buttons) when they do.
+    let data = Memo::new(move |_| data.get().map(|r| r.map_err(|e| e.to_string())));
+
     let run = Callback::new(move |(unit, action): (String, SystemdAction)| {
         let client = client.clone();
         let id = id.clone();
@@ -372,7 +395,7 @@ fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
                     systemd_rows(units, Some((busy, run))).into_any()
                 }
                 Some(Ok(_)) => view! { <p class="error">"Unexpected widget data"</p> }.into_any(),
-                Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
             }}
         </section>
     }
