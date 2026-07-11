@@ -401,8 +401,9 @@ mod tests {
             Err(DbError::NotFound)
         ));
 
-        // Another user cannot update it either — both the pre-check and the
-        // UPDATE's own scoping must refuse.
+        // Another user cannot update it either. (This exercises the
+        // get_event pre-check; the UPDATE's own owner scoping is defense
+        // in depth behind it and isn't separately reachable from here.)
         assert!(matches!(
             db.update_event(
                 other.id,

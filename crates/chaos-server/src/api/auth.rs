@@ -30,6 +30,8 @@ pub async fn login(
     // wrong password (see verify_login).
     let found = state.db.user_with_password(&req.username).await.ok();
     if !verify_login(found.as_ref().map(|(_, hash)| hash.as_str()), &req.password) {
+        // One failure path on purpose: throttling unknown users differently
+        // would reopen the enumeration channel verify_login closes.
         state.login_throttle.record_failure(&key);
         return Err(ApiError::Unauthorized);
     }
