@@ -136,6 +136,8 @@ async fn finalize(
     tmp_path: &std::path::Path,
     final_path: &std::path::Path,
 ) -> Result<(u64, String), String> {
+    // Size check before read is race-free here: monolith has exited and the
+    // single archiver worker is the only writer of tmp_path.
     let size_bytes = tokio::fs::metadata(tmp_path)
         .await
         .map_err(|e| format!("inspecting snapshot: {e}"))?
