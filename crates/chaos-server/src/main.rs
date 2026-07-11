@@ -63,6 +63,9 @@ async fn main() -> anyhow::Result<()> {
 
     monitor::spawn(state.clone());
     archiver::spawn(state.clone());
+    if state.notifier.is_some() && state.config.notifications.calendar_reminders {
+        notify::spawn_reminders(state.clone());
+    }
 
     let app = api::router(state.clone());
     let listener = tokio::net::TcpListener::bind(state.config.listen)

@@ -6,12 +6,16 @@
 //! is fully off (no client, no task) when `[notifications].ntfy_url` is
 //! unset.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
-use chaos_domain::HealthState;
+use chaos_domain::{CalendarKind, HealthState};
+use chrono::{DateTime, Utc};
 use url::Url;
+use uuid::Uuid;
 
 use crate::config::NotificationsConfig;
+use crate::state::AppState;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -123,13 +127,179 @@ impl AlertTracker {
     }
 }
 
+/// True when the event starts within `[now, now + lead)`. Range queries
+/// return events *overlapping* a window (an ongoing meeting included);
+/// reminders only care about ones that *start* in it.
+pub fn due(starts_at: DateTime<Utc>, now: DateTime<Utc>, lead: chrono::Duration) -> bool {
+    starts_at >= now && starts_at < now + lead
+}
+
+/// Identity of one notified occurrence. `calendar_id + starts_at + title`
+/// covers local events and feed occurrences alike (feed events have no id)
+/// and distinguishes RRULE occurrences by their start.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReminderKey {
+    pub calendar_id: Uuid,
+    pub starts_at: DateTime<Utc>,
+    pub title: String,
+}
+
+/// In-memory dedup of sent reminders — deliberately not persisted: a
+/// server restart re-notifying an event still 10 minutes out is harmless,
+/// a DB migration for it is not worth it.
+#[derive(Debug, Default)]
+pub struct ReminderLog {
+    sent: HashSet<ReminderKey>,
+}
+
+impl ReminderLog {
+    /// True exactly once per key.
+    pub fn first_time(&mut self, key: ReminderKey) -> bool {
+        self.sent.insert(key)
+    }
+
+    /// Forget occurrences that started more than two hours ago so the set
+    /// cannot grow forever.
+    pub fn prune(&mut self, now: DateTime<Utc>) {
+        self.sent
+            .retain(|key| key.starts_at > now - chrono::Duration::hours(2));
+    }
+}
+
+const SCAN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Spawn the calendar reminder scanner. Callers gate on configuration
+/// (notifier present + `calendar_reminders` on); the guard here is a
+/// safety net only.
+pub fn spawn_reminders(state: AppState) {
+    tokio::spawn(run_reminders(state));
+}
+
+async fn run_reminders(state: AppState) {
+    let Some(notifier) = state.notifier.clone() else {
+        return;
+    };
+    let lead = chrono::Duration::minutes(state.config.notifications.reminder_lead_minutes as i64);
+    let mut log = ReminderLog::default();
+
+    loop {
+        let now = Utc::now();
+        if let Err(reason) = scan(&state, &notifier, &mut log, now, lead).await {
+            tracing::warn!(reason, "calendar reminder scan failed");
+        }
+        log.prune(now);
+        tokio::time::sleep(SCAN_INTERVAL).await;
+    }
+}
+
+/// One pass: every user's local events and ICS feeds, window `[now,
+/// now+lead)`. All-day events are skipped (a lead-minutes ping around
+/// midnight UTC is noise, not a reminder).
+async fn scan(
+    state: &AppState,
+    notifier: &Notifier,
+    log: &mut ReminderLog,
+    now: DateTime<Utc>,
+    lead: chrono::Duration,
+) -> Result<(), String> {
+    let horizon = now + lead;
+    let users = state.db.list_users().await.map_err(|e| e.to_string())?;
+    for user in users {
+        let events = state
+            .db
+            .events_between(user.id, now, horizon)
+            .await
+            .map_err(|e| e.to_string())?;
+        for (event, _calendar_name, _color) in events {
+            let key = ReminderKey {
+                calendar_id: event.calendar_id,
+                starts_at: event.starts_at,
+                title: event.title.clone(),
+            };
+            if !event.all_day && due(event.starts_at, now, lead) && log.first_time(key) {
+                send_reminder(
+                    notifier,
+                    &event.title,
+                    event.starts_at,
+                    event.location.as_deref(),
+                    now,
+                )
+                .await;
+            }
+        }
+
+        let calendars = state
+            .db
+            .list_calendars(user.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        for calendar in calendars {
+            if calendar.kind != CalendarKind::Ics {
+                continue;
+            }
+            let Some(url) = &calendar.ics_url else {
+                continue;
+            };
+            match state.ics.events(calendar.id, url, now, horizon).await {
+                Ok(feed_events) => {
+                    for event in feed_events {
+                        let key = ReminderKey {
+                            calendar_id: calendar.id,
+                            starts_at: event.starts_at,
+                            title: event.title.clone(),
+                        };
+                        if !event.all_day && due(event.starts_at, now, lead) && log.first_time(key)
+                        {
+                            send_reminder(
+                                notifier,
+                                &event.title,
+                                event.starts_at,
+                                event.location.as_deref(),
+                                now,
+                            )
+                            .await;
+                        }
+                    }
+                }
+                Err(reason) => {
+                    tracing::warn!(
+                        calendar = calendar.name,
+                        reason,
+                        "ics feed unavailable for reminders"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Relative time on purpose: the server does not know the user's timezone,
+/// and "in 12 min" is what a reminder is anyway.
+async fn send_reminder(
+    notifier: &Notifier,
+    title: &str,
+    starts_at: DateTime<Utc>,
+    location: Option<&str>,
+    now: DateTime<Utc>,
+) {
+    let minutes = (starts_at - now).num_minutes().max(0);
+    let message = match location {
+        Some(location) => format!("starts in {minutes} min — {location}"),
+        None => format!("starts in {minutes} min"),
+    };
+    notifier.send(title, &message, "calendar", "default").await;
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use axum::http::HeaderMap;
+    use chrono::{Duration as ChronoDuration, TimeZone, Utc};
     use tokio::sync::Mutex;
     use url::Url;
+    use uuid::Uuid;
 
     use super::*;
     use crate::config::NotificationsConfig;
@@ -293,5 +463,48 @@ mod tests {
         let mut t = AlertTracker::default();
         assert_eq!(t.observe(Down), None);
         assert_eq!(t.observe(Down), Some(ServiceAlert::Down));
+    }
+
+    fn at(h: u32, m: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 7, 11, h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn due_matches_events_starting_within_the_lead_window() {
+        let now = at(9, 0);
+        let lead = ChronoDuration::minutes(15);
+        assert!(due(at(9, 0), now, lead), "starting right now is due");
+        assert!(due(at(9, 14), now, lead));
+        assert!(!due(at(9, 15), now, lead), "window end is exclusive");
+        assert!(!due(at(8, 59), now, lead), "already started is not due");
+    }
+
+    #[test]
+    fn reminder_log_dedupes_and_prunes() {
+        let mut log = ReminderLog::default();
+        let key = ReminderKey {
+            calendar_id: Uuid::nil(),
+            starts_at: at(9, 0),
+            title: "Dentist".into(),
+        };
+        assert!(log.first_time(key.clone()));
+        assert!(!log.first_time(key.clone()), "second scan must not re-send");
+
+        // Another occurrence of the same recurring event is a new key.
+        let next = ReminderKey {
+            starts_at: at(10, 0),
+            ..key.clone()
+        };
+        assert!(log.first_time(next));
+
+        // Pruning forgets long-past starts; recent ones survive.
+        log.prune(at(11, 30));
+        assert!(log.first_time(key), "9:00 pruned at 11:30 (>2h past)");
+        let recent = ReminderKey {
+            calendar_id: Uuid::nil(),
+            starts_at: at(10, 0),
+            title: "Dentist".into(),
+        };
+        assert!(!log.first_time(recent), "10:00 still remembered at 11:30");
     }
 }
