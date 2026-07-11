@@ -153,6 +153,34 @@ declared on the widget, so the reachable surface is the intersection of
 both lists. Without the polkit rule, actions fail with "interactive
 authentication required" while status display keeps working.
 
+## Notifications (ntfy)
+
+chaos publishes to an [ntfy](https://ntfy.sh) topic — subscribe with the
+ntfy phone app or web UI. Two kinds of pings, both server-side (no web
+push, no browser permission dance):
+
+- **Service alerts**: a monitored service going Down/Degraded (or
+  recovering) notifies once, after the state survived two polling sweeps —
+  flapping services stay silent.
+- **Calendar reminders**: events starting within `reminder_lead_minutes`
+  (local calendars and ICS feeds, every user) notify once per occurrence.
+  All-day events are skipped.
+
+`settings` is free-form, so it is just more TOML:
+
+```nix
+services.chaos.settings.notifications = {
+  ntfy_url = "https://ntfy.sh";   # or a self-hosted instance
+  topic = "chaos-zeus";
+  # token = "tk_...";             # only for protected topics
+  reminder_lead_minutes = 15;
+};
+```
+
+Omit the section to keep notifications off. `service_alerts` and
+`calendar_reminders` (both default `true`) toggle the halves
+independently.
+
 ## Desktop and phone apps
 
 The web UI served by the server is the primary interface; the Tauri shells

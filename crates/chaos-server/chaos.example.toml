@@ -150,3 +150,15 @@ type = "server_stats"
 # id = "lamp"
 # label = "Lamp"
 # entity_id = "light.lamp"
+
+# Push notifications via ntfy (https://ntfy.sh or self-hosted). Omit the
+# whole section to disable. Service alerts fire on down/recovered
+# transitions (debounced over 2 checks); calendar reminders ping shortly
+# before events start (local calendars + ICS feeds, all users, one topic).
+# [notifications]
+# ntfy_url = "https://ntfy.sh"
+# topic = "chaos-zeus"
+# token = "tk_..."              # only for protected topics
+# service_alerts = true
+# calendar_reminders = true
+# reminder_lead_minutes = 15

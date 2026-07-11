@@ -107,7 +107,9 @@ cross-origin (bearer instead of the cookie).
 
 - [ ] Deploy on zeus, retire glance (recipe ready in docs/deployment.md)
 - [ ] authentik (OIDC) sign-in once deployed (seam in ADR 0004)
-- [ ] Notifications: service down / calendar reminders via ntfy or web push
+- [x] Notifications: service down/recovered alerts (flap-debounced) +
+      calendar reminders via ntfy (`[notifications]` in chaos.toml; web
+      push not needed — ntfy app covers phones)
 - [ ] Dashboard editing in-app (add/move/remove widgets, persisted
       server-side) instead of TOML-only layout
 - [x] Quick-add from phone: Android share intent → `/?share=` →
