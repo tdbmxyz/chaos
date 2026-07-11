@@ -16,6 +16,14 @@ type CollectionsResource = LocalResource<chaos_client::Result<Vec<Collection>>>;
 /// Links shown per page; filters reset paging to the first page.
 const PAGE_SIZE: u32 = 50;
 
+/// Highest valid page index for `total` items at `page_size` per page —
+/// deleting the last items of the last page must not strand the pager on
+/// a ghost page ("2 / 1", empty list).
+fn clamp_page(page: u32, total: u64, page_size: u32) -> u32 {
+    let pages = total.div_ceil(page_size as u64).max(1) as u32;
+    page.min(pages - 1)
+}
+
 /// Links page: collection sidebar, tag filters, search, quick-add, link list
 /// and the edit dialogs. All mutations bump `refresh` to re-run the resources.
 #[component]
@@ -107,6 +115,13 @@ pub fn Links() -> impl IntoView {
                         let total = page.total;
                         let pages = total.div_ceil(PAGE_SIZE as u64).max(1) as u32;
                         let current = page_index;
+                        // Deleting the last item of the last page leaves the
+                        // index past the end; pull it back (outside this render
+                        // pass), which refetches the last valid page.
+                        let clamped = clamp_page(current.get_untracked(), total, PAGE_SIZE);
+                        if clamped != current.get_untracked() {
+                            set_timeout(move || current.set(clamped), Duration::ZERO);
+                        }
                         view! {
                             <p class="muted links-count">
                                 {total} " link" {if total == 1 { "" } else { "s" }}
@@ -830,5 +845,22 @@ fn EditCollectionModal(
                 </div>
             </form>
         </Modal>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_page_pulls_a_stranded_index_back_to_the_last_page() {
+        // 51 links at 50/page → pages 0 and 1; index 1 is valid.
+        assert_eq!(clamp_page(1, 51, 50), 1);
+        // Deleting the 51st link leaves one page; index 1 is now a ghost.
+        assert_eq!(clamp_page(1, 50, 50), 0);
+        // An empty list still has one (empty) page zero.
+        assert_eq!(clamp_page(3, 0, 50), 0);
+        // In-range indexes are untouched.
+        assert_eq!(clamp_page(0, 10, 50), 0);
     }
 }
