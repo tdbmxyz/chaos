@@ -45,6 +45,42 @@ pub struct Config {
     /// reached over HTTPS (reverse proxy with TLS); off by default because
     /// plain-http LAN setups would otherwise lose their session cookie.
     pub secure_cookies: bool,
+    /// Push notifications via ntfy (service alerts + calendar reminders).
+    /// Feature is off when `ntfy_url` is `None`.
+    pub notifications: NotificationsConfig,
+}
+
+/// Push notifications via ntfy. The whole feature is off when `ntfy_url`
+/// is `None` (the default): no HTTP client, no background task, nothing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    /// ntfy server base URL, e.g. `https://ntfy.sh` or a self-hosted
+    /// instance. `None` disables notifications entirely.
+    pub ntfy_url: Option<url::Url>,
+    /// Topic notifications are published to (`{ntfy_url}/{topic}`).
+    pub topic: String,
+    /// Bearer token for protected topics (ntfy access tokens).
+    pub token: Option<String>,
+    /// Notify on service Down/Degraded ↔ Up transitions.
+    pub service_alerts: bool,
+    /// Remind about calendar events shortly before they start.
+    pub calendar_reminders: bool,
+    /// How long before an event starts the reminder fires.
+    pub reminder_lead_minutes: u64,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            ntfy_url: None,
+            topic: String::new(),
+            token: None,
+            service_alerts: true,
+            calendar_reminders: true,
+            reminder_lead_minutes: 15,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -140,6 +176,7 @@ impl Default for Config {
             columns: Vec::new(),
             home_assistant: HomeAssistantConfig::default(),
             secure_cookies: false,
+            notifications: NotificationsConfig::default(),
         }
     }
 }
@@ -206,5 +243,37 @@ mod tests {
         .extract()
         .expect("secure_cookies must parse");
         assert!(config.secure_cookies);
+    }
+
+    #[test]
+    fn notifications_section_parses_and_defaults_off() {
+        let toml = r#"
+            [notifications]
+            ntfy_url = "https://ntfy.example.com"
+            topic = "chaos"
+            token = "tk_secret"
+            reminder_lead_minutes = 30
+        "#;
+        let config: super::Config = figment::Figment::from(
+            figment::providers::Serialized::defaults(super::Config::default()),
+        )
+        .merge(figment::providers::Toml::string(toml))
+        .extract()
+        .expect("notifications section must parse");
+        let n = &config.notifications;
+        assert_eq!(
+            n.ntfy_url.as_ref().map(url::Url::as_str),
+            Some("https://ntfy.example.com/")
+        );
+        assert_eq!(n.topic, "chaos");
+        assert_eq!(n.token.as_deref(), Some("tk_secret"));
+        assert!(n.service_alerts, "service_alerts defaults to true");
+        assert!(n.calendar_reminders, "calendar_reminders defaults to true");
+        assert_eq!(n.reminder_lead_minutes, 30);
+
+        // No section at all → feature off (no url), defaults intact.
+        let default = super::Config::default();
+        assert!(default.notifications.ntfy_url.is_none());
+        assert_eq!(default.notifications.reminder_lead_minutes, 15);
     }
 }
