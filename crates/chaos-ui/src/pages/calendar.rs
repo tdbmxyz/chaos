@@ -298,17 +298,16 @@ fn local_to_utc(date: NaiveDate, time: NaiveTime) -> DateTime<Utc> {
 /// so they must be compared as UTC dates — going through the local zone
 /// would spill them into a neighbouring day.
 fn covers(event: &CalendarEvent, day: NaiveDate) -> bool {
+    // Exclusive end: subtract a second so a midnight end doesn't spill into
+    // the next day — but clamp so a zero-duration event (ends_at ==
+    // starts_at) still occupies its start day instead of an empty range.
+    let end_at = (event.ends_at - Duration::seconds(1)).max(event.starts_at);
     let (start, end) = if event.all_day {
-        (
-            event.starts_at.date_naive(),
-            (event.ends_at - Duration::seconds(1)).date_naive(),
-        )
+        (event.starts_at.date_naive(), end_at.date_naive())
     } else {
         (
             event.starts_at.with_timezone(&Local).date_naive(),
-            (event.ends_at - Duration::seconds(1))
-                .with_timezone(&Local)
-                .date_naive(),
+            end_at.with_timezone(&Local).date_naive(),
         )
     };
     start <= day && day <= end
@@ -846,5 +845,49 @@ mod tests {
             draft.description, "Bring the x-rays",
             "editing an event must not blank its description"
         );
+    }
+
+    fn event(starts_at: DateTime<Utc>, ends_at: DateTime<Utc>, all_day: bool) -> CalendarEvent {
+        CalendarEvent {
+            id: None,
+            calendar_id: Uuid::nil(),
+            calendar_name: "test".into(),
+            color: None,
+            title: "standup".into(),
+            description: None,
+            location: None,
+            starts_at,
+            ends_at,
+            all_day,
+        }
+    }
+
+    #[test]
+    fn covers_shows_a_zero_duration_all_day_event_on_its_start_day() {
+        let start = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        let e = event(start, start, true);
+        assert!(covers(&e, NaiveDate::from_ymd_opt(2026, 7, 11).unwrap()));
+        assert!(!covers(&e, NaiveDate::from_ymd_opt(2026, 7, 12).unwrap()));
+        assert!(!covers(&e, NaiveDate::from_ymd_opt(2026, 7, 10).unwrap()));
+    }
+
+    #[test]
+    fn covers_shows_a_zero_duration_timed_event_on_its_local_start_day() {
+        // Timezone-independent: compare against the start's own local date.
+        let start = Utc.with_ymd_and_hms(2026, 7, 11, 9, 30, 0).unwrap();
+        let e = event(start, start, false);
+        let local_day = start.with_timezone(&Local).date_naive();
+        assert!(covers(&e, local_day));
+    }
+
+    #[test]
+    fn covers_still_excludes_the_exclusive_end_midnight() {
+        // A one-day all-day event ends at the next UTC midnight, exclusively;
+        // the -1s adjustment must keep it off the following day.
+        let start = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 12, 0, 0, 0).unwrap();
+        let e = event(start, end, true);
+        assert!(covers(&e, NaiveDate::from_ymd_opt(2026, 7, 11).unwrap()));
+        assert!(!covers(&e, NaiveDate::from_ymd_opt(2026, 7, 12).unwrap()));
     }
 }
