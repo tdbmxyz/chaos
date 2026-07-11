@@ -6,16 +6,19 @@
 //! design — writing goes to local calendars (CalDAV two-way sync would be
 //! its own project).
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::{DateTime, Days, NaiveDate, NaiveDateTime, TimeZone, Utc};
-use tokio::sync::RwLock;
 use uuid::Uuid;
+
+use crate::cache::StaleCache;
 
 const TTL: Duration = Duration::from_secs(600);
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// Cap on cached feeds; keys are the user's calendar ids, so this is
+/// effectively "how many feed calendars one server realistically has".
+const MAX_FEEDS: usize = 128;
 /// Cap on expanded occurrences per event and range, against pathological
 /// rules; a month view never legitimately needs more.
 const MAX_OCCURRENCES: u16 = 400;
@@ -45,18 +48,15 @@ pub struct FeedEvent {
     pub all_day: bool,
 }
 
-/// Cached feed: when it was fetched and the parsed events.
-type CachedFeed = (Instant, Arc<Vec<RawEvent>>);
-
 pub struct FeedCache {
-    entries: RwLock<HashMap<Uuid, CachedFeed>>,
+    entries: StaleCache<Uuid, Arc<Vec<RawEvent>>>,
     http: reqwest::Client,
 }
 
 impl Default for FeedCache {
     fn default() -> Self {
         Self {
-            entries: RwLock::new(HashMap::new()),
+            entries: StaleCache::new(MAX_FEEDS),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(15))
                 .user_agent(concat!("chaos/", env!("CARGO_PKG_VERSION")))
@@ -84,26 +84,21 @@ impl FeedCache {
     }
 
     async fn raw_events(&self, calendar_id: Uuid, url: &str) -> Result<Arc<Vec<RawEvent>>, String> {
-        if let Some((fetched, events)) = self.entries.read().await.get(&calendar_id)
-            && fetched.elapsed() < TTL
-        {
-            return Ok(events.clone());
+        if let Some(events) = self.entries.get_fresh(&calendar_id, TTL).await {
+            return Ok(events);
         }
 
         match self.fetch(url).await {
             Ok(events) => {
                 let events = Arc::new(events);
-                self.entries
-                    .write()
-                    .await
-                    .insert(calendar_id, (Instant::now(), events.clone()));
+                self.entries.insert(calendar_id, events.clone()).await;
                 Ok(events)
             }
             Err(reason) => {
                 // Serve the stale copy if we have one.
-                if let Some((_, events)) = self.entries.read().await.get(&calendar_id) {
+                if let Some(events) = self.entries.get_stale(&calendar_id).await {
                     tracing::warn!(%calendar_id, reason, "ics refresh failed, serving stale feed");
-                    return Ok(events.clone());
+                    return Ok(events);
                 }
                 Err(reason)
             }
@@ -117,7 +112,7 @@ impl FeedCache {
 
     /// Drop a cached feed (after its calendar is edited or deleted).
     pub async fn invalidate(&self, calendar_id: Uuid) {
-        self.entries.write().await.remove(&calendar_id);
+        self.entries.remove(&calendar_id).await;
     }
 }
 

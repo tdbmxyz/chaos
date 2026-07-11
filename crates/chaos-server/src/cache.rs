@@ -65,15 +65,15 @@ impl<K: Eq + Hash + Clone, V: Clone> StaleCache<K, V> {
         let mut inner = self.inner.write().await;
         inner.seq += 1;
         let seq = inner.seq;
-        if !inner.entries.contains_key(&key) && inner.entries.len() >= self.max_entries {
-            if let Some(oldest) = inner
+        if !inner.entries.contains_key(&key)
+            && inner.entries.len() >= self.max_entries
+            && let Some(oldest) = inner
                 .entries
                 .iter()
                 .min_by_key(|(_, entry)| entry.seq)
                 .map(|(key, _)| key.clone())
-            {
-                inner.entries.remove(&oldest);
-            }
+        {
+            inner.entries.remove(&oldest);
         }
         inner.entries.insert(
             key,

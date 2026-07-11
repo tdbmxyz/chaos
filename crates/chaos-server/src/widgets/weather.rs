@@ -4,12 +4,10 @@
 //! Open-Meteo geocoding API; forecasts then go through the regular forecast
 //! endpoint and are cached by the hub.
 
-use std::collections::HashMap;
-
 use chaos_domain::{DailyForecast, HourlyForecast, WeatherData, WidgetData};
 use serde::Deserialize;
-use tokio::sync::RwLock;
 
+use crate::cache::StaleCache;
 use crate::http_util::get_json;
 
 #[derive(Debug, Clone)]
@@ -21,7 +19,7 @@ pub struct Place {
 
 pub async fn fetch(
     http: &reqwest::Client,
-    geocode_cache: &RwLock<HashMap<String, Place>>,
+    geocode_cache: &StaleCache<String, Place>,
     location: &str,
 ) -> Result<WidgetData, String> {
     let place = resolve(http, geocode_cache, location).await?;
@@ -123,11 +121,11 @@ fn now_index(hourly: &[HourlyForecast], this_hour: chrono::NaiveDateTime) -> usi
 
 async fn resolve(
     http: &reqwest::Client,
-    cache: &RwLock<HashMap<String, Place>>,
+    cache: &StaleCache<String, Place>,
     location: &str,
 ) -> Result<Place, String> {
-    if let Some(place) = cache.read().await.get(location) {
-        return Ok(place.clone());
+    if let Some(place) = cache.get_stale(&location.to_string()).await {
+        return Ok(place);
     }
 
     // "Osaka, JP" style disambiguation: the geocoding API only searches
@@ -171,10 +169,7 @@ async fn resolve(
         latitude: hit.latitude,
         longitude: hit.longitude,
     };
-    cache
-        .write()
-        .await
-        .insert(location.to_string(), place.clone());
+    cache.insert(location.to_string(), place.clone()).await;
     Ok(place)
 }
 
