@@ -1,15 +1,19 @@
 mod api;
 mod archiver;
 mod auth;
+mod backup;
+mod cache;
 mod config;
 mod db;
 mod db_auth;
 mod db_calendar;
 mod home_assistant;
+mod http_util;
 mod ics;
 mod import;
 mod metadata;
 mod monitor;
+mod notify;
 mod state;
 mod widgets;
 
@@ -60,6 +64,10 @@ async fn main() -> anyhow::Result<()> {
 
     monitor::spawn(state.clone());
     archiver::spawn(state.clone());
+    backup::spawn(state.clone());
+    if state.notifier.is_some() && state.config.notifications.calendar_reminders {
+        notify::spawn_reminders(state.clone());
+    }
 
     let app = api::router(state.clone());
     let listener = tokio::net::TcpListener::bind(state.config.listen)

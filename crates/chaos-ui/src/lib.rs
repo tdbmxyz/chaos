@@ -3,8 +3,11 @@
 //! (like where the API lives) is injected from the outside via [`AppConfig`].
 
 mod components;
+mod date_util;
 mod echarts;
+mod hooks;
 mod pages;
+mod search;
 
 use chaos_client::ChaosClient;
 use chaos_domain::User;
@@ -155,13 +158,44 @@ pub(crate) fn set_weather_places(places: &[String]) {
     set_pref(WEATHER_PLACES_KEY, &places.join("\n"));
 }
 
+/// Celsius in the display unit: °F when the preference says so.
+pub(crate) fn convert_temp(celsius: f64, fahrenheit: bool) -> f64 {
+    if fahrenheit {
+        celsius * 9.0 / 5.0 + 32.0
+    } else {
+        celsius
+    }
+}
+
+/// Converted temperature rounded to one decimal — chart series values that
+/// land verbatim in tooltips.
+pub(crate) fn convert_temp_1dp(celsius: f64, fahrenheit: bool) -> f64 {
+    (convert_temp(celsius, fahrenheit) * 10.0).round() / 10.0
+}
+
 /// Displayed temperature honoring the °C/°F preference; the wire is metric.
 pub(crate) fn format_temp(celsius: f64, fahrenheit: bool) -> String {
-    if fahrenheit {
-        format!("{:.0}°", celsius * 9.0 / 5.0 + 32.0)
-    } else {
-        format!("{celsius:.0}°")
-    }
+    format!("{:.0}°", convert_temp(celsius, fahrenheit))
+}
+
+/// The "lead · feels X° · wind Y km/h · Z% humidity" line shared by the
+/// dashboard weather widget (lead = location) and the weather page rows
+/// (lead = description).
+pub(crate) fn weather_details(
+    lead: &str,
+    weather: &chaos_domain::WeatherData,
+    fahrenheit: bool,
+) -> String {
+    format!(
+        "{} · feels {} · wind {:.0} km/h{}",
+        lead,
+        format_temp(weather.apparent_c, fahrenheit),
+        weather.wind_kmh,
+        weather
+            .humidity_pct
+            .map(|h| format!(" · {h:.0}% humidity"))
+            .unwrap_or_default(),
+    )
 }
 
 pub(crate) fn weather_emoji(code: i32) -> &'static str {
@@ -268,6 +302,13 @@ pub(crate) fn set_api_base_override(value: Option<&str>) {
 #[derive(Clone, Copy)]
 pub struct Session(pub RwSignal<Option<User>>);
 
+/// One HTTP client for the whole app, provided as context at `App`.
+/// `use_client()` clones it per call (reqwest clients are `Arc`s inside),
+/// so components share the connection pool instead of building a new
+/// `reqwest::Client` on every call.
+#[derive(Clone)]
+struct SharedClient(ChaosClient);
+
 /// Ask the Android shell to launch a companion app natively. True only when
 /// the app is installed and claimed the tap; false (not installed, or no
 /// bridge) means the caller should let the URL open normally.
@@ -332,12 +373,39 @@ pub(crate) fn on_android() -> bool {
 
 pub fn use_client() -> ChaosClient {
     let config = use_context::<AppConfig>().expect("AppConfig provided by the shell");
+    // The token is read per call, not per app: it changes on login/logout
+    // and callers must always see the current one (matches the previous
+    // behavior, where the whole client was rebuilt per call).
     let token = config.persist_token.then(stored_token).flatten();
-    ChaosClient::new(config.api_base).with_token(token)
+    match use_context::<SharedClient>() {
+        Some(SharedClient(client)) => client.with_token(token),
+        // Components rendered outside App (tests, shells) fall back to a
+        // one-off client. Logged so a refactor that loses the context shows
+        // up instead of silently rebuilding a client per call.
+        None => {
+            leptos::logging::debug_warn!("use_client: no SharedClient in context");
+            ChaosClient::new(config.api_base).with_token(token)
+        }
+    }
 }
 
 pub fn use_session() -> Session {
     use_context::<Session>().expect("Session provided by App")
+}
+
+/// Sign-out shared by the topbar and the More page: server-side logout,
+/// stored token cleared, session signal reset.
+pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
+    let session = use_session();
+    let client = use_client();
+    Callback::new(move |_: leptos::ev::MouseEvent| {
+        let client = client.clone();
+        spawn_local(async move {
+            let _ = client.logout().await;
+            store_token(None);
+            session.0.set(None);
+        });
+    })
 }
 
 /// Primary navigation destinations. The glyphs are plain Unicode (like
@@ -352,7 +420,9 @@ const NAV_PRIMARY: [(&str, &str, &str); 5] = [
 
 #[component]
 pub fn App(config: AppConfig) -> impl IntoView {
+    let api_base = config.api_base.clone();
     provide_context(config);
+    provide_context(SharedClient(ChaosClient::new(api_base)));
 
     let session = Session(RwSignal::new(None));
     provide_context(session);
@@ -370,6 +440,18 @@ pub fn App(config: AppConfig) -> impl IntoView {
     let theme = ThemeSetting(RwSignal::new(stored_theme()));
     provide_context(theme);
     Effect::new(move |_| apply_theme(&theme.0.get()));
+
+    // Global quick-search: Ctrl-K (Cmd-K on mac) toggles the overlay from
+    // anywhere. Window-level listener, removed on unmount like the click
+    // interceptor below.
+    let search_open = RwSignal::new(false);
+    let search_keys = window_event_listener(leptos::ev::keydown, move |ev| {
+        if (ev.ctrl_key() || ev.meta_key()) && ev.key().eq_ignore_ascii_case("k") {
+            ev.prevent_default();
+            search_open.update(|o| *o = !*o);
+        }
+    });
+    on_cleanup(move || search_keys.remove());
 
     // Inside a shell, clicking an outbound link must not navigate the
     // webview: one document-level interceptor reroutes every external
@@ -398,22 +480,13 @@ pub fn App(config: AppConfig) -> impl IntoView {
     });
     on_cleanup(move || external_clicks.remove());
 
-    let logout = Callback::new({
-        let client = use_client();
-        move |_: leptos::ev::MouseEvent| {
-            let client = client.clone();
-            spawn_local(async move {
-                let _ = client.logout().await;
-                store_token(None);
-                session.0.set(None);
-            });
-        }
-    });
+    let logout = use_logout();
 
     view! {
         <ServerGate>
         <Router>
             <ShareRedirect/>
+            <search::QuickSearch open=search_open/>
             <nav class="topbar">
                 <span class="brand">"chaos"</span>
                 <A href="/"><span class="nav-icon">"▦"</span>"Dashboard"</A>
@@ -421,6 +494,15 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <A href="/calendar"><span class="nav-icon">"▣"</span>"Calendar"</A>
                 <A href="/weather"><span class="nav-icon">"☀"</span>"Weather"</A>
                 <A href="/home"><span class="nav-icon">"⌂"</span>"Home"</A>
+                <button
+                    class="topbar-search"
+                    title="Search (Ctrl-K)"
+                    on:click=move |_| search_open.set(true)
+                >
+                    <span class="nav-icon">"⌕"</span>
+                    "Search"
+                    <kbd>"Ctrl K"</kbd>
+                </button>
                 <span class="topbar-foot">
                     <A href="/settings"><span class="nav-icon">"⚙"</span>"Settings"</A>
                     <A href="/about"><span class="nav-icon">"ⓘ"</span>"About"</A>
@@ -454,6 +536,10 @@ pub fn App(config: AppConfig) -> impl IntoView {
                         </A>
                     })
                     .collect_view()}
+                <button class="tab-search" on:click=move |_| search_open.set(true)>
+                    <span class="tab-icon">"⌕"</span>
+                    <span class="tab-label">"Search"</span>
+                </button>
             </nav>
             <main>
                 <Routes fallback=|| view! { <p class="muted">"Page not found"</p> }>
@@ -538,12 +624,7 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
         if Url::parse(&value).is_err() {
             return;
         }
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                let _ = storage.set_item(API_BASE_KEY, &value);
-            }
-            let _ = window.location().reload();
-        }
+        set_api_base_override(Some(&value));
     };
 
     view! {
@@ -576,5 +657,51 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
                     .into_any()
             }
         }}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_weather() -> chaos_domain::WeatherData {
+        chaos_domain::WeatherData {
+            location: "Paris, FR".into(),
+            temperature_c: 21.0,
+            apparent_c: 19.6,
+            humidity_pct: Some(55.0),
+            wind_kmh: 12.3,
+            weather_code: 1,
+            description: "Mainly clear".into(),
+            daily: Vec::new(),
+            hourly: Vec::new(),
+            now_index: 0,
+        }
+    }
+
+    #[test]
+    fn convert_temp_handles_both_units() {
+        assert_eq!(convert_temp(0.0, false), 0.0);
+        assert_eq!(convert_temp(0.0, true), 32.0);
+        assert_eq!(convert_temp(100.0, true), 212.0);
+        assert_eq!(convert_temp_1dp(21.34, false), 21.3);
+        assert_eq!(convert_temp_1dp(21.34, true), 70.4);
+        assert_eq!(format_temp(19.6, false), "20°");
+        assert_eq!(format_temp(19.6, true), "67°");
+    }
+
+    #[test]
+    fn weather_details_joins_the_parts() {
+        let weather = sample_weather();
+        assert_eq!(
+            weather_details("Paris, FR", &weather, false),
+            "Paris, FR · feels 20° · wind 12 km/h · 55% humidity"
+        );
+        let mut weather = weather;
+        weather.humidity_pct = None;
+        assert_eq!(
+            weather_details("Mainly clear", &weather, true),
+            "Mainly clear · feels 67° · wind 12 km/h"
+        );
     }
 }

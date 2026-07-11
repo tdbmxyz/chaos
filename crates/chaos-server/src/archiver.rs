@@ -19,6 +19,11 @@ use crate::state::AppState;
 /// Cap on text stored in the FTS index per page.
 const MAX_FTS_TEXT_BYTES: usize = 512 * 1024;
 
+/// Snapshots larger than this fail the archive instead of being read into
+/// memory; monolith can emit hundreds of MB for pathological pages and an
+/// unchecked read_to_string would balloon the server.
+const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
+
 pub fn spawn(state: AppState) {
     if state.config.archive.enabled {
         tokio::spawn(run(state));
@@ -43,10 +48,16 @@ async fn run(state: AppState) {
         match state.db.next_pending_archive().await {
             Ok(Some(link)) => {
                 let outcome = archive_one(&state, &link).await;
-                if let Err(err) = state.db.finish_archive(link.id, outcome).await {
-                    tracing::error!(link = %link.id, %err, "recording archive outcome");
+                match state.db.finish_archive(link.id, outcome).await {
+                    // Drain the queue before sleeping.
+                    Ok(()) => continue,
+                    // Fall through to the idle sleep: if the outcome can't
+                    // be recorded the link stays pending, and looping now
+                    // would re-run monolith on it in a tight loop.
+                    Err(err) => {
+                        tracing::error!(link = %link.id, %err, "recording archive outcome");
+                    }
                 }
-                continue; // drain the queue before sleeping
             }
             Ok(None) => {}
             Err(err) => tracing::error!(%err, "polling archive queue"),
@@ -125,10 +136,20 @@ async fn finalize(
     tmp_path: &std::path::Path,
     final_path: &std::path::Path,
 ) -> Result<(u64, String), String> {
+    // Size check before read is race-free here: monolith has exited and the
+    // single archiver worker is the only writer of tmp_path.
+    let size_bytes = tokio::fs::metadata(tmp_path)
+        .await
+        .map_err(|e| format!("inspecting snapshot: {e}"))?
+        .len();
+    if size_bytes > MAX_SNAPSHOT_BYTES {
+        return Err(format!(
+            "snapshot too large ({size_bytes} bytes, cap {MAX_SNAPSHOT_BYTES})"
+        ));
+    }
     let html = tokio::fs::read_to_string(tmp_path)
         .await
         .map_err(|e| format!("reading snapshot: {e}"))?;
-    let size_bytes = html.len() as u64;
 
     // HTML parsing of a multi-MB page is CPU work; keep it off the runtime.
     let text = tokio::task::spawn_blocking(move || extract_text(&html))
@@ -184,5 +205,49 @@ mod tests {
              <p>brown <b>fox</b>\n jumps</p></body></html>",
         );
         assert_eq!(text, "Hello brown fox jumps");
+    }
+
+    /// Fresh temp dir per test so parallel tests don't collide.
+    async fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("chaos-archiver-{name}-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.expect("temp dir");
+        dir
+    }
+
+    #[tokio::test]
+    async fn finalize_rejects_oversized_snapshots() {
+        let dir = temp_dir("oversized").await;
+        let tmp = dir.join("page.html.tmp");
+        let final_path = dir.join("page.html");
+        // Sparse file: instant to create, but metadata reports the full size.
+        let file = tokio::fs::File::create(&tmp).await.expect("create tmp");
+        file.set_len(MAX_SNAPSHOT_BYTES + 1).await.expect("set_len");
+        drop(file);
+
+        let err = finalize(&tmp, &final_path)
+            .await
+            .expect_err("oversized snapshot must fail the archive");
+        assert!(err.contains("too large"), "unexpected reason: {err}");
+        // The snapshot must not have been moved into place.
+        assert!(tokio::fs::metadata(&final_path).await.is_err());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn finalize_moves_small_snapshots_and_extracts_text() {
+        let dir = temp_dir("small").await;
+        let tmp = dir.join("page.html.tmp");
+        let final_path = dir.join("page.html");
+        let html = "<html><body><p>hello world</p></body></html>";
+        tokio::fs::write(&tmp, html).await.expect("write tmp");
+
+        let (size_bytes, text) = finalize(&tmp, &final_path).await.expect("finalize");
+        assert_eq!(size_bytes, html.len() as u64);
+        assert_eq!(text, "hello world");
+        assert!(tokio::fs::metadata(&final_path).await.is_ok());
+        assert!(tokio::fs::metadata(&tmp).await.is_err());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

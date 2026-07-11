@@ -142,15 +142,24 @@ impl HomeAssistantClient {
             .append_pair("end_time", &end.to_rfc3339())
             .append_pair("minimal_response", "");
 
-        // One array per requested entity, in request order (per HA's docs).
-        // `minimal_response` drops `entity_id` (and attributes) from every
-        // entry but the first for a given entity, so match by array
-        // position instead of by `entity_id`.
-        let mut raw: Vec<Vec<HaStateChange>> = self.get_json(url).await?;
-        raw.resize_with(self.sensors.len(), Vec::new);
+        // One array per entity — but HA omits entities with no states in
+        // the window, so matching by position would shift every later
+        // array onto the wrong sensor. `minimal_response` keeps
+        // `entity_id` on the first entry of each array: match on that,
+        // and pad omitted entities with an empty reading list.
+        let raw: Vec<Vec<HaStateChange>> = self.get_json(url).await?;
+        let mut by_entity: HashMap<String, Vec<HaStateChange>> = HashMap::new();
+        for changes in raw {
+            if let Some(entity_id) = changes.first().and_then(|c| c.entity_id.clone()) {
+                by_entity.insert(entity_id, changes);
+            } else if !changes.is_empty() {
+                tracing::warn!("history array without entity_id on its first entry; dropping it");
+            }
+        }
 
         let mut series = Vec::with_capacity(self.sensors.len());
-        for (def, changes) in self.sensors.iter().zip(raw) {
+        for def in &self.sensors {
+            let changes = by_entity.remove(&def.entity_id).unwrap_or_default();
             series.push(TemperatureSeries {
                 id: def.id.clone(),
                 label: self.label(def).await,
@@ -390,6 +399,10 @@ fn to_light_state(def: &HomeEntityDef, label: String, raw: &HaEntityState) -> Li
 
 #[derive(Debug, Deserialize)]
 struct HaStateChange {
+    /// With `minimal_response`, present only on the first entry of each
+    /// per-entity array — that one entry identifies the whole array.
+    #[serde(default)]
+    entity_id: Option<String>,
     state: String,
     last_changed: DateTime<Utc>,
 }
@@ -644,5 +657,91 @@ mod tests {
         };
         assert_eq!(super::derive_battery_entity(&overridden.entity_id), None);
         assert_eq!(ha.battery_pct(&overridden).await, Some(87.0));
+    }
+
+    fn sensor_def(id: &str, entity_id: &str) -> HomeEntityDef {
+        HomeEntityDef {
+            id: id.into(),
+            label: Some(id.into()),
+            entity_id: entity_id.into(),
+            battery_entity_id: None,
+        }
+    }
+
+    /// Stub HA answering `/api/history/period/{start}` with a fixed JSON
+    /// body, whatever the query string.
+    async fn stub_ha_history(body: serde_json::Value) -> Url {
+        let app = axum::Router::new().route(
+            "/api/history/period/{start}",
+            axum::routing::get(move |_: Path<String>| {
+                let body = body.clone();
+                async move { axum::Json(body) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binding stub ha");
+        let addr = listener.local_addr().expect("stub ha addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serving stub ha");
+        });
+        format!("http://{addr}/").parse().expect("stub ha url")
+    }
+
+    /// HA omits entities with no states in the window. Three sensors are
+    /// requested but the middle one ("b") has no history: its array is
+    /// absent from the response. Positional matching would hand b the
+    /// readings of c — series must be matched by the `entity_id` carried
+    /// on the first entry of each array instead.
+    #[tokio::test]
+    async fn history_matches_series_by_entity_id_when_ha_omits_one() {
+        use chrono::TimeZone;
+
+        // minimal_response: only the first entry of each array carries
+        // `entity_id`; later entries are state + last_changed only.
+        let body = serde_json::json!([
+            [
+                {
+                    "entity_id": "sensor.a_temperature",
+                    "state": "20.0",
+                    "last_changed": "2026-07-11T10:00:00+00:00"
+                },
+                { "state": "20.5", "last_changed": "2026-07-11T11:00:00+00:00" }
+            ],
+            [
+                {
+                    "entity_id": "sensor.c_temperature",
+                    "state": "23.0",
+                    "last_changed": "2026-07-11T10:30:00+00:00"
+                }
+            ]
+        ]);
+        let url = stub_ha_history(body).await;
+        let ha = client_with(
+            url,
+            vec![
+                sensor_def("a", "sensor.a_temperature"),
+                sensor_def("b", "sensor.b_temperature"),
+                sensor_def("c", "sensor.c_temperature"),
+            ],
+            vec![],
+        );
+
+        let start = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 12, 0, 0, 0).unwrap();
+        let series = ha.temperature_history(start, end).await.expect("history");
+
+        assert_eq!(series.len(), 3, "one series per configured sensor");
+        assert_eq!(series[0].id, "a");
+        assert_eq!(series[0].readings.len(), 2);
+        assert_eq!(series[0].readings[1].celsius, 20.5);
+        assert_eq!(series[1].id, "b");
+        assert!(
+            series[1].readings.is_empty(),
+            "an entity HA omitted must come back empty, not steal the next sensor's readings"
+        );
+        assert_eq!(series[2].id, "c");
+        assert_eq!(series[2].readings.len(), 1);
+        assert_eq!(series[2].readings[0].celsius, 23.0);
     }
 }

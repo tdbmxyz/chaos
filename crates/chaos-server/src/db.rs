@@ -17,6 +17,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{QueryBuilder, Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::db_auth::parse_uuid;
+
 const DEFAULT_PAGE_SIZE: u32 = 50;
 const MAX_PAGE_SIZE: u32 = 200;
 
@@ -54,23 +56,28 @@ impl Db {
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .foreign_keys(true);
-        Self::with_options(options).await
+        Self::with_options(options, 4).await
     }
 
-    /// In-memory database for tests.
+    /// In-memory database for tests. Every SQLite `:memory:` connection is
+    /// its own independent database, so the pool must be capped at one
+    /// connection — a second one would be fresh and unmigrated.
     #[cfg(test)]
     pub async fn in_memory() -> Result<Self> {
         use std::str::FromStr;
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
             .expect("valid memory dsn")
             .foreign_keys(true);
-        Self::with_options(options).await
+        Self::with_options(options, 1).await
     }
 
-    async fn with_options(options: SqliteConnectOptions) -> Result<Self> {
+    async fn with_options(options: SqliteConnectOptions, max_connections: u32) -> Result<Self> {
         let pool = SqlitePoolOptions::new()
-            // A single writer avoids SQLITE_BUSY surprises; reads are cheap.
-            .max_connections(4)
+            // SQLite still allows only one writer at a time; with WAL,
+            // reads on the other pooled connections run concurrently and a
+            // contended writer waits on sqlx's default 5s busy_timeout
+            // instead of failing with SQLITE_BUSY.
+            .max_connections(max_connections)
             .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
@@ -90,6 +97,9 @@ impl Db {
 
     pub async fn create_collection(&self, req: &CollectionRequest) -> Result<Collection> {
         validate_name(&req.name)?;
+        if let Some(description) = &req.description {
+            validate_len("description", description, MAX_TEXT_LEN)?;
+        }
         let id = Uuid::now_v7();
         sqlx::query(
             "INSERT INTO collections (id, name, description, color, parent_id, created_at)
@@ -97,12 +107,7 @@ impl Db {
         )
         .bind(id.to_string())
         .bind(req.name.trim())
-        .bind(
-            req.description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
+        .bind(trimmed(&req.description))
         .bind(&req.color)
         .bind(req.parent_id.map(|p| p.to_string()))
         .bind(Utc::now())
@@ -114,29 +119,34 @@ impl Db {
 
     pub async fn update_collection(&self, id: Uuid, req: &CollectionRequest) -> Result<Collection> {
         validate_name(&req.name)?;
+        if let Some(description) = &req.description {
+            validate_len("description", description, MAX_TEXT_LEN)?;
+        }
+        // Walk + UPDATE share one transaction, closing the check-then-act
+        // race on this row. Deferred BEGIN means two concurrent re-parents
+        // of *different* collections could still cross into a cycle; that
+        // needs BEGIN IMMEDIATE and hasn't been worth it for a single-user
+        // deployment.
+        let mut tx = self.pool.begin().await?;
         if let Some(parent_id) = req.parent_id {
-            self.ensure_no_collection_cycle(id, parent_id).await?;
+            ensure_no_collection_cycle(&mut tx, id, parent_id).await?;
         }
         let result = sqlx::query(
             "UPDATE collections SET name = ?, description = ?, color = ?, parent_id = ?
              WHERE id = ?",
         )
         .bind(req.name.trim())
-        .bind(
-            req.description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
+        .bind(trimmed(&req.description))
         .bind(&req.color)
         .bind(req.parent_id.map(|p| p.to_string()))
         .bind(id.to_string())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_reference_err)?;
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound);
         }
+        tx.commit().await?;
         self.get_collection(id).await
     }
 
@@ -161,31 +171,6 @@ impl Db {
         Collection::try_from(row)
     }
 
-    /// Reject a `parent_id` that would make `id` an ancestor of itself.
-    async fn ensure_no_collection_cycle(&self, id: Uuid, new_parent: Uuid) -> Result<()> {
-        let mut cursor = Some(new_parent.to_string());
-        let id = id.to_string();
-        // Bounded walk: deeper nesting than this is certainly a data bug.
-        for _ in 0..64 {
-            let Some(current) = cursor else {
-                return Ok(());
-            };
-            if current == id {
-                return Err(DbError::Constraint(
-                    "collection cannot be its own ancestor".into(),
-                ));
-            }
-            cursor = sqlx::query_scalar::<_, Option<String>>(
-                "SELECT parent_id FROM collections WHERE id = ?",
-            )
-            .bind(current)
-            .fetch_optional(&self.pool)
-            .await?
-            .flatten();
-        }
-        Err(DbError::Constraint("collection nesting too deep".into()))
-    }
-
     // ---- tags ----
 
     pub async fn list_tags(&self) -> Result<Vec<TagWithCount>> {
@@ -202,7 +187,7 @@ impl Db {
             .map(|row| {
                 Ok(TagWithCount {
                     tag: Tag {
-                        id: parse_uuid(row.get::<String, _>("id"))?,
+                        id: parse_uuid(&row.get::<String, _>("id"))?,
                         name: row.get("name"),
                     },
                     link_count: row.get::<i64, _>("link_count") as u64,
@@ -223,13 +208,16 @@ impl Db {
         archive: bool,
         created_by: Option<Uuid>,
     ) -> Result<Link> {
+        if let Some(title) = &req.title {
+            validate_len("title", title, MAX_NAME_LEN)?;
+        }
+        if let Some(description) = &req.description {
+            validate_len("description", description, MAX_TEXT_LEN)?;
+        }
+        validate_len("url", req.url.as_str(), MAX_TEXT_LEN)?;
         let id = Uuid::now_v7();
         let now = Utc::now();
-        let title = req
-            .title
-            .as_deref()
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
+        let title = trimmed(&req.title)
             .map(String::from)
             // Metadata fetch happens in the API layer; this is the last resort.
             .unwrap_or_else(|| req.url.host_str().unwrap_or("untitled").to_string());
@@ -243,12 +231,7 @@ impl Db {
         .bind(id.to_string())
         .bind(req.url.as_str())
         .bind(&title)
-        .bind(
-            req.description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
+        .bind(trimmed(&req.description))
         .bind(req.collection_id.map(|c| c.to_string()))
         .bind(if archive { "pending" } else { "none" })
         .bind(created_by.map(|u| u.to_string()))
@@ -265,6 +248,10 @@ impl Db {
 
     pub async fn update_link(&self, id: Uuid, req: &UpdateLinkRequest) -> Result<Link> {
         validate_name(&req.title)?;
+        if let Some(description) = &req.description {
+            validate_len("description", description, MAX_TEXT_LEN)?;
+        }
+        validate_len("url", req.url.as_str(), MAX_TEXT_LEN)?;
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "UPDATE links SET url = ?, title = ?, description = ?, collection_id = ?,
@@ -273,12 +260,7 @@ impl Db {
         )
         .bind(req.url.as_str())
         .bind(req.title.trim())
-        .bind(
-            req.description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
+        .bind(trimmed(&req.description))
         .bind(req.collection_id.map(|c| c.to_string()))
         .bind(Utc::now())
         .bind(id.to_string())
@@ -339,7 +321,7 @@ impl Db {
         .fetch_optional(&self.pool)
         .await?;
         match row {
-            Some(row) => Ok(Some(self.get_link(parse_uuid(row.id)?).await?)),
+            Some(row) => Ok(Some(self.get_link(parse_uuid(&row.id)?).await?)),
             None => Ok(None),
         }
     }
@@ -433,7 +415,12 @@ impl Db {
             if let Some(q) = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
                 // Substring match over the link fields, plus full-text match
                 // over archived page content.
-                let pattern = format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"));
+                let pattern = format!(
+                    "%{}%",
+                    q.replace('\\', "\\\\")
+                        .replace('%', "\\%")
+                        .replace('_', "\\_")
+                );
                 qb.push(" AND (l.title LIKE ");
                 qb.push_bind(pattern.clone());
                 qb.push(" ESCAPE '\\' OR l.description LIKE ");
@@ -502,12 +489,42 @@ impl Db {
 
         for row in qb.build().fetch_all(&self.pool).await? {
             map.entry(row.get("link_id")).or_default().push(Tag {
-                id: parse_uuid(row.get::<String, _>("id"))?,
+                id: parse_uuid(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
             });
         }
         Ok(map)
     }
+}
+
+/// Reject a `parent_id` that would make `id` an ancestor of itself. Runs on
+/// the caller's transaction so the walk and the subsequent UPDATE are atomic.
+async fn ensure_no_collection_cycle(
+    conn: &mut sqlx::SqliteConnection,
+    id: Uuid,
+    new_parent: Uuid,
+) -> Result<()> {
+    let mut cursor = Some(new_parent.to_string());
+    let id = id.to_string();
+    // Bounded walk: deeper nesting than this is certainly a data bug.
+    for _ in 0..64 {
+        let Some(current) = cursor else {
+            return Ok(());
+        };
+        if current == id {
+            return Err(DbError::Constraint(
+                "collection cannot be its own ancestor".into(),
+            ));
+        }
+        cursor = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT parent_id FROM collections WHERE id = ?",
+        )
+        .bind(current)
+        .fetch_optional(&mut *conn)
+        .await?
+        .flatten();
+    }
+    Err(DbError::Constraint("collection nesting too deep".into()))
 }
 
 /// Replace the tag set of a link: upsert tag names, rewrite the junction
@@ -581,11 +598,29 @@ fn fts_match_query(q: &str) -> String {
         .join(" ")
 }
 
+/// Sanity caps on free-text inputs — generous for humans, hostile to blobs.
+pub(crate) const MAX_NAME_LEN: usize = 512;
+pub(crate) const MAX_TEXT_LEN: usize = 4096;
+
+pub(crate) fn validate_len(field: &str, value: &str, max: usize) -> Result<()> {
+    if value.chars().count() > max {
+        return Err(DbError::Constraint(format!(
+            "{field} is too long (max {max} characters)"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_name(name: &str) -> Result<()> {
     if name.trim().is_empty() {
         return Err(DbError::Constraint("name must not be empty".into()));
     }
-    Ok(())
+    validate_len("name", name, MAX_NAME_LEN)
+}
+
+/// Trim-or-None: user-supplied optional text normalized for storage.
+pub(crate) fn trimmed(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// Surface foreign-key violations as constraint errors the API can turn
@@ -597,10 +632,6 @@ fn map_reference_err(err: sqlx::Error) -> DbError {
         }
         _ => DbError::Sqlx(err),
     }
-}
-
-fn parse_uuid(s: String) -> Result<Uuid> {
-    Uuid::parse_str(&s).map_err(|_| DbError::Corrupt(format!("invalid uuid {s:?}")))
 }
 
 fn parse_url(s: String) -> Result<url::Url> {
@@ -624,11 +655,11 @@ impl TryFrom<CollectionRow> for Collection {
 
     fn try_from(row: CollectionRow) -> Result<Self> {
         Ok(Collection {
-            id: parse_uuid(row.id)?,
+            id: parse_uuid(&row.id)?,
             name: row.name,
             description: row.description,
             color: row.color,
-            parent_id: row.parent_id.map(parse_uuid).transpose()?,
+            parent_id: row.parent_id.as_deref().map(parse_uuid).transpose()?,
             created_at: row.created_at,
         })
     }
@@ -672,12 +703,12 @@ impl TryFrom<LinkRow> for Link {
             other => return Err(DbError::Corrupt(format!("archive_state {other:?}"))),
         };
         Ok(Link {
-            id: parse_uuid(row.id)?,
+            id: parse_uuid(&row.id)?,
             url: parse_url(row.url)?,
             title: row.title,
             description: row.description,
-            collection_id: row.collection_id.map(parse_uuid).transpose()?,
-            created_by: row.created_by.map(parse_uuid).transpose()?,
+            collection_id: row.collection_id.as_deref().map(parse_uuid).transpose()?,
+            created_by: row.created_by.as_deref().map(parse_uuid).transpose()?,
             tags: Vec::new(), // filled by the caller
             archive,
             created_at: row.created_at,
@@ -758,6 +789,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cycle_guard_spans_grandchildren() {
+        let db = Db::in_memory().await.unwrap();
+        let req = |name: &str, parent_id: Option<Uuid>| CollectionRequest {
+            name: name.into(),
+            description: None,
+            color: None,
+            parent_id,
+        };
+
+        let a = db.create_collection(&req("A", None)).await.unwrap();
+        let b = db.create_collection(&req("B", Some(a.id))).await.unwrap();
+        let c = db.create_collection(&req("C", Some(b.id))).await.unwrap();
+
+        // A cannot be re-parented under its grandchild…
+        let deep = db.update_collection(a.id, &req("A", Some(c.id))).await;
+        assert!(matches!(deep, Err(DbError::Constraint(_))));
+        // …nor under itself.
+        let own = db.update_collection(a.id, &req("A", Some(a.id))).await;
+        assert!(matches!(own, Err(DbError::Constraint(_))));
+        // A legal re-parent (C under A directly) still works.
+        let moved = db
+            .update_collection(c.id, &req("C", Some(a.id)))
+            .await
+            .unwrap();
+        assert_eq!(moved.parent_id, Some(a.id));
+    }
+
+    #[tokio::test]
     async fn link_crud_with_tags_and_orphan_gc() {
         let db = Db::in_memory().await.unwrap();
 
@@ -830,6 +889,96 @@ mod tests {
             db.delete_link(link.id).await,
             Err(DbError::NotFound)
         ));
+    }
+
+    /// LIKE metacharacters in the search query must match literally:
+    /// `%`, `_`, and — the regression — `\` itself. An unescaped `\`
+    /// under ESCAPE '\' turns the following `%` into a literal percent,
+    /// so searching for a backslash finds percent signs instead.
+    #[tokio::test]
+    async fn search_escapes_like_metacharacters_literally() {
+        let db = Db::in_memory().await.unwrap();
+
+        let titled = |title: &str, url: &str| CreateLinkRequest {
+            url: url.parse().unwrap(),
+            title: Some(title.into()),
+            description: None,
+            collection_id: None,
+            tags: vec![],
+        };
+        db.create_link(
+            &titled("50% off", "https://example.com/percent"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        db.create_link(
+            &titled("c:\\temp", "https://example.com/backslash"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        db.create_link(
+            &titled("my_var", "https://example.com/underscore"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        db.create_link(&titled("myxvar", "https://example.com/decoy"), false, None)
+            .await
+            .unwrap();
+        db.create_link(
+            &CreateLinkRequest {
+                url: "https://example.com/report".parse().unwrap(),
+                title: Some("quarterly report".into()),
+                description: Some("saved under c:\\data, 100% complete".into()),
+                collection_id: None,
+                tags: vec![],
+            },
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let search = |q: &str| LinkQuery {
+            q: Some(q.into()),
+            ..Default::default()
+        };
+
+        // A lone backslash must find the two links carrying one (title
+        // "c:\temp" and the "c:\data" description), not the "%" title.
+        let backslash = db.list_links(&search("\\")).await.unwrap();
+        assert_eq!(backslash.total, 2, "backslash must match literally");
+        assert!(backslash.items.iter().any(|l| l.title == "c:\\temp"));
+        assert!(
+            backslash
+                .items
+                .iter()
+                .any(|l| l.title == "quarterly report")
+        );
+
+        // Literal `%`: only the percent title, not everything.
+        let percent = db.list_links(&search("50%")).await.unwrap();
+        assert_eq!(percent.total, 1);
+        assert_eq!(percent.items[0].title, "50% off");
+
+        // Literal `_`: must not wildcard-match "myxvar".
+        let underscore = db.list_links(&search("my_var")).await.unwrap();
+        assert_eq!(underscore.total, 1);
+        assert_eq!(underscore.items[0].title, "my_var");
+
+        // The description arm uses the same pattern, and backslash
+        // followed by `%` in one query is the original failure shape.
+        let mixed = db.list_links(&search("c:\\data, 100%")).await.unwrap();
+        assert_eq!(
+            mixed.total, 1,
+            "backslash+percent must match the description"
+        );
+        assert_eq!(mixed.items[0].title, "quarterly report");
     }
 
     #[tokio::test]
@@ -1039,5 +1188,79 @@ mod tests {
             .unwrap();
         assert_eq!(page.total, 3);
         assert_eq!(page.items.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn in_memory_pool_is_one_shared_database() {
+        let db = Db::in_memory().await.unwrap();
+        // Concurrent queries force the pool to open extra connections when
+        // max_connections > 1. Every extra `:memory:` connection is a
+        // fresh, unmigrated database, so one of these fails with
+        // "no such table: collections" until the pool is capped at 1.
+        let results = futures::future::join_all((0..8).map(|_| db.list_collections())).await;
+        for result in results {
+            result.expect("every pooled connection must see the migrated schema");
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_inputs_are_refused() {
+        let db = Db::in_memory().await.unwrap();
+        let long_name = "x".repeat(MAX_NAME_LEN + 1);
+        let long_text = "x".repeat(MAX_TEXT_LEN + 1);
+
+        assert!(matches!(
+            db.create_collection(&CollectionRequest {
+                name: long_name.clone(),
+                description: None,
+                color: None,
+                parent_id: None,
+            })
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+
+        assert!(matches!(
+            db.create_link(
+                &CreateLinkRequest {
+                    url: "https://example.com".parse().unwrap(),
+                    title: Some(long_name.clone()),
+                    description: None,
+                    collection_id: None,
+                    tags: vec![],
+                },
+                false,
+                None,
+            )
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+
+        assert!(matches!(
+            db.create_link(
+                &CreateLinkRequest {
+                    url: "https://example.com".parse().unwrap(),
+                    title: None,
+                    description: Some(long_text.clone()),
+                    collection_id: None,
+                    tags: vec![],
+                },
+                false,
+                None,
+            )
+            .await,
+            Err(DbError::Constraint(_))
+        ));
+
+        // At the limit everything still works.
+        let ok = db
+            .create_collection(&CollectionRequest {
+                name: "x".repeat(MAX_NAME_LEN),
+                description: Some("y".repeat(MAX_TEXT_LEN)),
+                color: None,
+                parent_id: None,
+            })
+            .await;
+        assert!(ok.is_ok());
     }
 }

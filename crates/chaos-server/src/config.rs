@@ -30,6 +30,9 @@ pub struct Config {
     pub search_url: Option<String>,
     pub monitor: MonitorConfig,
     pub archive: ArchiveConfig,
+    /// Scheduled database backups (`VACUUM INTO` snapshots). Off unless
+    /// `enabled = true`.
+    pub backup: BackupConfig,
     /// Services shown (and polled) on the dashboard.
     pub services: Vec<ServiceDef>,
     /// Static bookmark groups shown on the dashboard.
@@ -41,6 +44,46 @@ pub struct Config {
     /// Home Assistant integration (Home tab: temperature history + light
     /// control). Feature is off when `base_url` is `None`.
     pub home_assistant: HomeAssistantConfig,
+    /// Append `Secure` to the session cookie. Turn on when the server is
+    /// reached over HTTPS (reverse proxy with TLS); off by default because
+    /// plain-http LAN setups would otherwise lose their session cookie.
+    pub secure_cookies: bool,
+    /// Push notifications via ntfy (service alerts + calendar reminders).
+    /// Feature is off when `ntfy_url` is `None`.
+    pub notifications: NotificationsConfig,
+}
+
+/// Push notifications via ntfy. The whole feature is off when `ntfy_url`
+/// is `None` (the default): no HTTP client, no background task, nothing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    /// ntfy server base URL, e.g. `https://ntfy.sh` or a self-hosted
+    /// instance. `None` disables notifications entirely.
+    pub ntfy_url: Option<url::Url>,
+    /// Topic notifications are published to (`{ntfy_url}/{topic}`).
+    pub topic: String,
+    /// Bearer token for protected topics (ntfy access tokens).
+    pub token: Option<String>,
+    /// Notify on service Down/Degraded ↔ Up transitions.
+    pub service_alerts: bool,
+    /// Remind about calendar events shortly before they start.
+    pub calendar_reminders: bool,
+    /// How long before an event starts the reminder fires.
+    pub reminder_lead_minutes: u64,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            ntfy_url: None,
+            topic: String::new(),
+            token: None,
+            service_alerts: true,
+            calendar_reminders: true,
+            reminder_lead_minutes: 15,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -114,6 +157,32 @@ impl Default for ArchiveConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct BackupConfig {
+    /// Master switch for the scheduled backup task.
+    pub enabled: bool,
+    /// Directory where snapshots land (`chaos-<timestamp>.db`). Relative
+    /// paths resolve against the working directory (`/var/lib/chaos`
+    /// under the NixOS module), like `db_path` and `archive.dir`.
+    pub dir: PathBuf,
+    /// Hours between two snapshots (clamped to at least 1).
+    pub interval_hours: u64,
+    /// How many snapshots to keep; older ones are pruned after each run.
+    pub keep: usize,
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dir: PathBuf::from("backups"),
+            interval_hours: 24,
+            keep: 14,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MonitorConfig {
     /// Seconds between two polling sweeps.
     pub interval_secs: u64,
@@ -131,10 +200,13 @@ impl Default for Config {
             search_url: None,
             monitor: MonitorConfig::default(),
             archive: ArchiveConfig::default(),
+            backup: BackupConfig::default(),
             services: Vec::new(),
             bookmarks: Vec::new(),
             columns: Vec::new(),
             home_assistant: HomeAssistantConfig::default(),
+            secure_cookies: false,
+            notifications: NotificationsConfig::default(),
         }
     }
 }
@@ -186,6 +258,74 @@ mod tests {
         assert_eq!(
             config.bookmarks[0].links[0].android_package.as_deref(),
             Some("xyz.tdbm.yomu")
+        );
+    }
+
+    #[test]
+    fn secure_cookies_defaults_off_and_parses() {
+        let config = super::Config::default();
+        assert!(!config.secure_cookies);
+
+        let config: super::Config = figment::Figment::from(
+            figment::providers::Serialized::defaults(super::Config::default()),
+        )
+        .merge(figment::providers::Toml::string("secure_cookies = true"))
+        .extract()
+        .expect("secure_cookies must parse");
+        assert!(config.secure_cookies);
+    }
+
+    #[test]
+    fn notifications_section_parses_and_defaults_off() {
+        let toml = r#"
+            [notifications]
+            ntfy_url = "https://ntfy.example.com"
+            topic = "chaos"
+            token = "tk_secret"
+            reminder_lead_minutes = 30
+        "#;
+        let config: super::Config = figment::Figment::from(
+            figment::providers::Serialized::defaults(super::Config::default()),
+        )
+        .merge(figment::providers::Toml::string(toml))
+        .extract()
+        .expect("notifications section must parse");
+        let n = &config.notifications;
+        assert_eq!(
+            n.ntfy_url.as_ref().map(url::Url::as_str),
+            Some("https://ntfy.example.com/")
+        );
+        assert_eq!(n.topic, "chaos");
+        assert_eq!(n.token.as_deref(), Some("tk_secret"));
+        assert!(n.service_alerts, "service_alerts defaults to true");
+        assert!(n.calendar_reminders, "calendar_reminders defaults to true");
+        assert_eq!(n.reminder_lead_minutes, 30);
+
+        // No section at all → feature off (no url), defaults intact.
+        let default = super::Config::default();
+        assert!(default.notifications.ntfy_url.is_none());
+        assert_eq!(default.notifications.reminder_lead_minutes, 15);
+    }
+
+    #[test]
+    fn backup_section_parses_and_defaults_are_sane() {
+        let toml = r#"
+            [backup]
+            enabled = true
+        "#;
+        let config: super::Config = figment::Figment::from(
+            figment::providers::Serialized::defaults(super::Config::default()),
+        )
+        .merge(figment::providers::Toml::string(toml))
+        .extract()
+        .expect("backup section must parse");
+        assert!(config.backup.enabled);
+        assert_eq!(config.backup.dir, std::path::PathBuf::from("backups"));
+        assert_eq!(config.backup.interval_hours, 24);
+        assert_eq!(config.backup.keep, 14);
+        assert!(
+            !super::Config::default().backup.enabled,
+            "backups are opt-in"
         );
     }
 }

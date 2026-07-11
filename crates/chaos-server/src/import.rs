@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
-use chaos_domain::{CollectionRequest, CreateLinkRequest};
+use chaos_domain::{Collection, CollectionRequest, CreateLinkRequest};
 use serde::Deserialize;
 
 use crate::state::AppState;
@@ -83,8 +83,8 @@ pub async fn linkwarden(
     let mut links = 0usize;
     let mut skipped = 0usize;
 
-    // Pass 1: create collections, remembering Linkwarden id -> chaos id.
-    let mut id_map = HashMap::new();
+    // Pass 1: create collections, remembering Linkwarden id -> chaos collection.
+    let mut id_map: HashMap<i64, Collection> = HashMap::new();
     for c in &backup.collections {
         let created = state
             .db
@@ -98,7 +98,7 @@ pub async fn linkwarden(
             .with_context(|| format!("creating collection {:?}", c.name))?;
         collections += 1;
         if let Some(old_id) = c.id {
-            id_map.insert(old_id, created.id);
+            id_map.insert(old_id, created.clone());
         }
 
         // Pass 1.5: links of this collection.
@@ -131,26 +131,18 @@ pub async fn linkwarden(
         let (Some(old_id), Some(old_parent)) = (c.id, c.parent_id) else {
             continue;
         };
-        let (Some(&new_id), Some(&new_parent)) = (id_map.get(&old_id), id_map.get(&old_parent))
-        else {
+        let (Some(current), Some(parent)) = (id_map.get(&old_id), id_map.get(&old_parent)) else {
             continue;
         };
-        let current = state
-            .db
-            .list_collections()
-            .await?
-            .into_iter()
-            .find(|col| col.id == new_id)
-            .context("imported collection vanished")?;
         state
             .db
             .update_collection(
-                new_id,
+                current.id,
                 &CollectionRequest {
-                    name: current.name,
-                    description: current.description,
-                    color: current.color,
-                    parent_id: Some(new_parent),
+                    name: current.name.clone(),
+                    description: current.description.clone(),
+                    color: current.color.clone(),
+                    parent_id: Some(parent.id),
                 },
             )
             .await?;

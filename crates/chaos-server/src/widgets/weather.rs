@@ -4,11 +4,11 @@
 //! Open-Meteo geocoding API; forecasts then go through the regular forecast
 //! endpoint and are cached by the hub.
 
-use std::collections::HashMap;
-
 use chaos_domain::{DailyForecast, HourlyForecast, WeatherData, WidgetData};
 use serde::Deserialize;
-use tokio::sync::RwLock;
+
+use crate::cache::StaleCache;
+use crate::http_util::get_json;
 
 #[derive(Debug, Clone)]
 pub struct Place {
@@ -19,7 +19,7 @@ pub struct Place {
 
 pub async fn fetch(
     http: &reqwest::Client,
-    geocode_cache: &RwLock<HashMap<String, Place>>,
+    geocode_cache: &StaleCache<String, Place>,
     location: &str,
 ) -> Result<WidgetData, String> {
     let place = resolve(http, geocode_cache, location).await?;
@@ -34,7 +34,9 @@ pub async fn fetch(
         lat = place.latitude,
         lon = place.longitude,
     );
-    let forecast: Forecast = get_json(http, &url).await?;
+    let forecast: Forecast = get_json(http, &url)
+        .await
+        .map_err(|e| format!("open-meteo: {e}"))?;
 
     let current = forecast.current;
     // past_days extends BOTH series; only the hourly one should reach into
@@ -119,11 +121,11 @@ fn now_index(hourly: &[HourlyForecast], this_hour: chrono::NaiveDateTime) -> usi
 
 async fn resolve(
     http: &reqwest::Client,
-    cache: &RwLock<HashMap<String, Place>>,
+    cache: &StaleCache<String, Place>,
     location: &str,
 ) -> Result<Place, String> {
-    if let Some(place) = cache.read().await.get(location) {
-        return Ok(place.clone());
+    if let Some(place) = cache.get_stale(&location.to_string()).await {
+        return Ok(place);
     }
 
     // "Osaka, JP" style disambiguation: the geocoding API only searches
@@ -139,7 +141,9 @@ async fn resolve(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=10&language=en&format=json",
         urlencoded(name_query)
     );
-    let response: GeocodeResponse = get_json(http, &url).await?;
+    let response: GeocodeResponse = get_json(http, &url)
+        .await
+        .map_err(|e| format!("geocoding: {e}"))?;
     let hit = response
         .results
         .into_iter()
@@ -165,22 +169,8 @@ async fn resolve(
         latitude: hit.latitude,
         longitude: hit.longitude,
     };
-    cache
-        .write()
-        .await
-        .insert(location.to_string(), place.clone());
+    cache.insert(location.to_string(), place.clone()).await;
     Ok(place)
-}
-
-async fn get_json<T: serde::de::DeserializeOwned>(
-    http: &reqwest::Client,
-    url: &str,
-) -> Result<T, String> {
-    let resp = http.get(url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("open-meteo returned {}", resp.status()));
-    }
-    resp.json::<T>().await.map_err(|e| e.to_string())
 }
 
 fn urlencoded(s: &str) -> String {

@@ -325,15 +325,7 @@ fn chart_option(
 ) -> serde_json::Value {
     let fahrenheit = crate::weather_fahrenheit();
     let unit = if fahrenheit { "°F" } else { "°C" };
-    let convert = move |celsius: f64| {
-        let value = if fahrenheit {
-            celsius * 9.0 / 5.0 + 32.0
-        } else {
-            celsius
-        };
-        // One decimal: these values land verbatim in the tooltip.
-        (value * 10.0).round() / 10.0
-    };
+    let convert = move |celsius: f64| crate::convert_temp_1dp(celsius, fahrenheit);
 
     // Y-scale pinned from ALL series so hiding a room never rescales.
     let mut min = f64::INFINITY;

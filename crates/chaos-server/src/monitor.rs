@@ -5,12 +5,14 @@
 //! deliberately stopped unit is `Paused`, not `Down`, and skips the HTTP
 //! probe entirely.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use chaos_domain::{HealthState, ServiceDef, ServiceStatus};
 use chrono::Utc;
 
 use crate::config::MonitorConfig;
+use crate::notify::{AlertTracker, ServiceAlert};
 use crate::state::AppState;
 use crate::widgets::systemd;
 
@@ -32,6 +34,8 @@ pub fn client(config: &MonitorConfig) -> reqwest::Client {
 async fn run(state: AppState) {
     let interval = Duration::from_secs(state.config.monitor.interval_secs);
     let client = client(&state.config.monitor);
+    let alerting = state.notifier.is_some() && state.config.notifications.service_alerts;
+    let mut trackers: HashMap<String, AlertTracker> = HashMap::new();
 
     loop {
         let sweep_started = Instant::now();
@@ -43,10 +47,52 @@ async fn run(state: AppState) {
             .map(|service| check(&client, service));
         let results = futures::future::join_all(checks).await;
 
+        let mut alerts: Vec<(String, ServiceAlert, Option<String>)> = Vec::new();
         {
             let mut statuses = state.statuses.write().await;
             for (service, status) in state.config.services.iter().zip(results) {
+                if alerting
+                    && let Some(alert) = trackers
+                        .entry(service.id.clone())
+                        .or_default()
+                        .observe(status.state)
+                {
+                    // Degraded has no `error`; carry the HTTP status so the
+                    // phone notification says "HTTP 503", not just "failing".
+                    let detail = status
+                        .error
+                        .clone()
+                        .or_else(|| status.http_status.map(|code| format!("HTTP {code}")));
+                    alerts.push((service.title.clone(), alert, detail));
+                }
                 statuses.insert(service.id.clone(), status);
+            }
+        }
+        if let Some(notifier) = &state.notifier {
+            for (title, alert, error) in alerts {
+                match alert {
+                    ServiceAlert::Down => {
+                        let message = error.unwrap_or_else(|| "health check failing".into());
+                        notifier
+                            .send(
+                                &format!("{title} is down"),
+                                &message,
+                                "rotating_light",
+                                "high",
+                            )
+                            .await;
+                    }
+                    ServiceAlert::Recovered => {
+                        notifier
+                            .send(
+                                &format!("{title} recovered"),
+                                "health check passing again",
+                                "white_check_mark",
+                                "default",
+                            )
+                            .await;
+                    }
+                }
             }
         }
         tracing::debug!(
@@ -64,8 +110,9 @@ pub async fn check(client: &reqwest::Client, service: &ServiceDef) -> ServiceSta
     };
 
     match systemd::query(unit).await {
-        Ok((active_state, _)) => match active_state.as_str() {
-            "active" => {
+        Ok((active_state, _)) => match unit_status(&active_state, unit) {
+            Some(status) => status,
+            None => {
                 let mut status = probe_http(client, service).await;
                 // systemd reports active before slow apps bind their port
                 // (JVM services take a while); a running unit with a dead
@@ -75,20 +122,31 @@ pub async fn check(client: &reqwest::Client, service: &ServiceDef) -> ServiceSta
                 }
                 status
             }
-            "activating" | "reloading" => status_only(HealthState::Starting, None),
-            "failed" => status_only(HealthState::Down, Some(format!("unit {unit} failed"))),
-            // inactive / deactivating: stopped on purpose — the default
-            // state for on-demand services, so no HTTP check and no alarm.
-            "inactive" | "deactivating" => status_only(HealthState::Paused, None),
-            other => status_only(
-                HealthState::Unknown,
-                Some(format!("unit {unit} is {other}")),
-            ),
         },
         Err(reason) => {
             tracing::warn!(unit, reason, "systemd query failed for service");
             status_only(HealthState::Unknown, Some(reason))
         }
+    }
+}
+
+/// Map a systemd ActiveState to a service status, or `None` for "active":
+/// an active unit still needs the HTTP probe to prove the app answers.
+fn unit_status(active_state: &str, unit: &str) -> Option<ServiceStatus> {
+    match active_state {
+        "active" => None,
+        "activating" | "reloading" => Some(status_only(HealthState::Starting, None)),
+        "failed" => Some(status_only(
+            HealthState::Down,
+            Some(format!("unit {unit} failed")),
+        )),
+        // inactive / deactivating: stopped on purpose — the default state
+        // for on-demand services, so no HTTP check and no alarm.
+        "inactive" | "deactivating" => Some(status_only(HealthState::Paused, None)),
+        other => Some(status_only(
+            HealthState::Unknown,
+            Some(format!("unit {unit} is {other}")),
+        )),
     }
 }
 
@@ -135,5 +193,45 @@ async fn probe_http(client: &reqwest::Client, service: &ServiceDef) -> ServiceSt
             checked_at: Some(Utc::now()),
             error: Some(err.to_string()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_states_map_to_service_health() {
+        // An active unit still needs the HTTP probe.
+        assert!(unit_status("active", "app.service").is_none());
+
+        let starting = unit_status("activating", "app.service").unwrap();
+        assert_eq!(starting.state, HealthState::Starting);
+        assert!(starting.error.is_none());
+        assert_eq!(
+            unit_status("reloading", "app.service").unwrap().state,
+            HealthState::Starting
+        );
+
+        let failed = unit_status("failed", "app.service").unwrap();
+        assert_eq!(failed.state, HealthState::Down);
+        assert_eq!(failed.error.as_deref(), Some("unit app.service failed"));
+
+        // Stopped on purpose is paused, not an alarm.
+        assert_eq!(
+            unit_status("inactive", "app.service").unwrap().state,
+            HealthState::Paused
+        );
+        assert_eq!(
+            unit_status("deactivating", "app.service").unwrap().state,
+            HealthState::Paused
+        );
+
+        let odd = unit_status("maintenance", "app.service").unwrap();
+        assert_eq!(odd.state, HealthState::Unknown);
+        assert_eq!(
+            odd.error.as_deref(),
+            Some("unit app.service is maintenance")
+        );
     }
 }

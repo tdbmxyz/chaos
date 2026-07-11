@@ -1379,6 +1379,12 @@ button.primary {
     color: var(--accent);
   }
 
+  .tabbar .tab-search {
+    gap: 0.1rem;
+    font-size: 0.65rem;
+    padding: 0.15rem 0.6rem;
+  }
+
   .tab-icon {
     font-size: 1.15rem;
     line-height: 1;
@@ -1965,4 +1971,110 @@ body[data-theme="terminal"] .widget h2 {
   font-variant-numeric: tabular-nums;
   min-width: 2.6rem;
   text-align: right;
+}
+
+/* ---- quick-search (Ctrl-K) ---- */
+.quick-search-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+.quick-search {
+  width: min(560px, 92vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.quick-search-input {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 1rem;
+}
+.quick-search-input:focus {
+  outline: none;
+}
+.quick-search-results {
+  max-height: 55vh;
+  overflow-y: auto;
+  padding: 0.4rem;
+}
+.quick-search-results > p {
+  margin: 0.6rem;
+}
+.qs-group h4 {
+  margin: 0.4rem 0.6rem 0.2rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.qs-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.qs-row:hover,
+.qs-row.selected {
+  background: var(--bg);
+}
+.qs-row.selected {
+  outline: 1px solid var(--accent);
+}
+.qs-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+.topbar-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  text-align: left;
+}
+.topbar-search:hover {
+  color: var(--text);
+}
+.topbar-search kbd {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.tabbar .tab-search {
+  background: none;
+  border: none;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font: inherit;
+  cursor: pointer;
 }

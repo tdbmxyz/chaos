@@ -6,16 +6,19 @@
 //! design — writing goes to local calendars (CalDAV two-way sync would be
 //! its own project).
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::{DateTime, Days, NaiveDate, NaiveDateTime, TimeZone, Utc};
-use tokio::sync::RwLock;
 use uuid::Uuid;
+
+use crate::cache::StaleCache;
 
 const TTL: Duration = Duration::from_secs(600);
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// Cap on cached feeds; keys are the user's calendar ids, so this is
+/// effectively "how many feed calendars one server realistically has".
+const MAX_FEEDS: usize = 128;
 /// Cap on expanded occurrences per event and range, against pathological
 /// rules; a month view never legitimately needs more.
 const MAX_OCCURRENCES: u16 = 400;
@@ -45,18 +48,15 @@ pub struct FeedEvent {
     pub all_day: bool,
 }
 
-/// Cached feed: when it was fetched and the parsed events.
-type CachedFeed = (Instant, Arc<Vec<RawEvent>>);
-
 pub struct FeedCache {
-    entries: RwLock<HashMap<Uuid, CachedFeed>>,
+    entries: StaleCache<Uuid, Arc<Vec<RawEvent>>>,
     http: reqwest::Client,
 }
 
 impl Default for FeedCache {
     fn default() -> Self {
         Self {
-            entries: RwLock::new(HashMap::new()),
+            entries: StaleCache::new(MAX_FEEDS),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(15))
                 .user_agent(concat!("chaos/", env!("CARGO_PKG_VERSION")))
@@ -84,26 +84,21 @@ impl FeedCache {
     }
 
     async fn raw_events(&self, calendar_id: Uuid, url: &str) -> Result<Arc<Vec<RawEvent>>, String> {
-        if let Some((fetched, events)) = self.entries.read().await.get(&calendar_id)
-            && fetched.elapsed() < TTL
-        {
-            return Ok(events.clone());
+        if let Some(events) = self.entries.get_fresh(&calendar_id, TTL).await {
+            return Ok(events);
         }
 
         match self.fetch(url).await {
             Ok(events) => {
                 let events = Arc::new(events);
-                self.entries
-                    .write()
-                    .await
-                    .insert(calendar_id, (Instant::now(), events.clone()));
+                self.entries.insert(calendar_id, events.clone()).await;
                 Ok(events)
             }
             Err(reason) => {
                 // Serve the stale copy if we have one.
-                if let Some((_, events)) = self.entries.read().await.get(&calendar_id) {
+                if let Some(events) = self.entries.get_stale(&calendar_id).await {
                     tracing::warn!(%calendar_id, reason, "ics refresh failed, serving stale feed");
-                    return Ok(events.clone());
+                    return Ok(events);
                 }
                 Err(reason)
             }
@@ -111,20 +106,13 @@ impl FeedCache {
     }
 
     async fn fetch(&self, url: &str) -> Result<Vec<RawEvent>, String> {
-        let resp = self.http.get(url).send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("feed returned {}", resp.status()));
-        }
-        let body = resp.bytes().await.map_err(|e| e.to_string())?;
-        if body.len() > MAX_BODY_BYTES {
-            return Err(format!("feed too large ({} bytes)", body.len()));
-        }
+        let body = crate::http_util::get_body_capped(&self.http, url, MAX_BODY_BYTES).await?;
         parse(&body)
     }
 
     /// Drop a cached feed (after its calendar is edited or deleted).
     pub async fn invalidate(&self, calendar_id: Uuid) {
-        self.entries.write().await.remove(&calendar_id);
+        self.entries.remove(&calendar_id).await;
     }
 }
 
@@ -204,7 +192,13 @@ fn parse_datetime(prop: &ical::property::Property) -> Option<(DateTime<Utc>, boo
                 .any(|(k, v)| k == "VALUE" && v.iter().any(|s| s == "DATE"))
         });
     if is_date {
-        let date = NaiveDate::parse_from_str(&raw[..8.min(raw.len())], "%Y%m%d").ok()?;
+        // Known limitation: all-day events are pinned to UTC midnight, so
+        // viewers in negative-UTC-offset zones see them start a day early.
+        // Fixing this means plumbing a display timezone through the whole
+        // calendar API — deliberately out of scope here.
+        let date = raw
+            .get(..8)
+            .and_then(|s| NaiveDate::parse_from_str(s, "%Y%m%d").ok())?;
         return Some((Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0)?), true));
     }
 
@@ -267,6 +261,13 @@ fn expand(event: &RawEvent, start: DateTime<Utc>, end: DateTime<Utc>, out: &mut 
         .after(window_start)
         .before(window_end)
         .all(MAX_OCCURRENCES);
+    if result.limited {
+        tracing::debug!(
+            title = event.title,
+            limit = MAX_OCCURRENCES,
+            "recurrence expansion truncated at MAX_OCCURRENCES"
+        );
+    }
     for date in result.dates {
         let starts_at = date.with_timezone(&Utc);
         if starts_at < end && starts_at + duration > start {
@@ -346,5 +347,46 @@ END:VCALENDAR\r\n";
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].title, "Standup");
         assert_eq!(out[0].description.as_deref(), Some("Daily sync"));
+    }
+
+    #[test]
+    fn parse_datetime_survives_multibyte_date_values() {
+        // 9 bytes: byte index 8 falls inside the two-byte 'é', so a naive
+        // `&raw[..8]` slice panics. Must return None instead.
+        let prop = ical::property::Property {
+            name: "DTSTART".into(),
+            params: Some(vec![("VALUE".into(), vec!["DATE".into()])]),
+            value: Some("2026071é".into()),
+        };
+        assert!(parse_datetime(&prop).is_none());
+    }
+
+    /// Serves `body` at /feed.ics on an ephemeral port; returns the URL.
+    async fn stub_feed(body: Vec<u8>) -> String {
+        let app = axum::Router::new().route(
+            "/feed.ics",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binding stub feed");
+        let addr = listener.local_addr().expect("stub feed addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serving stub feed");
+        });
+        format!("http://{addr}/feed.ics")
+    }
+
+    #[tokio::test]
+    async fn fetch_rejects_oversized_feeds_while_streaming() {
+        let url = stub_feed(vec![b' '; MAX_BODY_BYTES + 1]).await;
+        let err = FeedCache::default()
+            .fetch(&url)
+            .await
+            .expect_err("oversized feed must fail");
+        assert!(err.contains("exceeds"), "unexpected error: {err}");
     }
 }

@@ -107,7 +107,9 @@ cross-origin (bearer instead of the cookie).
 
 - [ ] Deploy on zeus, retire glance (recipe ready in docs/deployment.md)
 - [ ] authentik (OIDC) sign-in once deployed (seam in ADR 0004)
-- [ ] Notifications: service down / calendar reminders via ntfy or web push
+- [x] Notifications: service down/recovered alerts (flap-debounced) +
+      calendar reminders via ntfy (`[notifications]` in chaos.toml; web
+      push not needed — ntfy app covers phones)
 - [ ] Dashboard editing in-app (add/move/remove widgets, persisted
       server-side) instead of TOML-only layout
 - [x] Quick-add from phone: Android share intent → `/?share=` →
@@ -121,8 +123,10 @@ cross-origin (bearer instead of the cookie).
       own usage vs pool capacity, multi-mounts deduped) + 1h CPU/memory
       sparklines (30s sampler, only spawned when the widget exists)
 - [ ] Todo/groceries widget (shared household lists, pairs with calendar)
-- [ ] Global quick-search across services, links and events (Ctrl-K)
-- [ ] Scheduled SQLite backup/export
+- [x] Global quick-search across services, links and events (Ctrl-K):
+      `GET /api/v1/search` + overlay (debounced, grouped, arrow-key nav)
+- [x] Scheduled SQLite backup/export: `[backup]` config, VACUUM INTO
+      snapshots with retention pruning
 
 ## Deferred / explicitly out of scope
 

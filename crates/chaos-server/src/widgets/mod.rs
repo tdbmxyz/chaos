@@ -18,14 +18,20 @@ pub(crate) mod systemd;
 mod weather;
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::future::Future;
+use std::time::Duration;
 
 use chaos_domain::{
     ColumnSize, DashboardColumn, DashboardLayout, Widget, WidgetData, WidgetInstance,
 };
-use tokio::sync::RwLock;
 
+use crate::cache::StaleCache;
 use crate::config::{ColumnConfig, Config};
+
+/// Caps on cache growth: both caches take user-controlled `?location=`
+/// keys, so they must be bounded. Generous for any real dashboard.
+const WIDGET_CACHE_ENTRIES: usize = 512;
+const GEOCODE_CACHE_ENTRIES: usize = 256;
 
 /// Resolved widget instances plus their payload caches. One per process,
 /// shared via `AppState`.
@@ -33,18 +39,15 @@ pub struct WidgetHub {
     pub layout: DashboardLayout,
     /// Data widgets by instance id (static widgets carry no data).
     entries: HashMap<String, Widget>,
-    cache: RwLock<HashMap<String, CacheEntry>>,
-    /// Geocoded weather locations, cached for the process lifetime.
-    geocode: RwLock<HashMap<String, weather::Place>>,
+    cache: StaleCache<String, WidgetData>,
+    /// Geocoded weather locations. Bounded because keys come from the
+    /// user-controlled `?location=` query; entries never expire (a city's
+    /// coordinates don't move), they only rotate out on overflow.
+    geocode: StaleCache<String, weather::Place>,
     /// CPU/memory sparkline samples; the sampler task only runs when the
     /// layout actually has a server_stats widget.
     stats_history: Option<stats::History>,
     http: reqwest::Client,
-}
-
-struct CacheEntry {
-    fetched: Instant,
-    data: WidgetData,
 }
 
 #[derive(Debug)]
@@ -66,8 +69,8 @@ impl WidgetHub {
         Self {
             layout,
             entries,
-            cache: RwLock::new(HashMap::new()),
-            geocode: RwLock::new(HashMap::new()),
+            cache: StaleCache::new(WIDGET_CACHE_ENTRIES),
+            geocode: StaleCache::new(GEOCODE_CACHE_ENTRIES),
             stats_history,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -95,29 +98,40 @@ impl WidgetHub {
             None => id.to_string(),
         };
 
-        if let Some(entry) = self.cache.read().await.get(&cache_key)
-            && entry.fetched.elapsed() < ttl
-        {
-            return Ok(entry.data.clone());
-        }
+        self.cached_fetch(cache_key, ttl, self.fetch(widget, location))
+            .await
+    }
 
-        match self.fetch(widget, location).await {
+    /// Fetch-through-cache with the hub's staleness rules: serve a cached
+    /// payload within `ttl`; on upstream failure prefer a stale payload
+    /// over an error.
+    async fn cached_fetch<F>(
+        &self,
+        cache_key: String,
+        ttl: Duration,
+        fetch: F,
+    ) -> Result<WidgetData, WidgetError>
+    where
+        F: Future<Output = Result<WidgetData, String>>,
+    {
+        if let Some(data) = self.cache.get_fresh(&cache_key, ttl).await {
+            return Ok(data);
+        }
+        match fetch.await {
             Ok(data) => {
-                self.cache.write().await.insert(
-                    cache_key,
-                    CacheEntry {
-                        fetched: Instant::now(),
-                        data: data.clone(),
-                    },
-                );
+                self.cache.insert(cache_key, data.clone()).await;
                 Ok(data)
             }
             Err(reason) => {
-                if let Some(entry) = self.cache.read().await.get(&cache_key) {
-                    tracing::warn!(id, reason, "widget refresh failed, serving stale data");
-                    return Ok(entry.data.clone());
+                if let Some(data) = self.cache.get_stale(&cache_key).await {
+                    tracing::warn!(
+                        key = cache_key,
+                        reason,
+                        "refresh failed, serving stale data"
+                    );
+                    return Ok(data);
                 }
-                tracing::warn!(id, reason, "widget fetch failed");
+                tracing::warn!(key = cache_key, reason, "fetch failed");
                 Err(WidgetError::Upstream(reason))
             }
         }
@@ -141,36 +155,16 @@ impl WidgetHub {
             WidgetError::Rejected("no location given and no weather widget configured".into())
         })?;
 
-        let cache_key = format!("weather@{place}");
-        if let Some(entry) = self.cache.read().await.get(&cache_key)
-            && entry.fetched.elapsed() < Duration::from_secs(600)
-            && let WidgetData::Weather(data) = &entry.data
-        {
-            return Ok(data.clone());
-        }
-
-        match weather::fetch(&self.http, &self.geocode, place).await {
-            Ok(WidgetData::Weather(data)) => {
-                self.cache.write().await.insert(
-                    cache_key,
-                    CacheEntry {
-                        fetched: Instant::now(),
-                        data: WidgetData::Weather(data.clone()),
-                    },
-                );
-                Ok(data)
-            }
-            Ok(_) => unreachable!("weather::fetch returns weather data"),
-            Err(reason) => {
-                if let Some(entry) = self.cache.read().await.get(&cache_key)
-                    && let WidgetData::Weather(data) = &entry.data
-                {
-                    tracing::warn!(place, reason, "weather refresh failed, serving stale data");
-                    return Ok(data.clone());
-                }
-                tracing::warn!(place, reason, "weather fetch failed");
-                Err(WidgetError::Upstream(reason))
-            }
+        let data = self
+            .cached_fetch(
+                format!("weather@{place}"),
+                Duration::from_secs(600),
+                weather::fetch(&self.http, &self.geocode, place),
+            )
+            .await?;
+        match data {
+            WidgetData::Weather(data) => Ok(data),
+            _ => unreachable!("weather cache keys only hold weather data"),
         }
     }
 
@@ -238,13 +232,7 @@ impl WidgetHub {
             .fetch(widget, None)
             .await
             .map_err(WidgetError::Upstream)?;
-        self.cache.write().await.insert(
-            id.to_string(),
-            CacheEntry {
-                fetched: Instant::now(),
-                data: data.clone(),
-            },
-        );
+        self.cache.insert(id.to_string(), data.clone()).await;
         Ok(data)
     }
 }
