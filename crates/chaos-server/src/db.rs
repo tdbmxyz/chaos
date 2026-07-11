@@ -17,6 +17,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{QueryBuilder, Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::db_auth::parse_uuid;
+
 const DEFAULT_PAGE_SIZE: u32 = 50;
 const MAX_PAGE_SIZE: u32 = 200;
 
@@ -102,12 +104,7 @@ impl Db {
         )
         .bind(id.to_string())
         .bind(req.name.trim())
-        .bind(
-            req.description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
+        .bind(trimmed(&req.description))
         .bind(&req.color)
         .bind(req.parent_id.map(|p| p.to_string()))
         .bind(Utc::now())
@@ -133,12 +130,7 @@ impl Db {
              WHERE id = ?",
         )
         .bind(req.name.trim())
-        .bind(
-            req.description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
+        .bind(trimmed(&req.description))
         .bind(&req.color)
         .bind(req.parent_id.map(|p| p.to_string()))
         .bind(id.to_string())
@@ -189,7 +181,7 @@ impl Db {
             .map(|row| {
                 Ok(TagWithCount {
                     tag: Tag {
-                        id: parse_uuid(row.get::<String, _>("id"))?,
+                        id: parse_uuid(&row.get::<String, _>("id"))?,
                         name: row.get("name"),
                     },
                     link_count: row.get::<i64, _>("link_count") as u64,
@@ -212,11 +204,7 @@ impl Db {
     ) -> Result<Link> {
         let id = Uuid::now_v7();
         let now = Utc::now();
-        let title = req
-            .title
-            .as_deref()
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
+        let title = trimmed(&req.title)
             .map(String::from)
             // Metadata fetch happens in the API layer; this is the last resort.
             .unwrap_or_else(|| req.url.host_str().unwrap_or("untitled").to_string());
@@ -230,12 +218,7 @@ impl Db {
         .bind(id.to_string())
         .bind(req.url.as_str())
         .bind(&title)
-        .bind(
-            req.description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
+        .bind(trimmed(&req.description))
         .bind(req.collection_id.map(|c| c.to_string()))
         .bind(if archive { "pending" } else { "none" })
         .bind(created_by.map(|u| u.to_string()))
@@ -260,12 +243,7 @@ impl Db {
         )
         .bind(req.url.as_str())
         .bind(req.title.trim())
-        .bind(
-            req.description
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
+        .bind(trimmed(&req.description))
         .bind(req.collection_id.map(|c| c.to_string()))
         .bind(Utc::now())
         .bind(id.to_string())
@@ -326,7 +304,7 @@ impl Db {
         .fetch_optional(&self.pool)
         .await?;
         match row {
-            Some(row) => Ok(Some(self.get_link(parse_uuid(row.id)?).await?)),
+            Some(row) => Ok(Some(self.get_link(parse_uuid(&row.id)?).await?)),
             None => Ok(None),
         }
     }
@@ -494,7 +472,7 @@ impl Db {
 
         for row in qb.build().fetch_all(&self.pool).await? {
             map.entry(row.get("link_id")).or_default().push(Tag {
-                id: parse_uuid(row.get::<String, _>("id"))?,
+                id: parse_uuid(&row.get::<String, _>("id"))?,
                 name: row.get("name"),
             });
         }
@@ -610,6 +588,11 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Trim-or-None: user-supplied optional text normalized for storage.
+pub(crate) fn trimmed(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
 /// Surface foreign-key violations as constraint errors the API can turn
 /// into a 4xx instead of a 500.
 fn map_reference_err(err: sqlx::Error) -> DbError {
@@ -619,10 +602,6 @@ fn map_reference_err(err: sqlx::Error) -> DbError {
         }
         _ => DbError::Sqlx(err),
     }
-}
-
-fn parse_uuid(s: String) -> Result<Uuid> {
-    Uuid::parse_str(&s).map_err(|_| DbError::Corrupt(format!("invalid uuid {s:?}")))
 }
 
 fn parse_url(s: String) -> Result<url::Url> {
@@ -646,11 +625,11 @@ impl TryFrom<CollectionRow> for Collection {
 
     fn try_from(row: CollectionRow) -> Result<Self> {
         Ok(Collection {
-            id: parse_uuid(row.id)?,
+            id: parse_uuid(&row.id)?,
             name: row.name,
             description: row.description,
             color: row.color,
-            parent_id: row.parent_id.map(parse_uuid).transpose()?,
+            parent_id: row.parent_id.as_deref().map(parse_uuid).transpose()?,
             created_at: row.created_at,
         })
     }
@@ -694,12 +673,12 @@ impl TryFrom<LinkRow> for Link {
             other => return Err(DbError::Corrupt(format!("archive_state {other:?}"))),
         };
         Ok(Link {
-            id: parse_uuid(row.id)?,
+            id: parse_uuid(&row.id)?,
             url: parse_url(row.url)?,
             title: row.title,
             description: row.description,
-            collection_id: row.collection_id.map(parse_uuid).transpose()?,
-            created_by: row.created_by.map(parse_uuid).transpose()?,
+            collection_id: row.collection_id.as_deref().map(parse_uuid).transpose()?,
+            created_by: row.created_by.as_deref().map(parse_uuid).transpose()?,
             tags: Vec::new(), // filled by the caller
             archive,
             created_at: row.created_at,

@@ -6,7 +6,7 @@ use chaos_domain::{Calendar, CalendarKind, CalendarRequest, Event, EventRequest}
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::db::{Db, DbError, Result};
+use crate::db::{Db, DbError, Result, trimmed};
 use crate::db_auth::parse_uuid;
 
 impl Db {
@@ -235,10 +235,6 @@ fn validate_event(req: &EventRequest) -> Result<()> {
         return Err(DbError::Constraint("event must end after it starts".into()));
     }
     Ok(())
-}
-
-fn trimmed(value: &Option<String>) -> Option<&str> {
-    value.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
 fn kind_str(kind: CalendarKind) -> &'static str {
