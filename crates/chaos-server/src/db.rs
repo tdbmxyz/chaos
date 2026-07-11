@@ -862,16 +862,31 @@ mod tests {
         db.create_link(&titled("myxvar", "https://example.com/decoy"), false, None)
             .await
             .unwrap();
+        db.create_link(
+            &CreateLinkRequest {
+                url: "https://example.com/report".parse().unwrap(),
+                title: Some("quarterly report".into()),
+                description: Some("saved under c:\\data, 100% complete".into()),
+                collection_id: None,
+                tags: vec![],
+            },
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         let search = |q: &str| LinkQuery {
             q: Some(q.into()),
             ..Default::default()
         };
 
-        // A lone backslash must find "c:\temp", not the "%" title.
+        // A lone backslash must find the two links carrying one (title
+        // "c:\temp" and the "c:\data" description), not the "%" title.
         let backslash = db.list_links(&search("\\")).await.unwrap();
-        assert_eq!(backslash.total, 1, "backslash must match literally");
-        assert_eq!(backslash.items[0].title, "c:\\temp");
+        assert_eq!(backslash.total, 2, "backslash must match literally");
+        assert!(backslash.items.iter().any(|l| l.title == "c:\\temp"));
+        assert!(backslash.items.iter().any(|l| l.title == "quarterly report"));
 
         // Literal `%`: only the percent title, not everything.
         let percent = db.list_links(&search("50%")).await.unwrap();
@@ -882,6 +897,12 @@ mod tests {
         let underscore = db.list_links(&search("my_var")).await.unwrap();
         assert_eq!(underscore.total, 1);
         assert_eq!(underscore.items[0].title, "my_var");
+
+        // The description arm uses the same pattern, and backslash
+        // followed by `%` in one query is the original failure shape.
+        let mixed = db.list_links(&search("c:\\data, 100%")).await.unwrap();
+        assert_eq!(mixed.total, 1, "backslash+percent must match the description");
+        assert_eq!(mixed.items[0].title, "quarterly report");
     }
 
     #[tokio::test]
