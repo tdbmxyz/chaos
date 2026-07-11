@@ -20,24 +20,26 @@ pub fn spawn(state: AppState) {
 
 async fn run(state: AppState) {
     let dir = state.config.backup.dir.clone();
-    if let Err(err) = tokio::fs::create_dir_all(&dir).await {
-        tracing::error!(
-            dir = %dir.display(),
-            %err,
-            "cannot create backup dir; backups disabled"
-        );
-        return;
-    }
     let interval = Duration::from_secs(state.config.backup.interval_hours.max(1) * 3600);
     let keep = state.config.backup.keep.max(1);
 
     loop {
-        match backup_once(&state.db, &dir).await {
-            Ok(path) => tracing::info!(path = %path.display(), "database backed up"),
-            Err(err) => tracing::error!(%err, "database backup failed"),
-        }
-        if let Err(err) = prune(&dir, keep).await {
-            tracing::warn!(%err, "pruning old backups failed");
+        // Re-attempted every cycle: a backup volume that wasn't mounted yet
+        // at boot must not silently disable backups for the process's life.
+        if let Err(err) = tokio::fs::create_dir_all(&dir).await {
+            tracing::error!(
+                dir = %dir.display(),
+                %err,
+                "cannot create backup dir; retrying next cycle"
+            );
+        } else {
+            match backup_once(&state.db, &dir).await {
+                Ok(path) => tracing::info!(path = %path.display(), "database backed up"),
+                Err(err) => tracing::error!(%err, "database backup failed"),
+            }
+            if let Err(err) = prune(&dir, keep).await {
+                tracing::warn!(%err, "pruning old backups failed");
+            }
         }
         tokio::time::sleep(interval).await;
     }

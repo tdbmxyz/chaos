@@ -63,6 +63,10 @@ async fn aggregate(
         .collect();
 
     // Logged off → no events, matching the calendar API's auth semantics.
+    // merged_events hits the ICS feed cache (10min TTL); on a cold miss a
+    // debounced search can trigger real feed fetches, and StaleCache has no
+    // single-flight yet (see cache.rs TODO) — acceptable while feeds are
+    // few, revisit before adding heavier upstreams.
     let events = match user_id {
         Some(user_id) => {
             let now = Utc::now();
