@@ -35,16 +35,8 @@ pub async fn fetch(http: &reqwest::Client, urls: &[Url], limit: u32) -> Result<W
 }
 
 async fn fetch_one(http: &reqwest::Client, url: Url) -> Result<Vec<FeedItem>, String> {
-    let resp = http.get(url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("status {}", resp.status()));
-    }
-    let body = resp.bytes().await.map_err(|e| e.to_string())?;
-    if body.len() > MAX_BODY_BYTES {
-        return Err(format!("feed body too large ({} bytes)", body.len()));
-    }
-
-    let feed = feed_rs::parser::parse(body.as_ref()).map_err(|e| e.to_string())?;
+    let body = crate::http_util::get_body_capped(http, url.as_str(), MAX_BODY_BYTES).await?;
+    let feed = feed_rs::parser::parse(body.as_slice()).map_err(|e| e.to_string())?;
     let source = feed.title.map(|t| t.content);
 
     Ok(feed

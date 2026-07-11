@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use url::Url;
 
+use crate::http_util::get_json;
+
 const HN_API: &str = "https://hacker-news.firebaseio.com/v0";
 const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
 const LOBSTERS_HOTTEST: &str = "https://lobste.rs/hottest.json";
@@ -93,17 +95,6 @@ fn lobsters_item(story: LobstersStory) -> FeedItem {
         comments: Some(story.comment_count),
         comments_url: Some(discussion),
     }
-}
-
-async fn get_json<T: serde::de::DeserializeOwned>(
-    http: &reqwest::Client,
-    url: &str,
-) -> Result<T, String> {
-    let resp = http.get(url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("{url}: status {}", resp.status()));
-    }
-    resp.json().await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

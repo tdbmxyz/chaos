@@ -86,9 +86,7 @@ mod tests {
     #[tokio::test]
     async fn get_json_deserializes_a_success_response() {
         let url = stub(axum::http::StatusCode::OK, r#"{"answer":42}"#).await;
-        let got: Payload = get_json(&reqwest::Client::new(), &url)
-            .await
-            .expect("json");
+        let got: Payload = get_json(&reqwest::Client::new(), &url).await.expect("json");
         assert_eq!(got, Payload { answer: 42 });
     }
 
@@ -121,8 +119,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_capped_stops_mid_stream_at_the_cap() {
-        let chunks: Vec<Result<&[u8], String>> =
-            vec![Ok(b"aaaa"), Ok(b"bbbb"), Ok(b"cccc")];
+        let chunks: Vec<Result<&[u8], String>> = vec![Ok(b"aaaa"), Ok(b"bbbb"), Ok(b"cccc")];
         let err = read_capped(futures::stream::iter(chunks), 6)
             .await
             .expect_err("third chunk crosses the cap on the second");
@@ -140,8 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_capped_surfaces_stream_errors() {
-        let chunks: Vec<Result<&[u8], String>> =
-            vec![Ok(b"aa"), Err("reset by peer".into())];
+        let chunks: Vec<Result<&[u8], String>> = vec![Ok(b"aa"), Err("reset by peer".into())];
         let err = read_capped(futures::stream::iter(chunks), 1024)
             .await
             .expect_err("stream error must propagate");

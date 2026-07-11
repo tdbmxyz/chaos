@@ -111,14 +111,7 @@ impl FeedCache {
     }
 
     async fn fetch(&self, url: &str) -> Result<Vec<RawEvent>, String> {
-        let resp = self.http.get(url).send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("feed returned {}", resp.status()));
-        }
-        let body = resp.bytes().await.map_err(|e| e.to_string())?;
-        if body.len() > MAX_BODY_BYTES {
-            return Err(format!("feed too large ({} bytes)", body.len()));
-        }
+        let body = crate::http_util::get_body_capped(&self.http, url, MAX_BODY_BYTES).await?;
         parse(&body)
     }
 
@@ -346,5 +339,34 @@ END:VCALENDAR\r\n";
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].title, "Standup");
         assert_eq!(out[0].description.as_deref(), Some("Daily sync"));
+    }
+
+    /// Serves `body` at /feed.ics on an ephemeral port; returns the URL.
+    async fn stub_feed(body: Vec<u8>) -> String {
+        let app = axum::Router::new().route(
+            "/feed.ics",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binding stub feed");
+        let addr = listener.local_addr().expect("stub feed addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serving stub feed");
+        });
+        format!("http://{addr}/feed.ics")
+    }
+
+    #[tokio::test]
+    async fn fetch_rejects_oversized_feeds_while_streaming() {
+        let url = stub_feed(vec![b' '; MAX_BODY_BYTES + 1]).await;
+        let err = FeedCache::default()
+            .fetch(&url)
+            .await
+            .expect_err("oversized feed must fail");
+        assert!(err.contains("exceeds"), "unexpected error: {err}");
     }
 }

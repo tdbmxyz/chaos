@@ -10,6 +10,8 @@ use chaos_domain::{DailyForecast, HourlyForecast, WeatherData, WidgetData};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
+use crate::http_util::get_json;
+
 #[derive(Debug, Clone)]
 pub struct Place {
     pub name: String,
@@ -170,17 +172,6 @@ async fn resolve(
         .await
         .insert(location.to_string(), place.clone());
     Ok(place)
-}
-
-async fn get_json<T: serde::de::DeserializeOwned>(
-    http: &reqwest::Client,
-    url: &str,
-) -> Result<T, String> {
-    let resp = http.get(url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("open-meteo returned {}", resp.status()));
-    }
-    resp.json::<T>().await.map_err(|e| e.to_string())
 }
 
 fn urlencoded(s: &str) -> String {
