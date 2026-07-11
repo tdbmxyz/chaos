@@ -36,7 +36,9 @@ pub async fn fetch(
         lat = place.latitude,
         lon = place.longitude,
     );
-    let forecast: Forecast = get_json(http, &url).await?;
+    let forecast: Forecast = get_json(http, &url)
+        .await
+        .map_err(|e| format!("open-meteo: {e}"))?;
 
     let current = forecast.current;
     // past_days extends BOTH series; only the hourly one should reach into
@@ -141,7 +143,9 @@ async fn resolve(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=10&language=en&format=json",
         urlencoded(name_query)
     );
-    let response: GeocodeResponse = get_json(http, &url).await?;
+    let response: GeocodeResponse = get_json(http, &url)
+        .await
+        .map_err(|e| format!("geocoding: {e}"))?;
     let hit = response
         .results
         .into_iter()

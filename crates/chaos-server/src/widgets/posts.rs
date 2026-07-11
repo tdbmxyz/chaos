@@ -38,7 +38,9 @@ struct LobstersStory {
 }
 
 pub async fn hacker_news(http: &reqwest::Client, limit: u32) -> Result<WidgetData, String> {
-    let ids: Vec<u64> = get_json(http, &format!("{HN_API}/topstories.json")).await?;
+    let ids: Vec<u64> = get_json(http, &format!("{HN_API}/topstories.json"))
+        .await
+        .map_err(|e| format!("hn topstories: {e}"))?;
 
     let items = futures::future::join_all(ids.iter().take(limit as usize).map(|id| {
         let url = format!("{HN_API}/item/{id}.json");
@@ -71,7 +73,9 @@ fn hn_item(item: HnItem) -> FeedItem {
 }
 
 pub async fn lobsters(http: &reqwest::Client, limit: u32) -> Result<WidgetData, String> {
-    let stories: Vec<LobstersStory> = get_json(http, LOBSTERS_HOTTEST).await?;
+    let stories: Vec<LobstersStory> = get_json(http, LOBSTERS_HOTTEST)
+        .await
+        .map_err(|e| format!("lobsters: {e}"))?;
     let items = stories
         .into_iter()
         .take(limit as usize)

@@ -61,6 +61,9 @@ async fn try_fetch(client: &reqwest::Client, url: &Url) -> Result<PageMetadata, 
     }
 
     // Stream the body so a huge page cannot balloon memory; stop at the cap.
+    // Deliberately not http_util::get_body_capped: that helper *fails* past
+    // the cap, while metadata lives in <head> so truncating and using what
+    // arrived is the right call here.
     let mut body: Vec<u8> = Vec::new();
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
