@@ -166,10 +166,11 @@ impl Db {
         self.ensure_writable_calendar(user_id, req.calendar_id)
             .await?;
         validate_event(req)?;
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE events SET calendar_id = ?, title = ?, description = ?, location = ?,
                                starts_at = ?, ends_at = ?, all_day = ?, updated_at = ?
-             WHERE id = ?",
+             WHERE id = ? AND calendar_id IN
+             (SELECT id FROM calendars WHERE user_id = ?)",
         )
         .bind(req.calendar_id.to_string())
         .bind(req.title.trim())
@@ -180,8 +181,12 @@ impl Db {
         .bind(req.all_day)
         .bind(Utc::now())
         .bind(id.to_string())
+        .bind(user_id.to_string())
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound);
+        }
         self.get_event(user_id, id).await
     }
 
@@ -384,6 +389,33 @@ mod tests {
             db.delete_event(other.id, event.id).await,
             Err(DbError::NotFound)
         ));
+
+        // Another user cannot update it either — both the pre-check and the
+        // UPDATE's own scoping must refuse.
+        assert!(matches!(
+            db.update_event(
+                other.id,
+                event.id,
+                &EventRequest {
+                    calendar_id: calendar.id,
+                    title: "Hijacked".into(),
+                    description: None,
+                    location: None,
+                    starts_at: ts(9),
+                    ends_at: ts(10),
+                    all_day: false,
+                },
+            )
+            .await,
+            Err(DbError::NotFound)
+        ));
+        assert_eq!(
+            db.get_event(user_id, event.id)
+                .await
+                .expect("still ours")
+                .title,
+            "Dentist"
+        );
 
         db.delete_event(user_id, event.id).await.expect("delete");
     }
