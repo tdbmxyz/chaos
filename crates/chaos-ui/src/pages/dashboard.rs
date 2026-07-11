@@ -497,16 +497,7 @@ fn WeatherView(weather: WeatherData) -> impl IntoView {
     // the system locale suggests; the wire stays metric.
     let fahrenheit = crate::weather_fahrenheit();
     let temp = move |celsius: f64| crate::format_temp(celsius, fahrenheit);
-    let details = format!(
-        "{} · feels {} · wind {:.0} km/h{}",
-        weather.location,
-        temp(weather.apparent_c),
-        weather.wind_kmh,
-        weather
-            .humidity_pct
-            .map(|h| format!(" · {h:.0}% humidity"))
-            .unwrap_or_default(),
-    );
+    let details = crate::weather_details(&weather.location, &weather, fahrenheit);
     view! {
         <div class="weather">
             <div class="weather-now">

@@ -53,14 +53,7 @@ const LOCATION_PALETTE: [&str; 6] = [
 fn hourly_temps(hourly: &[chaos_domain::HourlyForecast], fahrenheit: bool) -> Vec<f64> {
     hourly
         .iter()
-        .map(|h| {
-            let value = if fahrenheit {
-                h.temp_c * 9.0 / 5.0 + 32.0
-            } else {
-                h.temp_c
-            };
-            (value * 10.0).round() / 10.0
-        })
+        .map(|h| crate::convert_temp_1dp(h.temp_c, fahrenheit))
         .collect()
 }
 
@@ -426,16 +419,7 @@ fn weather_row_body(
 ) -> impl IntoView {
     let fahrenheit = crate::weather_fahrenheit();
     let temp = move |celsius: f64| crate::format_temp(celsius, fahrenheit);
-    let details = format!(
-        "{} · feels {} · wind {:.0} km/h{}",
-        weather.description,
-        temp(weather.apparent_c),
-        weather.wind_kmh,
-        weather
-            .humidity_pct
-            .map(|h| format!(" · {h:.0}% humidity"))
-            .unwrap_or_default(),
-    );
+    let details = crate::weather_details(&weather.description, &weather, fahrenheit);
 
     view! {
         <div class="weather-row-head">
