@@ -50,14 +50,10 @@ async fn latest_release(http: &reqwest::Client, repo: &str) -> Result<Option<Rel
         return Ok(None);
     };
     let link = entry.links.first().map(|l| l.href.clone());
-    // Release links look like …/releases/tag/<tag>; the tag is the cleanest
-    // short label, falling back to the release title.
-    let tag = link
-        .as_deref()
-        .and_then(|href| href.split("/tag/").nth(1))
-        .map(|tag| tag.to_string())
-        .or_else(|| entry.title.as_ref().map(|t| t.content.clone()))
-        .unwrap_or_else(|| "?".into());
+    let tag = release_tag(
+        link.as_deref(),
+        entry.title.as_ref().map(|t| t.content.as_str()),
+    );
 
     Ok(Some(ReleaseItem {
         repo: repo.to_string(),
@@ -65,4 +61,36 @@ async fn latest_release(http: &reqwest::Client, repo: &str) -> Result<Option<Rel
         url: link.and_then(|href| href.parse().ok()),
         published: entry.published.or(entry.updated),
     }))
+}
+
+/// Release links look like …/releases/tag/<tag>; the tag is the cleanest
+/// short label, falling back to the release title, then "?".
+fn release_tag(link: Option<&str>, title: Option<&str>) -> String {
+    link.and_then(|href| href.split("/tag/").nth(1))
+        .map(str::to_string)
+        .or_else(|| title.map(str::to_string))
+        .unwrap_or_else(|| "?".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_tag_prefers_the_tag_url_segment() {
+        assert_eq!(
+            release_tag(
+                Some("https://github.com/leptos-rs/leptos/releases/tag/v0.8.2"),
+                Some("v0.8.2 title"),
+            ),
+            "v0.8.2"
+        );
+        // No /tag/ segment: fall back to the entry title.
+        assert_eq!(
+            release_tag(Some("https://github.com/x/y/releases"), Some("v1.0")),
+            "v1.0"
+        );
+        assert_eq!(release_tag(None, Some("v1.0")), "v1.0");
+        assert_eq!(release_tag(None, None), "?");
+    }
 }

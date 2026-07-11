@@ -64,8 +64,9 @@ pub async fn check(client: &reqwest::Client, service: &ServiceDef) -> ServiceSta
     };
 
     match systemd::query(unit).await {
-        Ok((active_state, _)) => match active_state.as_str() {
-            "active" => {
+        Ok((active_state, _)) => match unit_status(&active_state, unit) {
+            Some(status) => status,
+            None => {
                 let mut status = probe_http(client, service).await;
                 // systemd reports active before slow apps bind their port
                 // (JVM services take a while); a running unit with a dead
@@ -75,20 +76,31 @@ pub async fn check(client: &reqwest::Client, service: &ServiceDef) -> ServiceSta
                 }
                 status
             }
-            "activating" | "reloading" => status_only(HealthState::Starting, None),
-            "failed" => status_only(HealthState::Down, Some(format!("unit {unit} failed"))),
-            // inactive / deactivating: stopped on purpose — the default
-            // state for on-demand services, so no HTTP check and no alarm.
-            "inactive" | "deactivating" => status_only(HealthState::Paused, None),
-            other => status_only(
-                HealthState::Unknown,
-                Some(format!("unit {unit} is {other}")),
-            ),
         },
         Err(reason) => {
             tracing::warn!(unit, reason, "systemd query failed for service");
             status_only(HealthState::Unknown, Some(reason))
         }
+    }
+}
+
+/// Map a systemd ActiveState to a service status, or `None` for "active":
+/// an active unit still needs the HTTP probe to prove the app answers.
+fn unit_status(active_state: &str, unit: &str) -> Option<ServiceStatus> {
+    match active_state {
+        "active" => None,
+        "activating" | "reloading" => Some(status_only(HealthState::Starting, None)),
+        "failed" => Some(status_only(
+            HealthState::Down,
+            Some(format!("unit {unit} failed")),
+        )),
+        // inactive / deactivating: stopped on purpose — the default state
+        // for on-demand services, so no HTTP check and no alarm.
+        "inactive" | "deactivating" => Some(status_only(HealthState::Paused, None)),
+        other => Some(status_only(
+            HealthState::Unknown,
+            Some(format!("unit {unit} is {other}")),
+        )),
     }
 }
 
@@ -135,5 +147,45 @@ async fn probe_http(client: &reqwest::Client, service: &ServiceDef) -> ServiceSt
             checked_at: Some(Utc::now()),
             error: Some(err.to_string()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_states_map_to_service_health() {
+        // An active unit still needs the HTTP probe.
+        assert!(unit_status("active", "app.service").is_none());
+
+        let starting = unit_status("activating", "app.service").unwrap();
+        assert_eq!(starting.state, HealthState::Starting);
+        assert!(starting.error.is_none());
+        assert_eq!(
+            unit_status("reloading", "app.service").unwrap().state,
+            HealthState::Starting
+        );
+
+        let failed = unit_status("failed", "app.service").unwrap();
+        assert_eq!(failed.state, HealthState::Down);
+        assert_eq!(failed.error.as_deref(), Some("unit app.service failed"));
+
+        // Stopped on purpose is paused, not an alarm.
+        assert_eq!(
+            unit_status("inactive", "app.service").unwrap().state,
+            HealthState::Paused
+        );
+        assert_eq!(
+            unit_status("deactivating", "app.service").unwrap().state,
+            HealthState::Paused
+        );
+
+        let odd = unit_status("maintenance", "app.service").unwrap();
+        assert_eq!(odd.state, HealthState::Unknown);
+        assert_eq!(
+            odd.error.as_deref(),
+            Some("unit app.service is maintenance")
+        );
     }
 }
