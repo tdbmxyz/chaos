@@ -11,6 +11,7 @@ pub mod calendar;
 pub mod dashboard;
 pub mod home;
 pub mod links;
+pub mod search;
 pub mod service;
 
 pub use api::*;
@@ -19,4 +20,5 @@ pub use calendar::*;
 pub use dashboard::*;
 pub use home::*;
 pub use links::*;
+pub use search::*;
 pub use service::*;
