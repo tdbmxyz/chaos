@@ -1,6 +1,7 @@
 mod api;
 mod archiver;
 mod auth;
+mod cache;
 mod config;
 mod db;
 mod db_auth;
