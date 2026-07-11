@@ -533,6 +533,7 @@ version = "1.5.0"
 dependencies = [
  "chrono",
  "serde",
+ "serde_json",
  "url",
  "uuid",
 ]
