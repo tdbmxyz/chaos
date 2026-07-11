@@ -878,6 +878,20 @@ mod tests {
         let e = event(start, start, false);
         let local_day = start.with_timezone(&Local).date_naive();
         assert!(covers(&e, local_day));
+        assert!(!covers(&e, local_day + Duration::days(1)));
+        assert!(!covers(&e, local_day - Duration::days(1)));
+    }
+
+    #[test]
+    fn covers_collapses_inverted_feed_data_to_the_start_day() {
+        // A feed can emit DTEND before DTSTART; the clamp must yield the
+        // start day, not an empty or inverted range.
+        let start = Utc.with_ymd_and_hms(2026, 7, 11, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 7, 9, 0, 0, 0).unwrap();
+        let e = event(start, end, true);
+        assert!(covers(&e, NaiveDate::from_ymd_opt(2026, 7, 11).unwrap()));
+        assert!(!covers(&e, NaiveDate::from_ymd_opt(2026, 7, 10).unwrap()));
+        assert!(!covers(&e, NaiveDate::from_ymd_opt(2026, 7, 12).unwrap()));
     }
 
     #[test]
