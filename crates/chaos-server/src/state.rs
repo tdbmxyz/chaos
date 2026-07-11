@@ -30,10 +30,7 @@ pub struct AppState {
     pub home: Option<Arc<HomeAssistantClient>>,
     /// Failed-login backoff tracker (in-memory, per username+IP).
     pub login_throttle: Arc<crate::auth::LoginThrottle>,
-    /// ntfy publisher, when `[notifications]` is configured. Not yet read
-    /// outside tests — wired up by Task 3 (service alerts) and Task 4
-    /// (calendar reminders) of the notifications plan.
-    #[allow(dead_code)]
+    /// ntfy publisher, when `[notifications]` is configured.
     pub notifier: Option<Arc<Notifier>>,
 }
 

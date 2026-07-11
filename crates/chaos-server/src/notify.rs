@@ -8,17 +8,13 @@
 
 use std::time::Duration;
 
+use chaos_domain::HealthState;
 use url::Url;
 
 use crate::config::NotificationsConfig;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-// Wired up (constructed, stored on `AppState`, `send` called) in Task 3
-// (service alerts) and Task 4 (calendar reminders) of the notifications
-// plan; until then nothing outside tests reads these fields or calls
-// `send`, so silence dead_code rather than leave clippy red.
-#[allow(dead_code)]
 pub struct Notifier {
     http: reqwest::Client,
     /// `{ntfy_url}/{topic}` — ntfy publishes with a plain POST to the topic.
@@ -53,7 +49,6 @@ impl Notifier {
 
     /// Publish one notification. Best-effort: failures are logged and
     /// swallowed — a dead ntfy server must never take down chaos.
-    #[allow(dead_code)]
     pub async fn send(&self, title: &str, message: &str, tags: &str, priority: &str) {
         let mut request = self
             .http
@@ -72,6 +67,59 @@ impl Notifier {
             Ok(_) => tracing::debug!(title, "notification sent"),
             Err(err) => tracing::warn!(error = %err, title, "ntfy send failed"),
         }
+    }
+}
+
+/// Sweeps a state must survive before it can notify — debounces flapping
+/// services (one bad probe in isolation is noise, two in a row is news).
+const ALERT_AFTER_CHECKS: u8 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceAlert {
+    Down,
+    Recovered,
+}
+
+/// Per-service transition detector: pure, driven by the monitor once per
+/// sweep. `Down`/`Degraded` are alert-worthy; `Up` is healthy; `Paused`,
+/// `Starting` and `Unknown` are neutral — they break streaks but never
+/// notify (a deliberately stopped on-demand unit is not an outage).
+#[derive(Debug, Default)]
+pub struct AlertTracker {
+    /// Whether the last alert we sent said "down". Starts false, so a
+    /// service that is up from boot stays silent, while one that is down
+    /// from boot alerts once debounced.
+    notified_down: bool,
+    /// Direction of the current streak of consecutive identical readings.
+    streak_down: bool,
+    streak: u8,
+}
+
+impl AlertTracker {
+    pub fn observe(&mut self, state: HealthState) -> Option<ServiceAlert> {
+        let down = match state {
+            HealthState::Down | HealthState::Degraded => true,
+            HealthState::Up => false,
+            HealthState::Paused | HealthState::Starting | HealthState::Unknown => {
+                self.streak = 0;
+                return None;
+            }
+        };
+        if self.streak > 0 && down == self.streak_down {
+            self.streak = self.streak.saturating_add(1);
+        } else {
+            self.streak_down = down;
+            self.streak = 1;
+        }
+        if self.streak < ALERT_AFTER_CHECKS || down == self.notified_down {
+            return None;
+        }
+        self.notified_down = down;
+        Some(if down {
+            ServiceAlert::Down
+        } else {
+            ServiceAlert::Recovered
+        })
     }
 }
 
@@ -196,5 +244,54 @@ mod tests {
             ..NotificationsConfig::default()
         };
         assert!(Notifier::new(&broken).is_err());
+    }
+
+    use chaos_domain::HealthState;
+
+    #[test]
+    fn alerts_only_after_two_consecutive_checks() {
+        use HealthState::*;
+        let mut t = AlertTracker::default();
+        assert_eq!(t.observe(Up), None);
+        assert_eq!(t.observe(Down), None, "first down is not yet an alert");
+        assert_eq!(t.observe(Down), Some(ServiceAlert::Down));
+        assert_eq!(t.observe(Down), None, "already notified");
+        assert_eq!(t.observe(Up), None, "first up is not yet a recovery");
+        assert_eq!(t.observe(Up), Some(ServiceAlert::Recovered));
+        assert_eq!(t.observe(Up), None);
+    }
+
+    #[test]
+    fn flapping_never_alerts() {
+        use HealthState::*;
+        let mut t = AlertTracker::default();
+        for state in [Up, Down, Up, Down, Up, Down, Up] {
+            assert_eq!(t.observe(state), None, "flap on {state:?} must stay silent");
+        }
+    }
+
+    #[test]
+    fn degraded_counts_as_down_and_neutral_states_break_streaks() {
+        use HealthState::*;
+        let mut t = AlertTracker::default();
+        assert_eq!(t.observe(Degraded), None);
+        assert_eq!(
+            t.observe(Degraded),
+            Some(ServiceAlert::Down),
+            "5xx alerts too"
+        );
+        // Paused/Starting/Unknown never alert and break a forming streak.
+        assert_eq!(t.observe(Up), None);
+        assert_eq!(t.observe(Paused), None);
+        assert_eq!(t.observe(Up), None, "streak restarted by the neutral state");
+        assert_eq!(t.observe(Up), Some(ServiceAlert::Recovered));
+    }
+
+    #[test]
+    fn service_down_from_boot_still_alerts() {
+        use HealthState::*;
+        let mut t = AlertTracker::default();
+        assert_eq!(t.observe(Down), None);
+        assert_eq!(t.observe(Down), Some(ServiceAlert::Down));
     }
 }

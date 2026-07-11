@@ -5,12 +5,14 @@
 //! deliberately stopped unit is `Paused`, not `Down`, and skips the HTTP
 //! probe entirely.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use chaos_domain::{HealthState, ServiceDef, ServiceStatus};
 use chrono::Utc;
 
 use crate::config::MonitorConfig;
+use crate::notify::{AlertTracker, ServiceAlert};
 use crate::state::AppState;
 use crate::widgets::systemd;
 
@@ -32,6 +34,8 @@ pub fn client(config: &MonitorConfig) -> reqwest::Client {
 async fn run(state: AppState) {
     let interval = Duration::from_secs(state.config.monitor.interval_secs);
     let client = client(&state.config.monitor);
+    let alerting = state.notifier.is_some() && state.config.notifications.service_alerts;
+    let mut trackers: HashMap<String, AlertTracker> = HashMap::new();
 
     loop {
         let sweep_started = Instant::now();
@@ -43,10 +47,46 @@ async fn run(state: AppState) {
             .map(|service| check(&client, service));
         let results = futures::future::join_all(checks).await;
 
+        let mut alerts: Vec<(String, ServiceAlert, Option<String>)> = Vec::new();
         {
             let mut statuses = state.statuses.write().await;
             for (service, status) in state.config.services.iter().zip(results) {
+                if alerting
+                    && let Some(alert) = trackers
+                        .entry(service.id.clone())
+                        .or_default()
+                        .observe(status.state)
+                {
+                    alerts.push((service.title.clone(), alert, status.error.clone()));
+                }
                 statuses.insert(service.id.clone(), status);
+            }
+        }
+        if let Some(notifier) = &state.notifier {
+            for (title, alert, error) in alerts {
+                match alert {
+                    ServiceAlert::Down => {
+                        let message = error.unwrap_or_else(|| "health check failing".into());
+                        notifier
+                            .send(
+                                &format!("{title} is down"),
+                                &message,
+                                "rotating_light",
+                                "high",
+                            )
+                            .await;
+                    }
+                    ServiceAlert::Recovered => {
+                        notifier
+                            .send(
+                                &format!("{title} recovered"),
+                                "health check passing again",
+                                "white_check_mark",
+                                "default",
+                            )
+                            .await;
+                    }
+                }
             }
         }
         tracing::debug!(
