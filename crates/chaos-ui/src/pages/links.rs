@@ -222,7 +222,10 @@ pub fn Links() -> impl IntoView {
                                 {total} " link" {if total == 1 { "" } else { "s" }}
                             </p>
                             <LinkList links=page.items editing=editing_link refresh offline/>
-                            {(pages > 1)
+                            // Only page 0 is cached: offline, "Next" would
+                            // strand the user on an error view, so the pager
+                            // disappears with the rest of the editing UI.
+                            {(pages > 1 && !offline.get())
                                 .then(|| {
                                     view! {
                                         <div class="pager">
