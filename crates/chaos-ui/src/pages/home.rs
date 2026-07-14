@@ -86,6 +86,11 @@ pub fn HomePage() -> impl IntoView {
                 <DateRangePicker range/>
                 {move || match temperature.get() {
                     None => view! { <p class="muted">"Loading temperature history…"</p> }.into_any(),
+                    // Offline the raw transport text is noise; say what it
+                    // means: this view has no cached copy.
+                    Some(Err(_)) if offline.get() => {
+                        view! { <p class="muted">"Not available offline"</p> }.into_any()
+                    }
                     Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                     Some(Ok(series)) if series.is_empty() => {
                         view! { <p class="muted">"No sensors configured."</p> }.into_any()
@@ -101,6 +106,11 @@ pub fn HomePage() -> impl IntoView {
                 <h3>"Lights"</h3>
                 {move || match lights.get() {
                     None => view! { <p class="muted">"Loading lights…"</p> }.into_any(),
+                    // Offline the raw transport text is noise; say what it
+                    // means: this view has no cached copy.
+                    Some(Err(_)) if offline.get() => {
+                        view! { <p class="muted">"Not available offline"</p> }.into_any()
+                    }
                     Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                     Some(Ok(list)) if list.is_empty() => {
                         view! { <p class="muted">"No lights configured."</p> }.into_any()
@@ -120,6 +130,11 @@ pub fn HomePage() -> impl IntoView {
                 <h3>"Sensors"</h3>
                 {move || match sensors.get() {
                     None => view! { <p class="muted">"Loading sensors…"</p> }.into_any(),
+                    // Offline the raw transport text is noise; say what it
+                    // means: this view has no cached copy.
+                    Some(Err(_)) if offline.get() => {
+                        view! { <p class="muted">"Not available offline"</p> }.into_any()
+                    }
                     Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                     Some(Ok(list)) if list.is_empty() => {
                         view! { <p class="muted">"No sensors configured."</p> }.into_any()

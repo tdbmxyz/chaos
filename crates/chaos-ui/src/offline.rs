@@ -40,6 +40,22 @@ pub(crate) fn cache_get<T: DeserializeOwned>(key: &str) -> Option<T> {
     serde_json::from_str(&raw).ok()
 }
 
+/// Drop every cached payload. Called on logout so a shared browser doesn't
+/// serve one user's calendar/links to the next.
+pub(crate) fn cache_clear() {
+    let Some(storage) = crate::local_storage() else {
+        return;
+    };
+    // Collect first: removing while iterating shifts the key indices.
+    let keys: Vec<String> = (0..storage.length().unwrap_or(0))
+        .filter_map(|i| storage.key(i).ok().flatten())
+        .filter(|k| k.starts_with(CACHE_PREFIX))
+        .collect();
+    for key in keys {
+        let _ = storage.remove_item(&key);
+    }
+}
+
 /// The one cache-first read path. Offline (or still checking) with a cached
 /// copy: serve it immediately, zero network. Online: fetch; a success
 /// overwrites the cache (that's the only invalidation — no TTL); a

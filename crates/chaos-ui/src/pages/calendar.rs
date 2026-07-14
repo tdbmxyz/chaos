@@ -239,6 +239,11 @@ fn CalendarView() -> impl IntoView {
                     }
                         .into_any()
                 }
+                // Offline the raw transport text is noise; say what it
+                // means: this view has no cached copy.
+                Some(Err(_)) if offline.get() => {
+                    view! { <p class="muted">"Not available offline"</p> }.into_any()
+                }
                 Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 Some(Ok(list)) => {
                     view! { <MonthGrid month=month.get() today selected events=list/> }.into_any()

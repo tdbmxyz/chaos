@@ -404,6 +404,7 @@ pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
         spawn_local(async move {
             let _ = client.logout().await;
             store_token(None);
+            offline::cache_clear();
             session.0.set(None);
         });
     })
