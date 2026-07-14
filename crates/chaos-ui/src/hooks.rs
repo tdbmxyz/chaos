@@ -95,7 +95,6 @@ where
 ///
 /// Components rendered outside `App` (unit tests) have no `Connectivity`
 /// context; treat that as Online rather than panicking.
-#[allow(dead_code, reason = "used by the direct-fetch widgets plan")]
 pub(crate) fn use_polled_resource_with<T, Fut>(
     interval: Duration,
     version: Option<RwSignal<u32>>,

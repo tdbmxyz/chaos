@@ -99,6 +99,7 @@ fn WidgetView(instance: WidgetInstance) -> impl IntoView {
         Widget::Bookmarks { groups } => view! { <Bookmarks groups/> }.into_any(),
         Widget::Calendar => view! { <CalendarWidget/> }.into_any(),
         Widget::Systemd { title, .. } => view! { <SystemdWidget id=instance.id title/> }.into_any(),
+        Widget::Weather { location } => view! { <WeatherWidget location/> }.into_any(),
         widget => view! { <DataWidget id=instance.id widget/> }.into_any(),
     }
 }
@@ -168,6 +169,36 @@ fn ServicesWidget() -> impl IntoView {
     }
 }
 
+/// Weather is fetched directly from Open-Meteo (see weather_fetch) — the
+/// only dashboard widget with no server dependency, so it keeps polling
+/// even while the server is unreachable.
+#[component]
+fn WeatherWidget(location: String) -> impl IntoView {
+    let data = crate::hooks::use_polled_resource_with(WIDGET_REFRESH, None, true, move || {
+        let configured = location.clone();
+        async move {
+            // Device preference: weather follows the location set on /settings.
+            let place = crate::pref(crate::WEATHER_LOCATION_KEY).unwrap_or(configured);
+            crate::weather_fetch::place_weather(&place).await
+        }
+    });
+    let data = Memo::new(move |_| data.get());
+    view! {
+        <section class="widget widget-weather">
+            <h2>
+                // The title opens the detailed hourly/multi-location page,
+                // like the calendar widget's title opens the calendar.
+                <a class="widget-title-link" href="/weather" title="Open weather">"Weather"</a>
+            </h2>
+            {move || match data.get() {
+                None => view! { <p class="muted">"Loading…"</p> }.into_any(),
+                Some(Ok(weather)) => view! { <WeatherView weather/> }.into_any(),
+                Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
+            }}
+        </section>
+    }
+}
+
 /// A widget whose payload comes from `/api/v1/widgets/{id}`.
 #[component]
 fn DataWidget(id: String, widget: Widget) -> impl IntoView {
@@ -175,7 +206,6 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
 
     // Kind class so layout variants can reorder/span widgets in CSS.
     let kind = match &widget {
-        Widget::Weather { .. } => "weather",
         Widget::Feed { .. } => "feed",
         Widget::HackerNews { .. } => "hacker-news",
         Widget::Lobsters { .. } => "lobsters",
@@ -184,7 +214,6 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => "data",
     };
     let title = match &widget {
-        Widget::Weather { .. } => "Weather".to_string(),
         Widget::Feed { title, .. } => title.clone().unwrap_or_else(|| "Feed".into()),
         Widget::HackerNews { title, .. } => title.clone().unwrap_or_else(|| "Hacker News".into()),
         Widget::Lobsters { title, .. } => title.clone().unwrap_or_else(|| "Lobsters".into()),
@@ -193,32 +222,15 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => String::new(),
     };
 
-    // The weather title opens the detailed hourly/multi-location page,
-    // like the calendar widget's title opens the calendar.
-    let title = if matches!(widget, Widget::Weather { .. }) {
-        view! {
-            <a class="widget-title-link" href="/weather" title="Open weather">
-                {title}
-            </a>
-        }
-        .into_any()
-    } else {
-        title.into_any()
-    };
-
-    // Device preference: weather follows the location set on /settings.
-    let weather_location =
-        matches!(widget, Widget::Weather { .. }).then(|| crate::pref(crate::WEATHER_LOCATION_KEY));
     let conn = crate::offline::use_connectivity();
     let data = crate::hooks::use_polled_resource(WIDGET_REFRESH, None, {
         let client = client.clone();
         move || {
             let client = client.clone();
             let id = id.clone();
-            let location = weather_location.clone().flatten();
             async move {
                 crate::offline::cached(conn, &format!("widget:{id}"), async {
-                    client.widget_data(&id, location.as_deref()).await
+                    client.widget_data(&id, None).await
                 })
                 .await
             }
@@ -240,9 +252,9 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
             <h2>{title} {move || stale.get().then(stale_hint)}</h2>
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
-                Some(Ok((WidgetData::Weather(weather), _))) => {
-                    view! { <WeatherView weather/> }.into_any()
-                }
+                // Weather renders through WeatherWidget (direct Open-Meteo
+                // fetch); the server no longer produces this payload here.
+                Some(Ok((WidgetData::Weather(_), _))) => ().into_any(),
                 Some(Ok((WidgetData::Feed { items }, _))) => {
                     let count = items.len();
                     view! {

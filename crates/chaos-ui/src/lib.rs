@@ -9,6 +9,7 @@ mod hooks;
 pub(crate) mod offline;
 mod pages;
 mod search;
+mod weather_fetch;
 
 use chaos_client::ChaosClient;
 use chaos_domain::User;

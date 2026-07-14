@@ -7,6 +7,7 @@ edition.workspace = true
 [dependencies]
 chaos-domain.workspace = true
 chaos-client.workspace = true
+reqwest.workspace = true
 leptos.workspace = true
 leptos_router.workspace = true
 chrono.workspace = true
