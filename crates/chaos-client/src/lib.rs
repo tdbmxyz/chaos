@@ -4,6 +4,14 @@
 //! thanks to reqwest's dual backend. All UI crates go through this client so
 //! the API surface is exercised from exactly one place.
 
+use std::time::Duration;
+
+/// Deadline for regular data requests. Generous for a LAN server; short
+/// enough that an unreachable host fails the page fast instead of hanging.
+const DATA_TIMEOUT: Duration = Duration::from_secs(8);
+/// The health probe decides connectivity; it must answer (or fail) fast.
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
+
 use chaos_domain::{
     ApiErrorBody, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
     CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse,
@@ -68,7 +76,11 @@ impl ChaosClient {
     }
 
     pub async fn health(&self) -> Result<HealthResponse> {
-        self.get("api/v1/health").await
+        let req = self
+            .http
+            .get(self.url("api/v1/health")?)
+            .timeout(HEALTH_TIMEOUT);
+        self.send(req).await
     }
 
     pub async fn services(&self) -> Result<Vec<ServiceWithStatus>> {
@@ -357,8 +369,18 @@ impl ChaosClient {
             Some(token) => req.bearer_auth(token),
             None => req,
         };
-        let resp = req
-            .send()
+        let mut request = req
+            .build()
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+        // Every request gets a deadline; an unreachable server must fail fast,
+        // not hang "Loading" for minutes. Callers that set their own (health)
+        // keep it.
+        if request.timeout().is_none() {
+            *request.timeout_mut() = Some(DATA_TIMEOUT);
+        }
+        let resp = self
+            .http
+            .execute(request)
             .await
             .map_err(|e| ClientError::Transport(e.to_string()))?;
         let status = resp.status();
