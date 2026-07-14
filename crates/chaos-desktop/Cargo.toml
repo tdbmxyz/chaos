@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 tauri.workspace = true
+tauri-plugin-http.workspace = true
 url.workspace = true
 
 [build-dependencies]

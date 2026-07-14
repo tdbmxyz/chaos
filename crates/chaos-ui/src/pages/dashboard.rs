@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use chaos_client::ClientError;
 use chaos_domain::{
     BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, ServerStats, SystemdAction,
     SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
@@ -222,17 +223,31 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => String::new(),
     };
 
+    // HN/lobsters can be fetched without the server: HN's API sends CORS,
+    // lobsters only works through the shell's HTTP plugin. Cached under the
+    // same widget key either way, so each path serves the other's leftovers.
+    let direct = match &widget {
+        Widget::HackerNews { limit, .. } => Some(DirectFeed::HackerNews(*limit)),
+        Widget::Lobsters { limit, .. } => Some(DirectFeed::Lobsters(*limit)),
+        _ => None,
+    };
+
     let conn = crate::offline::use_connectivity();
-    let data = crate::hooks::use_polled_resource(WIDGET_REFRESH, None, {
+    // `poll_offline: direct.is_some()` — the direct-capable widgets keep
+    // their cadence while the server is unreachable; the others pause.
+    let data = crate::hooks::use_polled_resource_with(WIDGET_REFRESH, None, direct.is_some(), {
         let client = client.clone();
         move || {
             let client = client.clone();
             let id = id.clone();
             async move {
-                crate::offline::cached(conn, &format!("widget:{id}"), async {
-                    client.widget_data(&id).await
-                })
-                .await
+                let key = format!("widget:{id}");
+                if let Some(direct) = direct
+                    && conn.get_untracked() != crate::offline::Connectivity::Online
+                {
+                    return cached_direct(&key, direct.fetch()).await;
+                }
+                crate::offline::cached(conn, &key, async { client.widget_data(&id).await }).await
             }
         }
     });
@@ -308,6 +323,59 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
             }}
         </section>
+    }
+}
+
+/// A feed the client can fetch without the chaos server. Only consulted
+/// while offline: online, the server's cached copy is authoritative (and
+/// the lobsters path only exists inside the shells anyway).
+#[derive(Clone, Copy)]
+enum DirectFeed {
+    HackerNews(u32),
+    Lobsters(u32),
+}
+
+impl DirectFeed {
+    async fn fetch(self) -> Result<WidgetData, ClientError> {
+        let items = match self {
+            DirectFeed::HackerNews(limit) => {
+                chaos_client::posts::hacker_news(&crate::weather_fetch::http(), limit).await
+            }
+            DirectFeed::Lobsters(limit) => {
+                match crate::tauri_http::fetch_text("https://lobste.rs/hottest.json").await {
+                    Some(Ok(json)) => chaos_client::posts::parse_lobsters(&json, limit),
+                    Some(Err(err)) => Err(err),
+                    None => Err("lobsters needs the app shell offline".into()),
+                }
+            }
+        }
+        .map_err(ClientError::Transport)?;
+        Ok(WidgetData::Feed { items })
+    }
+}
+
+/// [`crate::offline::cached`] for a fetch that does NOT go through the
+/// chaos server. `cached()` serves the cache immediately whenever the app
+/// is not Online — exactly wrong here, since offline is when the direct
+/// fetch must actually run. So: fetch first, overwrite the cache on
+/// success (same widget key, so the server path later serves these
+/// leftovers and vice versa), fall back to the cached copy on failure.
+/// Connectivity is left untouched — a direct-fetch failure says nothing
+/// about the chaos server. Same `(value, stale)` shape as `cached()`: a
+/// fresh direct fetch is NOT stale, so it gets no "· cached" hint.
+async fn cached_direct(
+    key: &str,
+    fetch: impl Future<Output = Result<WidgetData, ClientError>>,
+) -> Result<(WidgetData, bool), ClientError> {
+    match fetch.await {
+        Ok(value) => {
+            crate::offline::cache_put(key, &value);
+            Ok((value, false))
+        }
+        Err(err) => match crate::offline::cache_get::<WidgetData>(key) {
+            Some(hit) => Ok((hit, true)),
+            None => Err(err),
+        },
     }
 }
 

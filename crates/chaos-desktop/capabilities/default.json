@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for the chaos shell window. The http scope lists exactly the hosts the UI fetches directly (posts + weather); everything else goes through the chaos server.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://hacker-news.firebaseio.com/*" },
+        { "url": "https://lobste.rs/*" },
+        { "url": "https://api.open-meteo.com/*" },
+        { "url": "https://geocoding-api.open-meteo.com/*" }
+      ]
+    }
+  ]
+}

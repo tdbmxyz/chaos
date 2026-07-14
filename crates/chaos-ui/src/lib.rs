@@ -9,6 +9,7 @@ mod hooks;
 pub(crate) mod offline;
 mod pages;
 mod search;
+mod tauri_http;
 mod weather_fetch;
 
 use chaos_client::ChaosClient;
