@@ -4,7 +4,9 @@
 //! thanks to reqwest's dual backend. All UI crates go through this client so
 //! the API surface is exercised from exactly one place.
 
+mod http;
 pub mod open_meteo;
+pub mod posts;
 
 use std::time::Duration;
 

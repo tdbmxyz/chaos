@@ -1,20 +1,20 @@
-//! Link-aggregator providers: Hacker News and Lobsters, with points and
-//! comment counts (their RSS feeds carry neither, hence not `feed.rs`).
-//!
-//! Hacker News: the official Firebase API. `topstories.json` is the live
-//! front-page ranking ("trending"), NOT newest-first; items are fetched
-//! concurrently. Lobsters: one request to `hottest.json`.
+//! Direct link-aggregator access for offline use: when the chaos server is
+//! unreachable the dashboard fetches HN itself (their API sends CORS `*`)
+//! and parses lobsters JSON fetched through the Tauri HTTP plugin
+//! (lobste.rs sends no CORS headers, so browsers can't fetch it — the UI
+//! passes the raw text in from `window.__TAURI__.http.fetch`).
+//! The server has its own copy of this mapping in widgets/posts.rs — kept
+//! separate because the server must not depend on this crate.
 
-use chaos_domain::{FeedItem, WidgetData};
+use chaos_domain::FeedItem;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use url::Url;
 
-use crate::http_util::get_json;
+use crate::http::http_get_json as get_json;
 
 const HN_API: &str = "https://hacker-news.firebaseio.com/v0";
 const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
-const LOBSTERS_HOTTEST: &str = "https://lobste.rs/hottest.json";
 
 #[derive(Deserialize)]
 struct HnItem {
@@ -37,14 +37,8 @@ struct LobstersStory {
     created_at: Option<DateTime<Utc>>,
 }
 
-/// Once gathered, both aggregators are shown by upvotes, not by their
-/// route's own ranking (still `topstories`/`hottest` — not the "best"
-/// endpoints). Stable, so equal scores keep the upstream order.
-fn sort_by_score(items: &mut [FeedItem]) {
-    items.sort_by_key(|item| std::cmp::Reverse(item.score));
-}
-
-pub async fn hacker_news(http: &reqwest::Client, limit: u32) -> Result<WidgetData, String> {
+/// HN front page via the Firebase API; sorted by upvotes.
+pub async fn hacker_news(http: &reqwest::Client, limit: u32) -> Result<Vec<FeedItem>, String> {
     let ids: Vec<u64> = get_json(http, &format!("{HN_API}/topstories.json"))
         .await
         .map_err(|e| format!("hn topstories: {e}"))?;
@@ -59,11 +53,30 @@ pub async fn hacker_news(http: &reqwest::Client, limit: u32) -> Result<WidgetDat
     .filter_map(|result| result.ok().map(hn_item))
     .collect::<Vec<_>>();
 
-    sort_by_score(&mut items);
     if items.is_empty() {
         return Err("no stories returned".into());
     }
-    Ok(WidgetData::Feed { items })
+    sort_by_score(&mut items);
+    Ok(items)
+}
+
+/// Parse a `hottest.json` body (fetched by the caller); sorted by upvotes.
+pub fn parse_lobsters(json: &str, limit: u32) -> Result<Vec<FeedItem>, String> {
+    let stories: Vec<LobstersStory> =
+        serde_json::from_str(json).map_err(|e| format!("lobsters: {e}"))?;
+    let mut items: Vec<FeedItem> = stories
+        .into_iter()
+        .take(limit as usize)
+        .map(lobsters_item)
+        .collect();
+    sort_by_score(&mut items);
+    Ok(items)
+}
+
+/// Upvotes descending, scoreless items last; stable, so equal scores keep
+/// the upstream order.
+pub fn sort_by_score(items: &mut [FeedItem]) {
+    items.sort_by_key(|item| std::cmp::Reverse(item.score));
 }
 
 fn hn_item(item: HnItem) -> FeedItem {
@@ -78,19 +91,6 @@ fn hn_item(item: HnItem) -> FeedItem {
         comments: item.descendants,
         comments_url: discussion,
     }
-}
-
-pub async fn lobsters(http: &reqwest::Client, limit: u32) -> Result<WidgetData, String> {
-    let stories: Vec<LobstersStory> = get_json(http, LOBSTERS_HOTTEST)
-        .await
-        .map_err(|e| format!("lobsters: {e}"))?;
-    let mut items: Vec<FeedItem> = stories
-        .into_iter()
-        .take(limit as usize)
-        .map(lobsters_item)
-        .collect();
-    sort_by_score(&mut items);
-    Ok(WidgetData::Feed { items })
 }
 
 fn lobsters_item(story: LobstersStory) -> FeedItem {
@@ -148,6 +148,16 @@ mod tests {
         sort_by_score(&mut items);
         let titles: Vec<_> = items.iter().map(|i| i.title.as_str()).collect();
         assert_eq!(titles, ["high", "low", "none"]);
+    }
+
+    #[test]
+    fn parsed_lobsters_come_out_by_score() {
+        let raw = r#"[
+            {"short_id":"a","title":"low","url":"https://e.org/1","score":2,"comment_count":0,"comments_url":"https://lobste.rs/s/a","created_at":"2026-07-06T01:02:03Z"},
+            {"short_id":"b","title":"high","url":"https://e.org/2","score":50,"comment_count":1,"comments_url":"https://lobste.rs/s/b","created_at":"2026-07-06T01:02:03Z"}
+        ]"#;
+        let items = parse_lobsters(raw, 10).unwrap();
+        assert_eq!(items[0].title, "high");
     }
 
     #[test]

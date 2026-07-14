@@ -511,6 +511,7 @@ version = "1.6.0"
 dependencies = [
  "chaos-domain",
  "chrono",
+ "futures",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
