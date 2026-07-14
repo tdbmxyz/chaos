@@ -33,9 +33,16 @@ pub fn HomePage() -> impl IntoView {
             let (start, end) = range;
             let client = client.clone();
             async move {
+                // Key on the range's duration, not its endpoints: `start`/`end`
+                // are derived from `Utc::now()` and shift on every visit, so a
+                // key built from them would (almost) never hit. The span is
+                // what identifies the user's selected range; offline the
+                // cached series is slightly stale, which is exactly the
+                // intended last-known-good behavior.
+                let hours = (end - start).num_hours();
                 crate::offline::cached(
                     conn,
-                    &format!("home:temp:{range:?}"),
+                    &format!("home:temp:{hours}h"),
                     client.home_temperature(&TemperatureQuery { start, end }),
                 )
                 .await
