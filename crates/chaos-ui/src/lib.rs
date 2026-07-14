@@ -6,6 +6,7 @@ mod components;
 mod date_util;
 mod echarts;
 mod hooks;
+pub(crate) mod offline;
 mod pages;
 mod search;
 
@@ -111,7 +112,7 @@ fn apply_theme(value: &str) {
     }
 }
 
-fn local_storage() -> Option<web_sys::Storage> {
+pub(crate) fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
 }
 
