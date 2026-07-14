@@ -230,7 +230,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
             let id = id.clone();
             async move {
                 crate::offline::cached(conn, &format!("widget:{id}"), async {
-                    client.widget_data(&id, None).await
+                    client.widget_data(&id).await
                 })
                 .await
             }
@@ -369,7 +369,7 @@ fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
             let id = id.clone();
             async move {
                 crate::offline::cached(conn, &format!("widget:{id}"), async {
-                    client.widget_data(&id, None).await
+                    client.widget_data(&id).await
                 })
                 .await
             }
