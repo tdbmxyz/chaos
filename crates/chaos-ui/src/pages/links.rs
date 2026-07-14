@@ -53,6 +53,16 @@ fn effective_query(
     }
 }
 
+/// Only the default view (no collection, no tag, no search, first page) is
+/// cached for offline browsing: per-query caching would explode the key
+/// space for no real offline value.
+fn is_default_query(query: &LinkQuery) -> bool {
+    query.collection_id.is_none()
+        && query.tag.is_none()
+        && query.q.is_none()
+        && query.offset.unwrap_or(0) == 0
+}
+
 /// Links page: collection sidebar, tag filters, search, quick-add, link list
 /// and the edit dialogs. All mutations bump `refresh` to re-run the resources.
 #[component]
@@ -83,29 +93,56 @@ pub fn Links() -> impl IntoView {
     });
 
     let client = use_client();
+    // Cache-first reads; tracking `conn` means recovery refetches fresh data.
+    let conn = crate::offline::use_connectivity();
+    let offline = Memo::new(move |_| conn.get() != crate::offline::Connectivity::Online);
     let links = LocalResource::new({
         let client = client.clone();
         move || {
             refresh.track();
+            conn.track();
             let query = query.get();
             let client = client.clone();
-            async move { client.list_links(&query).await }
+            async move {
+                if is_default_query(&query) {
+                    crate::offline::cached(conn, "links", client.list_links(&query))
+                        .await
+                        .map(|(page, _)| page)
+                } else if conn.get_untracked() != crate::offline::Connectivity::Online {
+                    // Filtered/paged views are not cached; don't hit the network.
+                    Err(chaos_client::ClientError::Transport(
+                        "unavailable offline".into(),
+                    ))
+                } else {
+                    client.list_links(&query).await
+                }
+            }
         }
     });
     let collections: CollectionsResource = LocalResource::new({
         let client = client.clone();
         move || {
             refresh.track();
+            conn.track();
             let client = client.clone();
-            async move { client.list_collections().await }
+            async move {
+                crate::offline::cached(conn, "collections", client.list_collections())
+                    .await
+                    .map(|(list, _)| list)
+            }
         }
     });
     let tags = LocalResource::new({
         let client = client.clone();
         move || {
             refresh.track();
+            conn.track();
             let client = client.clone();
-            async move { client.list_tags().await }
+            async move {
+                crate::offline::cached(conn, "tags", client.list_tags())
+                    .await
+                    .map(|(list, _)| list)
+            }
         }
     });
 
@@ -116,6 +153,7 @@ pub fn Links() -> impl IntoView {
                 selected=selected_collection
                 editing=editing_collection
                 refresh
+                offline
             />
             <section class="links-main">
                 <div class="links-toolbar">
@@ -127,16 +165,30 @@ pub fn Links() -> impl IntoView {
                     />
                 </div>
                 <TagFilter tags selected=selected_tag/>
-                <AddLinkForm selected_collection refresh/>
+                {move || {
+                    if offline.get() {
+                        view! {
+                            <p class="muted">
+                                "Offline — showing saved links, editing disabled."
+                            </p>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <AddLinkForm selected_collection refresh/> }.into_any()
+                    }
+                }}
                 {move || match links.get() {
                     None => view! { <p class="muted">"Loading links…"</p> }.into_any(),
                     Some(Ok(page)) => {
                         // Light polling while snapshots are being taken, so
                         // "archiving…" badges resolve without manual refresh.
-                        if page
-                            .items
-                            .iter()
-                            .any(|l| matches!(l.archive, ArchiveState::Pending))
+                        // Never while offline: a stale cached page can carry
+                        // Pending forever, and re-polling wouldn't resolve it.
+                        if !offline.get_untracked()
+                            && page
+                                .items
+                                .iter()
+                                .any(|l| matches!(l.archive, ArchiveState::Pending))
                         {
                             set_timeout(
                                 move || refresh.update(|n| *n += 1),
@@ -169,7 +221,7 @@ pub fn Links() -> impl IntoView {
                             <p class="muted links-count">
                                 {total} " link" {if total == 1 { "" } else { "s" }}
                             </p>
-                            <LinkList links=page.items editing=editing_link refresh/>
+                            <LinkList links=page.items editing=editing_link refresh offline/>
                             {(pages > 1)
                                 .then(|| {
                                     view! {
@@ -196,8 +248,14 @@ pub fn Links() -> impl IntoView {
                             .into_any()
                     }
                     Some(Err(err)) => {
-                        view! { <p class="error">"Failed to load links: " {err.to_string()}</p> }
-                            .into_any()
+                        // Offline the raw transport text is noise; say what
+                        // it means: this view has no cached copy.
+                        let msg = if offline.get() {
+                            "Not available offline".to_string()
+                        } else {
+                            format!("Failed to load links: {err}")
+                        };
+                        view! { <p class="error">{msg}</p> }.into_any()
                     }
                 }}
             </section>
@@ -304,6 +362,8 @@ fn CollectionSidebar(
     selected: RwSignal<Option<Uuid>>,
     editing: RwSignal<Option<Collection>>,
     refresh: RwSignal<u32>,
+    /// Offline is read-only: add/edit affordances disappear.
+    offline: Memo<bool>,
 ) -> impl IntoView {
     let client = use_client();
     let new_name = RwSignal::new(String::new());
@@ -357,13 +417,21 @@ fn CollectionSidebar(
                                 >
                                     {c.name.clone()}
                                 </button>
-                                <button
-                                    class="icon-btn"
-                                    title="Edit collection"
-                                    on:click=move |_| editing.set(Some(edit_target.clone()))
-                                >
-                                    "✎"
-                                </button>
+                                {move || {
+                                    (!offline.get())
+                                        .then(|| {
+                                            let edit_target = edit_target.clone();
+                                            view! {
+                                                <button
+                                                    class="icon-btn"
+                                                    title="Edit collection"
+                                                    on:click=move |_| editing.set(Some(edit_target.clone()))
+                                                >
+                                                    "✎"
+                                                </button>
+                                            }
+                                        })
+                                }}
                             </div>
                         }
                     })
@@ -371,15 +439,23 @@ fn CollectionSidebar(
                     .into_any(),
                 _ => ().into_any(),
             }}
-            <div class="collection-add">
-                <input
-                    type="text"
-                    placeholder="New collection (under selection)"
-                    prop:value=new_name
-                    on:input=move |ev| new_name.set(event_target_value(&ev))
-                />
-                <button on:click=create>"+"</button>
-            </div>
+            {move || {
+                (!offline.get())
+                    .then(|| {
+                        let create = create.clone();
+                        view! {
+                            <div class="collection-add">
+                                <input
+                                    type="text"
+                                    placeholder="New collection (under selection)"
+                                    prop:value=new_name
+                                    on:input=move |ev| new_name.set(event_target_value(&ev))
+                                />
+                                <button on:click=create>"+"</button>
+                            </div>
+                        }
+                    })
+            }}
         </aside>
     }
 }
@@ -549,6 +625,7 @@ fn LinkList(
     links: Vec<Link>,
     editing: RwSignal<Option<Link>>,
     refresh: RwSignal<u32>,
+    offline: Memo<bool>,
 ) -> impl IntoView {
     if links.is_empty() {
         return view! { <p class="muted">"Nothing here yet — add your first link above."</p> }
@@ -559,7 +636,7 @@ fn LinkList(
             <For
                 each=move || links.clone()
                 key=|link| link.id
-                children=move |link| view! { <LinkItem link editing refresh/> }
+                children=move |link| view! { <LinkItem link editing refresh offline/> }
             />
         </ul>
     }
@@ -567,7 +644,13 @@ fn LinkList(
 }
 
 #[component]
-fn LinkItem(link: Link, editing: RwSignal<Option<Link>>, refresh: RwSignal<u32>) -> impl IntoView {
+fn LinkItem(
+    link: Link,
+    editing: RwSignal<Option<Link>>,
+    refresh: RwSignal<u32>,
+    /// Offline is read-only: the snapshot/edit/delete buttons disappear.
+    offline: Memo<bool>,
+) -> impl IntoView {
     let client = use_client();
     let id = link.id;
     let host = link.url.host_str().unwrap_or_default().to_string();
@@ -655,21 +738,31 @@ fn LinkItem(link: Link, editing: RwSignal<Option<Link>>, refresh: RwSignal<u32>)
                         .collect_view()}
                 </div>
             </div>
-            <div class="link-actions">
-                <button class="icon-btn" title="Snapshot page" on:click=rearchive>
-                    "↻"
-                </button>
-                <button
-                    class="icon-btn"
-                    title="Edit"
-                    on:click=move |_| editing.set(Some(edit_target.clone()))
-                >
-                    "✎"
-                </button>
-                <button class="icon-btn danger" title="Delete" on:click=delete>
-                    "✕"
-                </button>
-            </div>
+            {move || {
+                (!offline.get())
+                    .then(|| {
+                        let rearchive = rearchive.clone();
+                        let delete = delete.clone();
+                        let edit_target = edit_target.clone();
+                        view! {
+                            <div class="link-actions">
+                                <button class="icon-btn" title="Snapshot page" on:click=rearchive>
+                                    "↻"
+                                </button>
+                                <button
+                                    class="icon-btn"
+                                    title="Edit"
+                                    on:click=move |_| editing.set(Some(edit_target.clone()))
+                                >
+                                    "✎"
+                                </button>
+                                <button class="icon-btn danger" title="Delete" on:click=delete>
+                                    "✕"
+                                </button>
+                            </div>
+                        }
+                    })
+            }}
         </li>
     }
 }
@@ -991,6 +1084,24 @@ mod tests {
         // raw bytes instead of Uuid::now_v7().
         let by_collection = effective_query(Some(&base), Some(Uuid::from_u128(1)), None, None, 4);
         assert_eq!(by_collection.offset, Some(0));
+    }
+
+    #[test]
+    fn only_the_pristine_first_page_counts_as_default() {
+        let default = effective_query(None, None, None, None, 0);
+        assert!(is_default_query(&default));
+
+        let searched = effective_query(None, None, None, Some("rust".into()), 0);
+        assert!(!is_default_query(&searched));
+
+        let tagged = effective_query(None, None, Some("rust".into()), None, 0);
+        assert!(!is_default_query(&tagged));
+
+        let in_collection = effective_query(None, Some(Uuid::from_u128(1)), None, None, 0);
+        assert!(!is_default_query(&in_collection));
+
+        let paged = effective_query(None, None, None, None, 2);
+        assert!(!is_default_query(&paged));
     }
 
     #[test]
