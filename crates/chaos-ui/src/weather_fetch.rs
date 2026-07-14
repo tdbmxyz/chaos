@@ -87,13 +87,27 @@ fn revalidated(forecast: PlaceForecast) -> WeatherData {
 }
 
 /// The place to show when none is given: the device preference, else the
-/// location of the dashboard's weather widget (from the cached layout, so
-/// it also resolves offline).
-pub(crate) async fn default_location() -> Option<String> {
+/// location of the dashboard's weather widget — from the cached layout when
+/// there is one (so it also resolves offline), else fetched from the server.
+/// The network fallback doesn't break this module's "never touches the chaos
+/// server" rule in spirit: the layout LIVES on the chaos server, and when
+/// it's unreachable the cached-layout path already covered us — this only
+/// fills the gap where the cache is empty (fresh login, deep link to
+/// /weather before ever visiting the dashboard) but the server is reachable.
+pub(crate) async fn default_location(client: &chaos_client::ChaosClient) -> Option<String> {
     if let Some(pref) = crate::pref(crate::WEATHER_LOCATION_KEY) {
         return Some(pref);
     }
-    let layout = crate::offline::cache_get::<chaos_domain::DashboardLayout>("dashboard")?;
+    let layout = match crate::offline::cache_get::<chaos_domain::DashboardLayout>("dashboard") {
+        Some(layout) => layout,
+        None => {
+            let layout = client.dashboard().await.ok()?;
+            // Same key/type the dashboard page uses, so this also warms
+            // its cache.
+            crate::offline::cache_put("dashboard", &layout);
+            layout
+        }
+    };
     layout
         .columns
         .iter()

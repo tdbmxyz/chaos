@@ -40,6 +40,12 @@ pub(crate) fn cache_get<T: DeserializeOwned>(key: &str) -> Option<T> {
     serde_json::from_str(&raw).ok()
 }
 
+pub(crate) fn cache_remove(key: &str) {
+    if let Some(storage) = crate::local_storage() {
+        let _ = storage.remove_item(&format!("{CACHE_PREFIX}{key}"));
+    }
+}
+
 /// Drop every cached payload. Called on logout so a shared browser doesn't
 /// serve one user's calendar/links to the next.
 pub(crate) fn cache_clear() {
@@ -144,6 +150,10 @@ pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) ->
     match client.health().await {
         Ok(health) => {
             crate::set_server_fahrenheit(health.fahrenheit);
+            // Remember the server's units default so a later offline boot
+            // (where no health response exists) can restore it — see the
+            // seen-server branch in ServerGate.
+            cache_put("server-fahrenheit", &health.fahrenheit);
             mark_server_seen(client.base().as_str());
             conn.set(Connectivity::Online);
             true

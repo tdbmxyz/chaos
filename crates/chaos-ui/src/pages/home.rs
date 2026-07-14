@@ -35,10 +35,11 @@ pub fn HomePage() -> impl IntoView {
             async move {
                 // Key on the range's duration, not its endpoints: `start`/`end`
                 // are derived from `Utc::now()` and shift on every visit, so a
-                // key built from them would (almost) never hit. The span is
-                // what identifies the user's selected range; offline the
-                // cached series is slightly stale, which is exactly the
-                // intended last-known-good behavior.
+                // key built from them would (almost) never hit. The span
+                // only approximates the selection — a custom absolute range
+                // of the same length shares the slot with the rolling one —
+                // but the cache serves *some* last-known-good series either
+                // way, which is all offline mode promises.
                 let hours = (end - start).num_hours();
                 crate::offline::cached(
                     conn,

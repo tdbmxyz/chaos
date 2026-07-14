@@ -349,12 +349,17 @@ fn WeatherRow(
     // A configured row asks for its place; the default row follows the
     // device preference (or the dashboard's configured location when unset).
     let query = location.clone();
+    let client = crate::use_client();
     let data = LocalResource::new(move || {
         let query = query.clone();
+        let client = client.clone();
         async move {
-            let place = match query.or(crate::weather_fetch::default_location().await) {
+            let place = match query {
                 Some(place) => place,
-                None => return Err("no location set — add one in settings".to_string()),
+                None => match crate::weather_fetch::default_location(&client).await {
+                    Some(place) => place,
+                    None => return Err("no location set — add one in settings".to_string()),
+                },
             };
             crate::weather_fetch::place_weather(&place).await
         }

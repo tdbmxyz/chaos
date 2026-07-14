@@ -39,6 +39,12 @@ pub fn Login() -> impl IntoView {
                     if crate::persist_token() {
                         crate::store_token(Some(&resp.token));
                     }
+                    // A login is a user switch: the previous user's
+                    // last-known-good data (calendar, dashboard, …) must not
+                    // survive it — an expired session skips the logout path
+                    // that would otherwise have cleared it.
+                    crate::offline::cache_clear();
+                    crate::offline::cache_put("me", &resp.user);
                     session.0.set(Some(resp.user));
                     navigate("/", Default::default());
                 }
