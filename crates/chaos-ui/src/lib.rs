@@ -425,6 +425,21 @@ pub fn App(config: AppConfig) -> impl IntoView {
     provide_context(config);
     provide_context(SharedClient(ChaosClient::new(api_base)));
 
+    // Offline support: one app-wide connectivity signal, Checking until the
+    // gate's first probe answers. The browser's `online` event buys one free
+    // re-probe (it only says "some network came back", not "the server is
+    // reachable", so it triggers a probe rather than trusting it).
+    let conn = RwSignal::new(offline::Connectivity::Checking);
+    provide_context(conn);
+    let client_for_online = use_client();
+    let online_probe = window_event_listener(leptos::ev::online, move |_| {
+        let client = client_for_online.clone();
+        spawn_local(async move {
+            offline::probe(&client, conn).await;
+        });
+    });
+    on_cleanup(move || online_probe.remove());
+
     let session = Session(RwSignal::new(None));
     provide_context(session);
 
@@ -488,6 +503,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
         <Router>
             <ShareRedirect/>
             <search::QuickSearch open=search_open/>
+            <offline::OfflineBadge/>
             <nav class="topbar">
                 <span class="brand">"chaos"</span>
                 <A href="/"><span class="nav-icon">"▦"</span>"Dashboard"</A>
@@ -606,15 +622,16 @@ enum GateState {
 fn ServerGate(children: ChildrenFn) -> impl IntoView {
     let gate = RwSignal::new(GateState::Checking);
     let client = use_client();
+    let conn = offline::use_connectivity();
+    let seen = offline::server_seen(use_client().base().as_str());
     spawn_local(async move {
-        match client.health().await {
-            Ok(health) => {
-                // Units default from the server host's locale; kept for
-                // weather_fahrenheit before any page renders.
-                set_server_fahrenheit(health.fahrenheit);
-                gate.set(GateState::Ready);
-            }
-            Err(_) => gate.set(GateState::Unreachable),
+        // `probe` handles set_server_fahrenheit and mark_server_seen. A
+        // server we've reached before is just offline right now: boot into
+        // the cached UI with the badge instead of the connect form.
+        if offline::probe(&client, conn).await || seen {
+            gate.set(GateState::Ready);
+        } else {
+            gate.set(GateState::Unreachable);
         }
     });
 

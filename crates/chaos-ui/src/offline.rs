@@ -7,9 +7,6 @@
 //! (only the probe promotes to Online). The first failed server request
 //! downgrades Online → Offline.
 
-// Wired into App/ServerGate in the next commit.
-#![allow(dead_code)]
-
 use chaos_client::{ChaosClient, ClientError};
 use leptos::prelude::*;
 use serde::Serialize;
@@ -30,12 +27,16 @@ pub(crate) fn use_connectivity() -> RwSignal<Connectivity> {
 const CACHE_PREFIX: &str = "chaos-cache:";
 const SERVERS_SEEN_KEY: &str = "chaos-servers-seen";
 
+// Used from Task 5 on (dashboard/links/calendar/home cached reads).
+#[allow(dead_code)]
 pub(crate) fn cache_put<T: Serialize>(key: &str, value: &T) {
     if let (Some(storage), Ok(json)) = (crate::local_storage(), serde_json::to_string(value)) {
         let _ = storage.set_item(&format!("{CACHE_PREFIX}{key}"), &json);
     }
 }
 
+// Used from Task 5 on (dashboard/links/calendar/home cached reads).
+#[allow(dead_code)]
 pub(crate) fn cache_get<T: DeserializeOwned>(key: &str) -> Option<T> {
     let raw = crate::local_storage()?
         .get_item(&format!("{CACHE_PREFIX}{key}"))
@@ -52,6 +53,8 @@ pub(crate) fn cache_get<T: DeserializeOwned>(key: &str) -> Option<T> {
 /// wrong.
 ///
 /// Returns `(value, stale)` — `stale` means "came from the cache".
+// Used from Task 5 on (dashboard/links/calendar/home cached reads).
+#[allow(dead_code)]
 pub(crate) async fn cached<T, Fut>(
     conn: RwSignal<Connectivity>,
     key: &str,
@@ -125,7 +128,8 @@ pub(crate) fn mark_server_seen(base: &str) {
 }
 
 /// One bounded health probe; the only code path that can set `Online`.
-/// Returns whether the server answered.
+/// Returns whether the server answered healthy (an Api-error health
+/// response also counts as offline).
 pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) -> bool {
     match client.health().await {
         Ok(health) => {
@@ -138,6 +142,53 @@ pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) ->
             conn.set(Connectivity::Offline);
             false
         }
+    }
+}
+
+/// Fixed badge shown whenever the app is not Online; clicking it re-probes.
+/// This is the ONLY reconnect path besides the browser `online` event — no
+/// background timers.
+#[component]
+pub(crate) fn OfflineBadge() -> impl IntoView {
+    let conn = use_connectivity();
+    let busy = RwSignal::new(false);
+    let failed_flash = RwSignal::new(false);
+
+    let retry = move |_| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        let client = crate::use_client();
+        leptos::task::spawn_local(async move {
+            if !probe(&client, conn).await {
+                failed_flash.set(true);
+                set_timeout(
+                    move || failed_flash.set(false),
+                    std::time::Duration::from_millis(1800),
+                );
+            }
+            busy.set(false);
+        });
+    };
+
+    view! {
+        {move || (conn.get() != Connectivity::Online).then(|| {
+            let label = move || {
+                if busy.get() {
+                    "connecting…"
+                } else if failed_flash.get() {
+                    "still offline"
+                } else {
+                    "offline — retry"
+                }
+            };
+            view! {
+                <button class="offline-badge" on:click=retry>
+                    {label}
+                </button>
+            }
+        })}
     }
 }
 

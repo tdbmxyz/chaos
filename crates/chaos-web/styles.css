@@ -1041,6 +1041,30 @@ button.primary {
   gap: 0.6rem;
 }
 
+/* ---- offline badge (fixed retry pill, shown whenever not Online) ---- */
+
+.offline-badge {
+  position: fixed;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 60;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--down);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+@media (max-width: 40rem) {
+  .offline-badge {
+    /* Above the fixed mobile tabbar (which grows with the gesture-nav
+       inset). */
+    bottom: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+}
+
 /* ---- generic dialog forms (calendar) ---- */
 
 .stack {
