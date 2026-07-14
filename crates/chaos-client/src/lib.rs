@@ -4,6 +4,8 @@
 //! thanks to reqwest's dual backend. All UI crates go through this client so
 //! the API surface is exercised from exactly one place.
 
+pub mod open_meteo;
+
 use std::time::Duration;
 
 /// Deadline for regular data requests. Generous for a LAN server; short
