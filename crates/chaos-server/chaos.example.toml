@@ -110,6 +110,9 @@ type = "bookmarks"
 [[columns]]
 size = "small"
 
+# The location is geocoded and fetched directly by each client via
+# Open-Meteo — the server does not fetch weather. This entry only tells
+# clients which place to show and reserves the widget's dashboard slot.
 [[columns.widgets]]
 type = "weather"
 location = "Paris"
