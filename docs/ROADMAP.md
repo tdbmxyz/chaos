@@ -127,6 +127,14 @@ cross-origin (bearer instead of the cookie).
       `GET /api/v1/search` + overlay (debounced, grouped, arrow-key nav)
 - [x] Scheduled SQLite backup/export: `[backup]` config, VACUUM INTO
       snapshots with retention pruning
+- [x] Offline core: connectivity decided by the health probe alone (no
+      `navigator.onLine`), cache-first reads over localStorage for
+      dashboard/services/widgets/links/calendar/home so last-known-good
+      data keeps rendering, read-only offline semantics (mutations and
+      service controls disabled), offline badge with manual retry plus
+      the browser `online` event, 8s data / 3s health request deadlines
+      so an unreachable server fails fast — ported from yomu's offline
+      core
 
 ## Deferred / explicitly out of scope
 
