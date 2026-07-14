@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chaos_domain::{
-    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, ServerStats, SystemdAction,
+    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, ServerStats, SystemdAction,
     SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
 };
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
@@ -24,11 +24,20 @@ pub fn Dashboard() -> impl IntoView {
     let refresh = RwSignal::new(0u32);
     provide_context(crate::hooks::RefreshTick(refresh));
 
+    // Cache-first so a booted-offline app still gets its layout; the stale
+    // flag is dropped — the offline badge already tells the user, and the
+    // layout has no per-widget staleness UI of its own.
+    let conn = crate::offline::use_connectivity();
     let layout = LocalResource::new({
         let client = client.clone();
         move || {
+            conn.track(); // recovery re-fetches the layout once
             let client = client.clone();
-            async move { client.dashboard().await }
+            async move {
+                crate::offline::cached(conn, "dashboard", client.dashboard())
+                    .await
+                    .map(|(layout, _)| layout)
+            }
         }
     });
 
@@ -112,11 +121,12 @@ fn ServicesWidget() -> impl IntoView {
     // when the 30s poll re-renders the widget body.
     let collapsed = RwSignal::new(true);
 
+    let conn = crate::offline::use_connectivity();
     let services = crate::hooks::use_polled_resource(SERVICES_REFRESH, Some(action.version), {
         let client = client.clone();
         move || {
             let client = client.clone();
-            async move { client.services().await }
+            async move { crate::offline::cached(conn, "services", client.services()).await }
         }
     });
 
@@ -132,11 +142,19 @@ fn ServicesWidget() -> impl IntoView {
             {move || action.error.get().map(|err| view! { <p class="error">{err}</p> })}
             {move || match services.get() {
                 None => view! { <p class="muted">"Checking services…"</p> }.into_any(),
-                Some(Ok(list)) => {
+                Some(Ok((mut list, stale))) => {
+                    // Cached statuses are from another era; force them honest
+                    // (Unknown, no latency) and drop the start/stop controls.
+                    if stale {
+                        for service in &mut list {
+                            service.status.state = HealthState::Unknown;
+                            service.status.latency_ms = None;
+                        }
+                    }
                     let count = list.len();
                     view! {
                         <Collapsible count collapsed>
-                            <ServiceGrid services=list controls=(action.busy, run)/>
+                            <ServiceGrid services=list controls=(action.busy, run) read_only=stale/>
                         </Collapsible>
                     }
                         .into_any()
@@ -191,19 +209,27 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     // Device preference: weather follows the location set on /settings.
     let weather_location =
         matches!(widget, Widget::Weather { .. }).then(|| crate::pref(crate::WEATHER_LOCATION_KEY));
+    let conn = crate::offline::use_connectivity();
     let data = crate::hooks::use_polled_resource(WIDGET_REFRESH, None, {
         let client = client.clone();
         move || {
             let client = client.clone();
             let id = id.clone();
             let location = weather_location.clone().flatten();
-            async move { client.widget_data(&id, location.as_deref()).await }
+            async move {
+                crate::offline::cached(conn, &format!("widget:{id}"), async {
+                    client.widget_data(&id, location.as_deref()).await
+                })
+                .await
+            }
         }
     });
 
     // WidgetData is PartialEq; skip subtree rebuilds when a refresh returns
     // the same cached payload (the server caches these widgets anyway).
     let data = Memo::new(move |_| data.get().map(|r| r.map_err(|e| e.to_string())));
+    // Serving from the local cache gets a small "· cached" hint by the title.
+    let stale = Memo::new(move |_| matches!(data.get(), Some(Ok((_, true)))));
 
     // One signal for whichever Collapsible arm renders (Feed or Releases);
     // owned here so poll-driven rebuilds keep the user's expand state.
@@ -211,13 +237,13 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
 
     view! {
         <section class=format!("widget widget-{kind}")>
-            <h2>{title}</h2>
+            <h2>{title} {move || stale.get().then(stale_hint)}</h2>
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
-                Some(Ok(WidgetData::Weather(weather))) => {
+                Some(Ok((WidgetData::Weather(weather), _))) => {
                     view! { <WeatherView weather/> }.into_any()
                 }
-                Some(Ok(WidgetData::Feed { items })) => {
+                Some(Ok((WidgetData::Feed { items }, _))) => {
                     let count = items.len();
                     view! {
                         <Collapsible count collapsed>
@@ -228,7 +254,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                     }
                         .into_any()
                 }
-                Some(Ok(WidgetData::Releases { items })) => {
+                Some(Ok((WidgetData::Releases { items }, _))) => {
                     let count = items.len();
                     view! {
                         <Collapsible count collapsed>
@@ -259,12 +285,14 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                     }
                         .into_any()
                 }
-                Some(Ok(WidgetData::ServerStats(stats))) => {
+                Some(Ok((WidgetData::ServerStats(stats), _))) => {
                     view! { <ServerStatsView stats/> }.into_any()
                 }
                 // Systemd widgets render through SystemdWidget; this arm only
                 // exists for exhaustiveness.
-                Some(Ok(WidgetData::Systemd { units })) => systemd_rows(units, None).into_any(),
+                Some(Ok((WidgetData::Systemd { units }, _))) => {
+                    systemd_rows(units, None).into_any()
+                }
                 Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
             }}
         </section>
@@ -320,34 +348,49 @@ fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
         }
     });
 
+    let conn = crate::offline::use_connectivity();
     let data = crate::hooks::use_polled_resource(SERVICES_REFRESH, Some(action.version), {
         let client = client.clone();
         let id = id.clone();
         move || {
             let client = client.clone();
             let id = id.clone();
-            async move { client.widget_data(&id, None).await }
+            async move {
+                crate::offline::cached(conn, &format!("widget:{id}"), async {
+                    client.widget_data(&id, None).await
+                })
+                .await
+            }
         }
     });
 
     // Unit states rarely change between polls; only rebuild the rows (and
     // their control buttons) when they do.
     let data = Memo::new(move |_| data.get().map(|r| r.map_err(|e| e.to_string())));
+    let stale = Memo::new(move |_| matches!(data.get(), Some(Ok((_, true)))));
 
     view! {
         <section class="widget widget-systemd">
-            <h2>{title}</h2>
+            <h2>{title} {move || stale.get().then(stale_hint)}</h2>
             {move || action.error.get().map(|err| view! { <p class="error">{err}</p> })}
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
-                Some(Ok(WidgetData::Systemd { units })) => {
-                    systemd_rows(units, Some((action.busy, run))).into_any()
+                Some(Ok((WidgetData::Systemd { units }, stale))) => {
+                    // Cached unit states can't be acted on; drop the buttons.
+                    let controls = (!stale).then_some((action.busy, run));
+                    systemd_rows(units, controls).into_any()
                 }
                 Some(Ok(_)) => view! { <p class="error">"Unexpected widget data"</p> }.into_any(),
                 Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
             }}
         </section>
     }
+}
+
+/// Small marker next to a widget title while it renders cached (offline)
+/// data — the payload may be arbitrarily old.
+fn stale_hint() -> impl IntoView {
+    view! { <span class="muted stale-hint">" · cached"</span> }
 }
 
 fn systemd_rows(units: Vec<SystemdUnitStatus>, controls: Option<SystemdControls>) -> impl IntoView {

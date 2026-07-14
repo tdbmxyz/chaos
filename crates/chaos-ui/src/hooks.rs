@@ -82,7 +82,10 @@ where
 /// sources go untracked, so the resource simply stops re-running (`version`
 /// is still always tracked). Recovery still works — the connectivity signal
 /// itself is read unconditionally below, which re-runs the resource once
-/// connectivity flips back to Online.
+/// connectivity flips back to Online. The same tracked read also re-runs the
+/// resource once on a connectivity *downgrade*, so fetches must go through
+/// [`crate::offline::cached`] (which serves the cache without touching the
+/// network while offline) for the no-probing guarantee to hold.
 ///
 /// `poll_offline: true` keeps polling even while offline; it's the escape
 /// hatch for widgets that fetch their data without going through the chaos
@@ -108,7 +111,7 @@ where
     let conn = use_context::<RwSignal<crate::offline::Connectivity>>();
     LocalResource::new(move || {
         // Tracked read: this is what makes recovery re-run the resource
-        // once connectivity flips back to Online, in both branches below.
+        // once connectivity flips back to Online.
         let online = conn
             .map(|c| c.get() == crate::offline::Connectivity::Online)
             .unwrap_or(true);

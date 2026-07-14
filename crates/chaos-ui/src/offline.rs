@@ -27,16 +27,12 @@ pub(crate) fn use_connectivity() -> RwSignal<Connectivity> {
 const CACHE_PREFIX: &str = "chaos-cache:";
 const SERVERS_SEEN_KEY: &str = "chaos-servers-seen";
 
-// Used from Task 5 on (dashboard/links/calendar/home cached reads).
-#[allow(dead_code)]
 pub(crate) fn cache_put<T: Serialize>(key: &str, value: &T) {
     if let (Some(storage), Ok(json)) = (crate::local_storage(), serde_json::to_string(value)) {
         let _ = storage.set_item(&format!("{CACHE_PREFIX}{key}"), &json);
     }
 }
 
-// Used from Task 5 on (dashboard/links/calendar/home cached reads).
-#[allow(dead_code)]
 pub(crate) fn cache_get<T: DeserializeOwned>(key: &str) -> Option<T> {
     let raw = crate::local_storage()?
         .get_item(&format!("{CACHE_PREFIX}{key}"))
@@ -53,8 +49,6 @@ pub(crate) fn cache_get<T: DeserializeOwned>(key: &str) -> Option<T> {
 /// wrong.
 ///
 /// Returns `(value, stale)` — `stale` means "came from the cache".
-// Used from Task 5 on (dashboard/links/calendar/home cached reads).
-#[allow(dead_code)]
 pub(crate) async fn cached<T, Fut>(
     conn: RwSignal<Connectivity>,
     key: &str,

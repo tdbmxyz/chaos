@@ -129,7 +129,15 @@ pub fn Modal(
 }
 
 #[component]
-pub fn ServiceGrid(services: Vec<ServiceWithStatus>, controls: ServiceControls) -> impl IntoView {
+pub fn ServiceGrid(
+    services: Vec<ServiceWithStatus>,
+    controls: ServiceControls,
+    /// Hide the start/stop controls — set while the grid renders cached
+    /// (offline) data, when acting on a unit is impossible anyway. Tiles
+    /// stay links: the target may be reachable even when chaos isn't.
+    #[prop(optional)]
+    read_only: bool,
+) -> impl IntoView {
     if services.is_empty() {
         return view! {
             <p class="muted">"No services configured. Add some to chaos.toml."</p>
@@ -142,7 +150,7 @@ pub fn ServiceGrid(services: Vec<ServiceWithStatus>, controls: ServiceControls) 
             <For
                 each=move || services.clone()
                 key=|service| service.def.id.clone()
-                children=move |service| view! { <ServiceCard service controls/> }
+                children=move |service| view! { <ServiceCard service controls read_only/> }
             />
         </div>
     }
@@ -150,7 +158,11 @@ pub fn ServiceGrid(services: Vec<ServiceWithStatus>, controls: ServiceControls) 
 }
 
 #[component]
-fn ServiceCard(service: ServiceWithStatus, controls: ServiceControls) -> impl IntoView {
+fn ServiceCard(
+    service: ServiceWithStatus,
+    controls: ServiceControls,
+    #[prop(optional)] read_only: bool,
+) -> impl IntoView {
     let state = service.status.state;
     let (dot_class, state_label) = match state {
         HealthState::Up => ("dot up", "up"),
@@ -174,7 +186,7 @@ fn ServiceCard(service: ServiceWithStatus, controls: ServiceControls) -> impl In
     // On-demand services carry a start/stop button on the tile itself; the
     // click must not follow the card's link.
     let (busy, run) = controls;
-    let action = service.def.unit.is_some().then(|| {
+    let action = (service.def.unit.is_some() && !read_only).then(|| {
         let id = service.def.id.clone();
         let (label, title, action) = match state {
             HealthState::Paused | HealthState::Down | HealthState::Unknown => {
