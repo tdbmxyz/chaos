@@ -7,20 +7,24 @@ edition.workspace = true
 [dependencies]
 chaos-domain.workspace = true
 chaos-client.workspace = true
+reqwest.workspace = true
 leptos.workspace = true
 leptos_router.workspace = true
 chrono.workspace = true
 url.workspace = true
 uuid.workspace = true
+serde.workspace = true
 js-sys.workspace = true
 serde_json.workspace = true
 wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
 web-sys = { workspace = true, features = [
     "HtmlAnchorElement",
     "Window",
     "Location",
     "Storage",
     "Navigator",
+    "Response",
     "Document",
     "Element",
     "HtmlElement",

@@ -107,21 +107,43 @@ fn CalendarView() -> impl IntoView {
     let dialog = RwSignal::new(None::<EventDraft>);
     let manage = RwSignal::new(false);
 
+    // Cache-first reads keyed on the visible month; tracking `conn` means
+    // recovery refetches fresh data. Stale flags are dropped — the offline
+    // badge plus the read-only hint already say it. `cached` passes Api
+    // errors (401) through untouched, so the sign-in prompt path below is
+    // unchanged.
+    let conn = crate::offline::use_connectivity();
+    let offline = Memo::new(move |_| conn.get() != crate::offline::Connectivity::Online);
     let events = LocalResource::new({
         let client = client.clone();
         move || {
             version.track();
-            let (start, end) = grid_utc_range(month.get());
+            conn.track();
+            let (year, m) = month.get();
+            let (start, end) = grid_utc_range((year, m));
             let client = client.clone();
-            async move { client.calendar_events(&EventQuery { start, end }).await }
+            async move {
+                crate::offline::cached(
+                    conn,
+                    &format!("calendar:{year}-{m:02}"),
+                    client.calendar_events(&EventQuery { start, end }),
+                )
+                .await
+                .map(|(list, _)| list)
+            }
         }
     });
     let calendars = LocalResource::new({
         let client = client.clone();
         move || {
             version.track();
+            conn.track();
             let client = client.clone();
-            async move { client.list_calendars().await }
+            async move {
+                crate::offline::cached(conn, "calendars", client.list_calendars())
+                    .await
+                    .map(|(list, _)| list)
+            }
         }
     });
 
@@ -166,31 +188,43 @@ fn CalendarView() -> impl IntoView {
                     <button title="Next month" on:click=move |_| shift(1)>"›"</button>
                 </div>
                 <div class="calendar-actions">
-                    <button
-                        title="Refetch calendar feeds"
-                        on:click={
-                            let client = client.clone();
-                            move |_| {
-                                let client = client.clone();
-                                spawn_local(async move {
-                                    if client.refresh_calendars().await.is_ok() {
-                                        version.update(|n| *n += 1);
-                                    }
-                                });
+                    {
+                        let client = client.clone();
+                        move || {
+                            if offline.get() {
+                                // Mutations and feed refreshes need the
+                                // server; offline the month stays browsable.
+                                return view! { <span class="muted">"Offline — read-only"</span> }
+                                    .into_any();
                             }
+                            let client = client.clone();
+                            view! {
+                                <button
+                                    title="Refetch calendar feeds"
+                                    on:click=move |_| {
+                                        let client = client.clone();
+                                        spawn_local(async move {
+                                            if client.refresh_calendars().await.is_ok() {
+                                                version.update(|n| *n += 1);
+                                            }
+                                        });
+                                    }
+                                >
+                                    "↻"
+                                </button>
+                                <button
+                                    class="primary"
+                                    on:click=move |_| {
+                                        dialog.set(Some(EventDraft::new_on(selected.get().unwrap_or(today))));
+                                    }
+                                >
+                                    "New event"
+                                </button>
+                                <button on:click=move |_| manage.set(true)>"Calendars"</button>
+                            }
+                                .into_any()
                         }
-                    >
-                        "↻"
-                    </button>
-                    <button
-                        class="primary"
-                        on:click=move |_| {
-                            dialog.set(Some(EventDraft::new_on(selected.get().unwrap_or(today))));
-                        }
-                    >
-                        "New event"
-                    </button>
-                    <button on:click=move |_| manage.set(true)>"Calendars"</button>
+                    }
                 </div>
             </div>
 
@@ -204,6 +238,11 @@ fn CalendarView() -> impl IntoView {
                         </div>
                     }
                         .into_any()
+                }
+                // Offline the raw transport text is noise; say what it
+                // means: this view has no cached copy.
+                Some(Err(_)) if offline.get() => {
+                    view! { <p class="muted">"Not available offline"</p> }.into_any()
                 }
                 Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 Some(Ok(list)) => {
@@ -222,7 +261,7 @@ fn CalendarView() -> impl IntoView {
                             .into_iter()
                             .filter(|e| covers(e, day))
                             .collect::<Vec<_>>();
-                        view! { <DayPanel day events=day_events dialog version/> }
+                        view! { <DayPanel day events=day_events dialog version offline/> }
                     })
             }}
         </div>
@@ -398,6 +437,8 @@ fn DayPanel(
     events: Vec<CalendarEvent>,
     dialog: RwSignal<Option<EventDraft>>,
     version: RwSignal<u32>,
+    /// Offline is read-only: the edit/delete buttons disappear.
+    offline: Memo<bool>,
 ) -> impl IntoView {
     let client = use_client();
 
@@ -440,36 +481,43 @@ fn DayPanel(
                                         <span class="event-title">{event.title.clone()}</span>
                                         <span class="muted event-meta">{meta}</span>
                                         {description}
-                                        {editable
-                                            .map(|id| {
-                                                view! {
-                                                    <span class="unit-actions">
-                                                        <button
-                                                            class="unit-btn"
-                                                            title="Edit"
-                                                            on:click=move |_| {
-                                                                dialog.set(Some(EventDraft::edit(&edit_event)));
+                                        {move || {
+                                            (!offline.get())
+                                                .then(|| {
+                                                    editable
+                                                        .map(|id| {
+                                                            let edit_event = edit_event.clone();
+                                                            let client = client.clone();
+                                                            view! {
+                                                                <span class="unit-actions">
+                                                                    <button
+                                                                        class="unit-btn"
+                                                                        title="Edit"
+                                                                        on:click=move |_| {
+                                                                            dialog.set(Some(EventDraft::edit(&edit_event)));
+                                                                        }
+                                                                    >
+                                                                        "✎"
+                                                                    </button>
+                                                                    <button
+                                                                        class="unit-btn"
+                                                                        title="Delete"
+                                                                        on:click=move |_| {
+                                                                            let client = client.clone();
+                                                                            spawn_local(async move {
+                                                                                if client.delete_event(id).await.is_ok() {
+                                                                                    version.update(|n| *n += 1);
+                                                                                }
+                                                                            });
+                                                                        }
+                                                                    >
+                                                                        "✕"
+                                                                    </button>
+                                                                </span>
                                                             }
-                                                        >
-                                                            "✎"
-                                                        </button>
-                                                        <button
-                                                            class="unit-btn"
-                                                            title="Delete"
-                                                            on:click=move |_| {
-                                                                let client = client.clone();
-                                                                spawn_local(async move {
-                                                                    if client.delete_event(id).await.is_ok() {
-                                                                        version.update(|n| *n += 1);
-                                                                    }
-                                                                });
-                                                            }
-                                                        >
-                                                            "✕"
-                                                        </button>
-                                                    </span>
-                                                }
-                                            })}
+                                                        })
+                                                })
+                                        }}
                                     </li>
                                 }
                             })

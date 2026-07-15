@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.6.0"
+version = "1.7.0"
 edition = "2024"
 authors = ["Tibo <thibaudbalem@gmail.com>"]
 repository = "https://github.com/tdbmxyz/chaos"
@@ -50,9 +50,11 @@ console_error_panic_hook = "0.1"
 web-sys = "0.3"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 
 # desktop
 tauri = { version = "2", features = [] }
+tauri-plugin-http = "2"
 tauri-build = "2"
 
 [profile.release]

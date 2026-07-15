@@ -80,6 +80,10 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        // Native HTTP for the UI (`window.__TAURI__.http.fetch`): lets it
+        // reach hosts that send no CORS headers (lobste.rs). Scoped to an
+        // explicit URL allowlist in capabilities/default.json.
+        .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![open_external])
         .setup(|app| {
             let platform = if cfg!(target_os = "android") {

@@ -1,8 +1,6 @@
 //! A small bounded TTL cache that can also serve stale entries when a
-//! refresh fails. Shared by the widget hub (widget payloads, geocoding)
-//! and the ICS feed cache — the hand-rolled versions of this pattern were
-//! unbounded, which mattered because weather cache keys come from the
-//! user-controlled `?location=` query.
+//! refresh fails. Shared by the widget hub (widget payloads) and the ICS
+//! feed cache — the hand-rolled versions of this pattern were unbounded.
 
 use std::collections::HashMap;
 use std::hash::Hash;

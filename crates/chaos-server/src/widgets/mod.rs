@@ -4,9 +4,10 @@
 //! The layout (`DashboardLayout`) is resolved once at startup; each data
 //! widget gets a stable instance id (`w<column>-<index>`) under which clients
 //! fetch its payload from `GET /api/v1/widgets/{id}`. Upstream calls
-//! (Open-Meteo, feeds, GitHub) are cached here so many open dashboards cost
+//! (feeds, GitHub) are cached here so many open dashboards cost
 //! one upstream request per TTL, and a stale payload is served when a
-//! refresh fails.
+//! refresh fails. Weather has no server side: clients fetch Open-Meteo
+//! directly.
 
 mod feed;
 mod posts;
@@ -15,7 +16,6 @@ mod stats;
 // pub(crate): the service monitor and the service-action API endpoint reuse
 // the unit query/act helpers for on-demand services (`ServiceDef::unit`).
 pub(crate) mod systemd;
-mod weather;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -28,10 +28,8 @@ use chaos_domain::{
 use crate::cache::StaleCache;
 use crate::config::{ColumnConfig, Config};
 
-/// Caps on cache growth: both caches take user-controlled `?location=`
-/// keys, so they must be bounded. Generous for any real dashboard.
+/// Cap on cache growth. Generous for any real dashboard.
 const WIDGET_CACHE_ENTRIES: usize = 512;
-const GEOCODE_CACHE_ENTRIES: usize = 256;
 
 /// Resolved widget instances plus their payload caches. One per process,
 /// shared via `AppState`.
@@ -40,10 +38,6 @@ pub struct WidgetHub {
     /// Data widgets by instance id (static widgets carry no data).
     entries: HashMap<String, Widget>,
     cache: StaleCache<String, WidgetData>,
-    /// Geocoded weather locations. Bounded because keys come from the
-    /// user-controlled `?location=` query; entries never expire (a city's
-    /// coordinates don't move), they only rotate out on overflow.
-    geocode: StaleCache<String, weather::Place>,
     /// CPU/memory sparkline samples; the sampler task only runs when the
     /// layout actually has a server_stats widget.
     stats_history: Option<stats::History>,
@@ -70,7 +64,6 @@ impl WidgetHub {
             layout,
             entries,
             cache: StaleCache::new(WIDGET_CACHE_ENTRIES),
-            geocode: StaleCache::new(GEOCODE_CACHE_ENTRIES),
             stats_history,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -82,23 +75,10 @@ impl WidgetHub {
 
     /// Payload for one widget instance, served from cache within the TTL.
     /// On upstream failure a stale cached payload is preferred over an error.
-    ///
-    /// `location` is a device preference: weather widgets fetch that place
-    /// instead of the configured one (each place cached separately); other
-    /// widget kinds ignore it.
-    pub async fn data(&self, id: &str, location: Option<&str>) -> Result<WidgetData, WidgetError> {
+    pub async fn data(&self, id: &str) -> Result<WidgetData, WidgetError> {
         let widget = self.entries.get(id).ok_or(WidgetError::UnknownWidget)?;
         let ttl = ttl(widget);
-
-        let location = location
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && l.len() <= 64 && matches!(widget, Widget::Weather { .. }));
-        let cache_key = match location {
-            Some(place) => format!("{id}@{place}"),
-            None => id.to_string(),
-        };
-
-        self.cached_fetch(cache_key, ttl, self.fetch(widget, location))
+        self.cached_fetch(id.to_string(), ttl, self.fetch(widget))
             .await
     }
 
@@ -137,42 +117,8 @@ impl WidgetHub {
         }
     }
 
-    /// Forecast for the weather page, independent of any widget instance:
-    /// any location can be asked for; `None` falls back to the layout's
-    /// weather widget. Same cache and staleness rules as widget payloads.
-    pub async fn weather(
-        &self,
-        location: Option<&str>,
-    ) -> Result<chaos_domain::WeatherData, WidgetError> {
-        let location = location
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && l.len() <= 64);
-        let configured = self.entries.values().find_map(|w| match w {
-            Widget::Weather { location } => Some(location.as_str()),
-            _ => None,
-        });
-        let place = location.or(configured).ok_or_else(|| {
-            WidgetError::Rejected("no location given and no weather widget configured".into())
-        })?;
-
-        let data = self
-            .cached_fetch(
-                format!("weather@{place}"),
-                Duration::from_secs(600),
-                weather::fetch(&self.http, &self.geocode, place),
-            )
-            .await?;
-        match data {
-            WidgetData::Weather(data) => Ok(data),
-            _ => unreachable!("weather cache keys only hold weather data"),
-        }
-    }
-
-    async fn fetch(&self, widget: &Widget, location: Option<&str>) -> Result<WidgetData, String> {
+    async fn fetch(&self, widget: &Widget) -> Result<WidgetData, String> {
         match widget {
-            Widget::Weather {
-                location: configured,
-            } => weather::fetch(&self.http, &self.geocode, location.unwrap_or(configured)).await,
             Widget::Feed { urls, limit, .. } => feed::fetch(&self.http, urls, *limit).await,
             Widget::HackerNews { limit, .. } => posts::hacker_news(&self.http, *limit).await,
             Widget::Lobsters { limit, .. } => posts::lobsters(&self.http, *limit).await,
@@ -192,8 +138,10 @@ impl WidgetHub {
                 stats::collect(mounts.clone(), history).await
             }
             Widget::Systemd { units, .. } => systemd::fetch(units).await,
-            // Static widgets are never registered in `entries`.
-            Widget::Search { .. }
+            // Widgets without a data endpoint are never registered in
+            // `entries` (weather is fetched by clients from Open-Meteo).
+            Widget::Weather { .. }
+            | Widget::Search { .. }
             | Widget::Services
             | Widget::Bookmarks { .. }
             | Widget::Calendar => Err("widget has no data endpoint".into()),
@@ -228,10 +176,7 @@ impl WidgetHub {
             .await
             .map_err(WidgetError::Upstream)?;
 
-        let data = self
-            .fetch(widget, None)
-            .await
-            .map_err(WidgetError::Upstream)?;
+        let data = self.fetch(widget).await.map_err(WidgetError::Upstream)?;
         self.cache.insert(id.to_string(), data.clone()).await;
         Ok(data)
     }
@@ -240,15 +185,16 @@ impl WidgetHub {
 /// How long a cached payload stays fresh, per widget kind.
 fn ttl(widget: &Widget) -> Duration {
     match widget {
-        Widget::Weather { .. } => Duration::from_secs(600),
         Widget::Feed { .. } => Duration::from_secs(300),
         Widget::HackerNews { .. } | Widget::Lobsters { .. } => Duration::from_secs(300),
         Widget::Releases { .. } => Duration::from_secs(1800),
         Widget::ServerStats { .. } => Duration::from_secs(10),
         Widget::Systemd { .. } => Duration::from_secs(5),
-        Widget::Search { .. } | Widget::Services | Widget::Bookmarks { .. } | Widget::Calendar => {
-            Duration::ZERO
-        }
+        Widget::Weather { .. }
+        | Widget::Search { .. }
+        | Widget::Services
+        | Widget::Bookmarks { .. }
+        | Widget::Calendar => Duration::ZERO,
     }
 }
 
@@ -359,7 +305,10 @@ mod tests {
 
         let (layout, entries) = resolve_layout(&config);
         assert_eq!(layout.columns[1].widgets[0].id, "w1-0");
-        assert_eq!(entries.len(), 2);
+        // Weather stays in the layout but registers no data entry: clients
+        // fetch Open-Meteo directly.
+        assert_eq!(entries.len(), 1);
+        assert!(!entries.contains_key("w1-0"));
         assert!(matches!(
             entries.get("w1-1"),
             Some(Widget::ServerStats { .. })

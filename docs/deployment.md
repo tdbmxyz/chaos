@@ -201,6 +201,16 @@ newest. Restoring = stopping the service and copying a snapshot over
 `db_path`. Page archives (`[archive] dir`) and icons are plain files —
 include `/var/lib/chaos` in the host's regular backup for those.
 
+## Breaking change: weather proxy removed
+
+`GET /api/v1/weather` is gone in this release — every client (web, desktop,
+Android) now geocodes and fetches forecasts directly from Open-Meteo
+instead of going through the server. The client and server ship together
+(same repo, same release), so there's no compatibility window to worry
+about: deploy both at once and there's nothing else to do — the existing
+`type = "weather"` config entry keeps working, it just no longer causes a
+server-side fetch.
+
 ## Desktop and phone apps
 
 The web UI served by the server is the primary interface; the Tauri shells
@@ -223,6 +233,11 @@ wrap the same bundle for app-like use:
 Shells talk to the server cross-origin, so they sign in with a bearer
 token stored on the device instead of the browser cookie; nothing needs
 configuring server-side (CORS is already open — LAN posture).
+
+The desktop and Android shells now bundle `tauri-plugin-http` with a
+capability allowlist scoped to the hosts the dashboard fetches directly
+when offline or for weather (Hacker News, lobste.rs, Open-Meteo). Nothing
+to configure — the next `just apk` / `just bundle` build picks it up.
 
 ## Migrating Linkwarden data
 

@@ -1,29 +1,47 @@
-//! Weather provider backed by Open-Meteo (no API key required).
-//!
-//! The configured location string is geocoded once per process via the
-//! Open-Meteo geocoding API; forecasts then go through the regular forecast
-//! endpoint and are cached by the hub.
+//! Direct Open-Meteo access (no API key): geocoding + forecast, shared by
+//! every client build. The server no longer proxies weather — this is THE
+//! weather path, at home and away.
 
-use chaos_domain::{DailyForecast, HourlyForecast, WeatherData, WidgetData};
-use serde::Deserialize;
+use chaos_domain::{DailyForecast, HourlyForecast, WeatherData};
+use serde::{Deserialize, Serialize};
 
-use crate::cache::StaleCache;
-use crate::http_util::get_json;
+use crate::http::http_get_json as get_json;
 
-#[derive(Debug, Clone)]
+/// A geocoded place — serializable because chaos-ui caches it per name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Place {
     pub name: String,
     pub latitude: f64,
     pub longitude: f64,
 }
 
-pub async fn fetch(
-    http: &reqwest::Client,
-    geocode_cache: &StaleCache<String, Place>,
-    location: &str,
-) -> Result<WidgetData, String> {
-    let place = resolve(http, geocode_cache, location).await?;
+/// A fetched forecast plus what's needed to keep a cached copy honest:
+/// `utc_offset_seconds` lets a reader recompute `now_index` for the
+/// location-local current hour long after the fetch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaceForecast {
+    pub data: WeatherData,
+    pub utc_offset_seconds: i32,
+}
 
+/// Resolve a location string ("Osaka" or "Osaka, JP") to coordinates via
+/// the Open-Meteo geocoding API.
+pub async fn geocode(http: &reqwest::Client, location: &str) -> Result<Place, String> {
+    // The geocoding API only searches names, so a trailing country part
+    // becomes a filter on the results (handled by pick_place).
+    let (name_query, _) = split_location(location);
+    let url = format!(
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=10&language=en&format=json",
+        urlencoded(name_query)
+    );
+    let response: GeocodeResponse = get_json(http, &url)
+        .await
+        .map_err(|e| format!("geocoding: {e}"))?;
+    pick_place(location, response)
+}
+
+/// Fetch the forecast for a resolved place.
+pub async fn forecast(http: &reqwest::Client, place: &Place) -> Result<PlaceForecast, String> {
     let url = format!(
         "https://api.open-meteo.com/v1/forecast\
          ?latitude={lat}&longitude={lon}\
@@ -47,28 +65,41 @@ pub async fn fetch(
 
     // The hourly series spans past_days back through the full forecast; the
     // UI needs to know where "now" sits in it, anchored to the local hour.
-    let this_hour = {
-        use chrono::Timelike;
-        current
-            .time
-            .with_minute(0)
-            .and_then(|t| t.with_second(0))
-            .unwrap_or(current.time)
-    };
+    let this_hour = truncate_to_hour(current.time);
     let now_index = now_index(&hourly, this_hour);
 
-    Ok(WidgetData::Weather(WeatherData {
-        location: place.name,
-        temperature_c: current.temperature_2m,
-        apparent_c: current.apparent_temperature,
-        humidity_pct: current.relative_humidity_2m,
-        wind_kmh: current.wind_speed_10m,
-        weather_code: current.weather_code,
-        description: describe(current.weather_code).to_string(),
-        daily,
-        hourly,
-        now_index,
-    }))
+    Ok(PlaceForecast {
+        data: WeatherData {
+            location: place.name.clone(),
+            temperature_c: current.temperature_2m,
+            apparent_c: current.apparent_temperature,
+            humidity_pct: current.relative_humidity_2m,
+            wind_kmh: current.wind_speed_10m,
+            weather_code: current.weather_code,
+            description: describe(current.weather_code).to_string(),
+            daily,
+            hourly,
+            now_index,
+        },
+        utc_offset_seconds: forecast.utc_offset_seconds,
+    })
+}
+
+/// Where "now" sits in a (possibly cached) hourly series: convert UTC now
+/// to the location's local clock, truncate to the hour, find the first
+/// entry at or after it.
+pub fn recompute_now_index(
+    hourly: &[HourlyForecast],
+    now_utc: chrono::DateTime<chrono::Utc>,
+    utc_offset_seconds: i32,
+) -> usize {
+    let local = now_utc.naive_utc() + chrono::Duration::seconds(utc_offset_seconds as i64);
+    now_index(hourly, truncate_to_hour(local))
+}
+
+fn truncate_to_hour(t: chrono::NaiveDateTime) -> chrono::NaiveDateTime {
+    use chrono::Timelike;
+    t.with_minute(0).and_then(|t| t.with_second(0)).unwrap_or(t)
 }
 
 /// Zip the raw Open-Meteo series into forecast entries, dropping any hour or
@@ -119,31 +150,21 @@ fn now_index(hourly: &[HourlyForecast], this_hour: chrono::NaiveDateTime) -> usi
         .unwrap_or(hourly.len())
 }
 
-async fn resolve(
-    http: &reqwest::Client,
-    cache: &StaleCache<String, Place>,
-    location: &str,
-) -> Result<Place, String> {
-    if let Some(place) = cache.get_stale(&location.to_string()).await {
-        return Ok(place);
-    }
-
-    // "Osaka, JP" style disambiguation: the geocoding API only searches
-    // names, so a trailing country part becomes a filter on the results.
-    let (name_query, country) = match location.rsplit_once(',') {
+/// "Osaka, JP" style disambiguation: split a location string into the name
+/// to search and an optional uppercased country filter.
+fn split_location(location: &str) -> (&str, Option<String>) {
+    match location.rsplit_once(',') {
         Some((name, country)) if !name.trim().is_empty() => {
             (name.trim(), Some(country.trim().to_ascii_uppercase()))
         }
         _ => (location.trim(), None),
-    };
+    }
+}
 
-    let url = format!(
-        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=10&language=en&format=json",
-        urlencoded(name_query)
-    );
-    let response: GeocodeResponse = get_json(http, &url)
-        .await
-        .map_err(|e| format!("geocoding: {e}"))?;
+/// Pick the geocoding hit matching the location's country filter (if any) —
+/// pure so the selection is testable without HTTP.
+fn pick_place(location: &str, response: GeocodeResponse) -> Result<Place, String> {
+    let (_, country) = split_location(location);
     let hit = response
         .results
         .into_iter()
@@ -164,13 +185,11 @@ async fn resolve(
         Some(cc) => format!("{}, {}", hit.name, cc),
         None => hit.name.clone(),
     };
-    let place = Place {
+    Ok(Place {
         name,
         latitude: hit.latitude,
         longitude: hit.longitude,
-    };
-    cache.insert(location.to_string(), place.clone()).await;
-    Ok(place)
+    })
 }
 
 fn urlencoded(s: &str) -> String {
@@ -216,6 +235,10 @@ struct GeocodeHit {
 
 #[derive(Debug, Deserialize)]
 struct Forecast {
+    /// The location's offset from UTC (`timezone=auto`); defaulted for
+    /// safety, though Open-Meteo always sends it.
+    #[serde(default)]
+    utc_offset_seconds: i32,
     current: CurrentWeather,
     daily: DailySeries,
     hourly: HourlySeries,
@@ -273,7 +296,7 @@ struct DailySeries {
 
 #[cfg(test)]
 mod tests {
-    use super::now_index;
+    use super::{build_series, now_index, pick_place, recompute_now_index};
     use chaos_domain::HourlyForecast;
     use chrono::NaiveDate;
 
@@ -323,6 +346,7 @@ mod tests {
         // Open-Meteo leaves nulls where its model horizon ends (observed on
         // the 16th forecast day for some locations/timezones).
         let raw = r#"{
+            "utc_offset_seconds": 7200,
             "current": {"time": "2026-07-11T00:00", "temperature_2m": 28.0,
                         "apparent_temperature": 28.1, "relative_humidity_2m": 44,
                         "weather_code": 0, "wind_speed_10m": 9.5},
@@ -335,11 +359,49 @@ mod tests {
                        "weather_code": [0, null, 1]}
         }"#;
         let forecast: super::Forecast = serde_json::from_str(raw).expect("nulls must parse");
-        let (daily, hourly) = super::build_series(forecast.daily, forecast.hourly);
+        let (daily, hourly) = build_series(forecast.daily, forecast.hourly);
         // Null-bearing entries are dropped, complete ones kept.
         assert_eq!(daily.len(), 1);
         assert_eq!(daily[0].max_c, 30.0);
         assert_eq!(hourly.len(), 2);
         assert_eq!(hourly[1].temp_c, 21.0);
+    }
+
+    #[test]
+    fn forecast_carries_the_utc_offset() {
+        let raw = r#"{
+            "utc_offset_seconds": 7200,
+            "current": {"time": "2026-07-11T00:00", "temperature_2m": 28.0,
+                        "apparent_temperature": 28.1, "relative_humidity_2m": 44,
+                        "weather_code": 0, "wind_speed_10m": 9.5},
+            "daily": {"time": [], "weather_code": [],
+                      "temperature_2m_max": [], "temperature_2m_min": []},
+            "hourly": {"time": [], "temperature_2m": [], "weather_code": []}
+        }"#;
+        let forecast: super::Forecast = serde_json::from_str(raw).expect("offset must parse");
+        assert_eq!(forecast.utc_offset_seconds, 7200);
+    }
+
+    #[test]
+    fn recomputed_now_index_tracks_the_location_local_clock() {
+        let hourly = vec![hour(9, 13), hour(9, 14), hour(9, 15)];
+        // Location is UTC+2; at 12:30 UTC the local hour is 14:00.
+        let utc = chrono::NaiveDate::from_ymd_opt(2026, 7, 9)
+            .unwrap()
+            .and_hms_opt(12, 30, 0)
+            .unwrap()
+            .and_utc();
+        assert_eq!(recompute_now_index(&hourly, utc, 2 * 3600), 1);
+    }
+
+    #[test]
+    fn geocode_response_prefers_the_country_filtered_hit() {
+        let raw = r#"{"results":[
+            {"name":"Paris","latitude":33.66,"longitude":-95.55,"country":"United States","country_code":"US"},
+            {"name":"Paris","latitude":48.85,"longitude":2.35,"country":"France","country_code":"FR"}
+        ]}"#;
+        let place = pick_place("Paris, FR", serde_json::from_str(raw).unwrap()).unwrap();
+        assert_eq!(place.name, "Paris, FR");
+        assert!((place.latitude - 48.85).abs() < 0.01);
     }
 }

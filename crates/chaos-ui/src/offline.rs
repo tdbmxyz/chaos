@@ -1,0 +1,239 @@
+//! Offline support: the app-wide connectivity state and the cache-first
+//! read path. Modeled on yomu's offline core.
+//!
+//! Connectivity is decided by the health probe ALONE — never
+//! `navigator.onLine` (a device away from a self-hosted server has
+//! connectivity but no route home), and never a per-request success
+//! (only the probe promotes to Online). The first failed server request
+//! downgrades Online → Offline.
+
+use chaos_client::{ChaosClient, ClientError};
+use leptos::prelude::*;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Connectivity {
+    /// Boot: the first health probe hasn't answered yet.
+    Checking,
+    Online,
+    Offline,
+}
+
+pub(crate) fn use_connectivity() -> RwSignal<Connectivity> {
+    use_context::<RwSignal<Connectivity>>().expect("Connectivity provided by App")
+}
+
+const CACHE_PREFIX: &str = "chaos-cache:";
+const SERVERS_SEEN_KEY: &str = "chaos-servers-seen";
+
+pub(crate) fn cache_put<T: Serialize>(key: &str, value: &T) {
+    if let (Some(storage), Ok(json)) = (crate::local_storage(), serde_json::to_string(value)) {
+        let _ = storage.set_item(&format!("{CACHE_PREFIX}{key}"), &json);
+    }
+}
+
+pub(crate) fn cache_get<T: DeserializeOwned>(key: &str) -> Option<T> {
+    let raw = crate::local_storage()?
+        .get_item(&format!("{CACHE_PREFIX}{key}"))
+        .ok()??;
+    serde_json::from_str(&raw).ok()
+}
+
+pub(crate) fn cache_remove(key: &str) {
+    if let Some(storage) = crate::local_storage() {
+        let _ = storage.remove_item(&format!("{CACHE_PREFIX}{key}"));
+    }
+}
+
+/// Drop every cached payload. Called on logout so a shared browser doesn't
+/// serve one user's calendar/links to the next.
+pub(crate) fn cache_clear() {
+    let Some(storage) = crate::local_storage() else {
+        return;
+    };
+    // Collect first: removing while iterating shifts the key indices.
+    let keys: Vec<String> = (0..storage.length().unwrap_or(0))
+        .filter_map(|i| storage.key(i).ok().flatten())
+        .filter(|k| k.starts_with(CACHE_PREFIX))
+        .collect();
+    for key in keys {
+        let _ = storage.remove_item(&key);
+    }
+}
+
+/// The one cache-first read path. Offline (or still checking) with a cached
+/// copy: serve it immediately, zero network. Online: fetch; a success
+/// overwrites the cache (that's the only invalidation — no TTL); a
+/// *transport* failure downgrades connectivity and falls back to the cache.
+/// API errors (401, 404, validation) pass through untouched: the server
+/// answered, so this is not a connectivity problem and stale data would be
+/// wrong.
+///
+/// Returns `(value, stale)` — `stale` means "came from the cache".
+pub(crate) async fn cached<T, Fut>(
+    conn: RwSignal<Connectivity>,
+    key: &str,
+    fetch: Fut,
+) -> Result<(T, bool), ClientError>
+where
+    T: Serialize + DeserializeOwned,
+    Fut: Future<Output = Result<T, ClientError>>,
+{
+    if conn.get_untracked() != Connectivity::Online
+        && let Some(hit) = cache_get::<T>(key)
+    {
+        return Ok((hit, true));
+    }
+    match fetch.await {
+        Ok(value) => {
+            cache_put(key, &value);
+            Ok((value, false))
+        }
+        Err(err) if is_connectivity_error(&err) => {
+            // Downgrade only — promotion to Online is the probe's job.
+            if conn.get_untracked() == Connectivity::Online {
+                conn.set(Connectivity::Offline);
+            }
+            match cache_get::<T>(key) {
+                Some(hit) => Ok((hit, true)),
+                None => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Only failures to REACH the server say anything about connectivity.
+fn is_connectivity_error(err: &ClientError) -> bool {
+    matches!(err, ClientError::Transport(_))
+}
+
+// ---- "server seen" gate memory ----
+// Distinguishes "misconfigured / never reached" (connect form) from "known
+// server that is just offline right now" (cached UI + badge).
+
+fn seen_list(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+pub(crate) fn server_seen(base: &str) -> bool {
+    crate::local_storage()
+        .and_then(|s| s.get_item(SERVERS_SEEN_KEY).ok().flatten())
+        .is_some_and(|raw| seen_list(&raw).iter().any(|b| b == base))
+}
+
+pub(crate) fn mark_server_seen(base: &str) {
+    let Some(storage) = crate::local_storage() else {
+        return;
+    };
+    let raw = storage
+        .get_item(SERVERS_SEEN_KEY)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let mut list = seen_list(&raw);
+    if !list.iter().any(|b| b == base) {
+        list.push(base.to_string());
+        let _ = storage.set_item(SERVERS_SEEN_KEY, &list.join("\n"));
+    }
+}
+
+/// One bounded health probe; the only code path that can set `Online`.
+/// Returns whether the server answered healthy (an Api-error health
+/// response also counts as offline).
+pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) -> bool {
+    match client.health().await {
+        Ok(health) => {
+            crate::set_server_fahrenheit(health.fahrenheit);
+            // Remember the server's units default so a later offline boot
+            // (where no health response exists) can restore it — see the
+            // seen-server branch in ServerGate.
+            cache_put("server-fahrenheit", &health.fahrenheit);
+            mark_server_seen(client.base().as_str());
+            conn.set(Connectivity::Online);
+            true
+        }
+        Err(_) => {
+            conn.set(Connectivity::Offline);
+            false
+        }
+    }
+}
+
+/// Fixed badge shown whenever the app is not Online; clicking it re-probes.
+/// This is the ONLY reconnect path besides the browser `online` event — no
+/// background timers.
+#[component]
+pub(crate) fn OfflineBadge() -> impl IntoView {
+    let conn = use_connectivity();
+    let busy = RwSignal::new(false);
+    let failed_flash = RwSignal::new(false);
+
+    let retry = move |_| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        let client = crate::use_client();
+        leptos::task::spawn_local(async move {
+            if !probe(&client, conn).await {
+                failed_flash.set(true);
+                set_timeout(
+                    move || failed_flash.set(false),
+                    std::time::Duration::from_millis(1800),
+                );
+            }
+            busy.set(false);
+        });
+    };
+
+    view! {
+        {move || (conn.get() != Connectivity::Online).then(|| {
+            let label = move || {
+                if busy.get() {
+                    "connecting…"
+                } else if failed_flash.get() {
+                    "still offline"
+                } else {
+                    "offline — retry"
+                }
+            };
+            view! {
+                <button class="offline-badge" on:click=retry>
+                    {label}
+                </button>
+            }
+        })}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transport_errors_are_connectivity_errors_api_errors_are_not() {
+        assert!(is_connectivity_error(&ClientError::Transport(
+            "connection refused".into()
+        )));
+        assert!(!is_connectivity_error(&ClientError::Api {
+            status: 401,
+            message: "who are you".into()
+        }));
+        assert!(!is_connectivity_error(&ClientError::Decode(
+            "bad json".into()
+        )));
+    }
+
+    #[test]
+    fn seen_list_parses_and_ignores_blanks() {
+        let raw = "http://zeus:4600/\n\n  http://other:4600/  \n";
+        assert_eq!(seen_list(raw), ["http://zeus:4600/", "http://other:4600/"]);
+        assert!(seen_list("").is_empty());
+    }
+}

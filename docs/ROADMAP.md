@@ -127,6 +127,26 @@ cross-origin (bearer instead of the cookie).
       `GET /api/v1/search` + overlay (debounced, grouped, arrow-key nav)
 - [x] Scheduled SQLite backup/export: `[backup]` config, VACUUM INTO
       snapshots with retention pruning
+- [x] Offline core: connectivity decided by the health probe alone (no
+      `navigator.onLine`), cache-first reads over localStorage for
+      dashboard/services/widgets/links/calendar/home so last-known-good
+      data keeps rendering, read-only offline semantics (mutations and
+      service controls disabled), offline badge with manual retry plus
+      the browser `online` event, 8s data / 3s health request deadlines
+      so an unreachable server fails fast — ported from yomu's offline
+      core
+- [x] Direct-fetch weather: every client (web, desktop, Android) geocodes
+      and fetches Open-Meteo itself instead of through the server —
+      `GET /api/v1/weather` removed, per-place localStorage cache (600s TTL,
+      serves stale on failure), so weather keeps working even offline
+- [x] Direct-fetch HN + lobsters when the server is unreachable: HN via its
+      CORS-open API on every client, lobsters via the Tauri shells'
+      `tauri-plugin-http` (lobste.rs sends no CORS headers, so the plain
+      web build serves lobsters from cache only while offline); a direct
+      fetch overwrites the widget cache so later offline views see fresh
+      leftovers
+- [x] Hacker News and lobsters feeds ordered by upvotes (score descending,
+      scoreless items last) instead of the upstream endpoint's own ranking
 
 ## Deferred / explicitly out of scope
 

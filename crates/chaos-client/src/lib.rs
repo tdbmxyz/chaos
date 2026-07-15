@@ -4,13 +4,25 @@
 //! thanks to reqwest's dual backend. All UI crates go through this client so
 //! the API surface is exercised from exactly one place.
 
+mod http;
+pub mod open_meteo;
+pub mod posts;
+
+use std::time::Duration;
+
+/// Deadline for regular data requests. Generous for a LAN server; short
+/// enough that an unreachable host fails the page fast instead of hanging.
+const DATA_TIMEOUT: Duration = Duration::from_secs(8);
+/// The health probe decides connectivity; it must answer (or fail) fast.
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
+
 use chaos_domain::{
     ApiErrorBody, Calendar, CalendarEvent, CalendarRequest, Collection, CollectionRequest,
     CreateLinkRequest, DashboardLayout, Event, EventQuery, EventRequest, HealthResponse,
     HomeSensorInfo, LightCommand, LightState, Link, LinkPage, LinkQuery, LoginRequest,
     LoginResponse, SearchResults, ServiceActionRequest, ServiceWithStatus, SystemdAction,
     SystemdActionRequest, TagWithCount, TemperatureQuery, TemperatureSeries, UpdateLinkRequest,
-    User, WeatherData, WidgetData,
+    User, WidgetData,
 };
 use url::Url;
 use uuid::Uuid;
@@ -68,7 +80,11 @@ impl ChaosClient {
     }
 
     pub async fn health(&self) -> Result<HealthResponse> {
-        self.get("api/v1/health").await
+        let req = self
+            .http
+            .get(self.url("api/v1/health")?)
+            .timeout(HEALTH_TIMEOUT);
+        self.send(req).await
     }
 
     pub async fn services(&self) -> Result<Vec<ServiceWithStatus>> {
@@ -87,25 +103,9 @@ impl ChaosClient {
         self.send(req).await
     }
 
-    /// Live payload of a data widget from the layout (weather, feeds…).
-    /// `location` is the device's weather-location preference; ignored by
-    /// every widget kind except weather.
-    pub async fn widget_data(&self, id: &str, location: Option<&str>) -> Result<WidgetData> {
-        let mut req = self.http.get(self.url(&format!("api/v1/widgets/{id}"))?);
-        if let Some(location) = location {
-            req = req.query(&[("location", location)]);
-        }
-        self.send(req).await
-    }
-
-    /// Forecast for any location (`None` = the server's configured place),
-    /// with the hourly series for the weather page.
-    pub async fn weather(&self, location: Option<&str>) -> Result<WeatherData> {
-        let mut req = self.http.get(self.url("api/v1/weather")?);
-        if let Some(location) = location {
-            req = req.query(&[("location", location)]);
-        }
-        self.send(req).await
+    /// Live payload of a data widget from the layout (feeds, stats…).
+    pub async fn widget_data(&self, id: &str) -> Result<WidgetData> {
+        self.get(&format!("api/v1/widgets/{id}")).await
     }
 
     /// Start/stop an on-demand service's systemd unit (services configured
@@ -357,8 +357,18 @@ impl ChaosClient {
             Some(token) => req.bearer_auth(token),
             None => req,
         };
-        let resp = req
-            .send()
+        let mut request = req
+            .build()
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+        // Every request gets a deadline; an unreachable server must fail fast,
+        // not hang "Loading" for minutes. Callers that set their own (health)
+        // keep it.
+        if request.timeout().is_none() {
+            *request.timeout_mut() = Some(DATA_TIMEOUT);
+        }
+        let resp = self
+            .http
+            .execute(request)
             .await
             .map_err(|e| ClientError::Transport(e.to_string()))?;
         let status = resp.status();

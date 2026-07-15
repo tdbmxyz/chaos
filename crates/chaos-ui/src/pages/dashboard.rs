@@ -1,7 +1,8 @@
 use std::time::Duration;
 
+use chaos_client::ClientError;
 use chaos_domain::{
-    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, ServerStats, SystemdAction,
+    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, ServerStats, SystemdAction,
     SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
 };
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
@@ -24,11 +25,20 @@ pub fn Dashboard() -> impl IntoView {
     let refresh = RwSignal::new(0u32);
     provide_context(crate::hooks::RefreshTick(refresh));
 
+    // Cache-first so a booted-offline app still gets its layout; the stale
+    // flag is dropped — the offline badge already tells the user, and the
+    // layout has no per-widget staleness UI of its own.
+    let conn = crate::offline::use_connectivity();
     let layout = LocalResource::new({
         let client = client.clone();
         move || {
+            conn.track(); // recovery re-fetches the layout once
             let client = client.clone();
-            async move { client.dashboard().await }
+            async move {
+                crate::offline::cached(conn, "dashboard", client.dashboard())
+                    .await
+                    .map(|(layout, _)| layout)
+            }
         }
     });
 
@@ -90,6 +100,7 @@ fn WidgetView(instance: WidgetInstance) -> impl IntoView {
         Widget::Bookmarks { groups } => view! { <Bookmarks groups/> }.into_any(),
         Widget::Calendar => view! { <CalendarWidget/> }.into_any(),
         Widget::Systemd { title, .. } => view! { <SystemdWidget id=instance.id title/> }.into_any(),
+        Widget::Weather { location } => view! { <WeatherWidget location/> }.into_any(),
         widget => view! { <DataWidget id=instance.id widget/> }.into_any(),
     }
 }
@@ -112,11 +123,12 @@ fn ServicesWidget() -> impl IntoView {
     // when the 30s poll re-renders the widget body.
     let collapsed = RwSignal::new(true);
 
+    let conn = crate::offline::use_connectivity();
     let services = crate::hooks::use_polled_resource(SERVICES_REFRESH, Some(action.version), {
         let client = client.clone();
         move || {
             let client = client.clone();
-            async move { client.services().await }
+            async move { crate::offline::cached(conn, "services", client.services()).await }
         }
     });
 
@@ -132,11 +144,19 @@ fn ServicesWidget() -> impl IntoView {
             {move || action.error.get().map(|err| view! { <p class="error">{err}</p> })}
             {move || match services.get() {
                 None => view! { <p class="muted">"Checking services…"</p> }.into_any(),
-                Some(Ok(list)) => {
+                Some(Ok((mut list, stale))) => {
+                    // Cached statuses are from another era; force them honest
+                    // (Unknown, no latency) and drop the start/stop controls.
+                    if stale {
+                        for service in &mut list {
+                            service.status.state = HealthState::Unknown;
+                            service.status.latency_ms = None;
+                        }
+                    }
                     let count = list.len();
                     view! {
                         <Collapsible count collapsed>
-                            <ServiceGrid services=list controls=(action.busy, run)/>
+                            <ServiceGrid services=list controls=(action.busy, run) read_only=stale/>
                         </Collapsible>
                     }
                         .into_any()
@@ -150,6 +170,36 @@ fn ServicesWidget() -> impl IntoView {
     }
 }
 
+/// Weather is fetched directly from Open-Meteo (see weather_fetch) — the
+/// only dashboard widget with no server dependency, so it keeps polling
+/// even while the server is unreachable.
+#[component]
+fn WeatherWidget(location: String) -> impl IntoView {
+    let data = crate::hooks::use_polled_resource_with(WIDGET_REFRESH, None, true, move || {
+        let configured = location.clone();
+        async move {
+            // Device preference: weather follows the location set on /settings.
+            let place = crate::pref(crate::WEATHER_LOCATION_KEY).unwrap_or(configured);
+            crate::weather_fetch::place_weather(&place).await
+        }
+    });
+    let data = Memo::new(move |_| data.get());
+    view! {
+        <section class="widget widget-weather">
+            <h2>
+                // The title opens the detailed hourly/multi-location page,
+                // like the calendar widget's title opens the calendar.
+                <a class="widget-title-link" href="/weather" title="Open weather">"Weather"</a>
+            </h2>
+            {move || match data.get() {
+                None => view! { <p class="muted">"Loading…"</p> }.into_any(),
+                Some(Ok(weather)) => view! { <WeatherView weather/> }.into_any(),
+                Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
+            }}
+        </section>
+    }
+}
+
 /// A widget whose payload comes from `/api/v1/widgets/{id}`.
 #[component]
 fn DataWidget(id: String, widget: Widget) -> impl IntoView {
@@ -157,7 +207,6 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
 
     // Kind class so layout variants can reorder/span widgets in CSS.
     let kind = match &widget {
-        Widget::Weather { .. } => "weather",
         Widget::Feed { .. } => "feed",
         Widget::HackerNews { .. } => "hacker-news",
         Widget::Lobsters { .. } => "lobsters",
@@ -166,7 +215,6 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => "data",
     };
     let title = match &widget {
-        Widget::Weather { .. } => "Weather".to_string(),
         Widget::Feed { title, .. } => title.clone().unwrap_or_else(|| "Feed".into()),
         Widget::HackerNews { title, .. } => title.clone().unwrap_or_else(|| "Hacker News".into()),
         Widget::Lobsters { title, .. } => title.clone().unwrap_or_else(|| "Lobsters".into()),
@@ -175,35 +223,40 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => String::new(),
     };
 
-    // The weather title opens the detailed hourly/multi-location page,
-    // like the calendar widget's title opens the calendar.
-    let title = if matches!(widget, Widget::Weather { .. }) {
-        view! {
-            <a class="widget-title-link" href="/weather" title="Open weather">
-                {title}
-            </a>
-        }
-        .into_any()
-    } else {
-        title.into_any()
+    // HN/lobsters can be fetched without the server: HN's API sends CORS,
+    // lobsters only works through the shell's HTTP plugin. Cached under the
+    // same widget key either way, so each path serves the other's leftovers.
+    let direct = match &widget {
+        Widget::HackerNews { limit, .. } => Some(DirectFeed::HackerNews(*limit)),
+        Widget::Lobsters { limit, .. } => Some(DirectFeed::Lobsters(*limit)),
+        _ => None,
     };
 
-    // Device preference: weather follows the location set on /settings.
-    let weather_location =
-        matches!(widget, Widget::Weather { .. }).then(|| crate::pref(crate::WEATHER_LOCATION_KEY));
-    let data = crate::hooks::use_polled_resource(WIDGET_REFRESH, None, {
+    let conn = crate::offline::use_connectivity();
+    // `poll_offline: direct.is_some()` — the direct-capable widgets keep
+    // their cadence while the server is unreachable; the others pause.
+    let data = crate::hooks::use_polled_resource_with(WIDGET_REFRESH, None, direct.is_some(), {
         let client = client.clone();
         move || {
             let client = client.clone();
             let id = id.clone();
-            let location = weather_location.clone().flatten();
-            async move { client.widget_data(&id, location.as_deref()).await }
+            async move {
+                let key = format!("widget:{id}");
+                if let Some(direct) = direct
+                    && conn.get_untracked() != crate::offline::Connectivity::Online
+                {
+                    return cached_direct(&key, direct.fetch()).await;
+                }
+                crate::offline::cached(conn, &key, async { client.widget_data(&id).await }).await
+            }
         }
     });
 
     // WidgetData is PartialEq; skip subtree rebuilds when a refresh returns
     // the same cached payload (the server caches these widgets anyway).
     let data = Memo::new(move |_| data.get().map(|r| r.map_err(|e| e.to_string())));
+    // Serving from the local cache gets a small "· cached" hint by the title.
+    let stale = Memo::new(move |_| matches!(data.get(), Some(Ok((_, true)))));
 
     // One signal for whichever Collapsible arm renders (Feed or Releases);
     // owned here so poll-driven rebuilds keep the user's expand state.
@@ -211,13 +264,13 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
 
     view! {
         <section class=format!("widget widget-{kind}")>
-            <h2>{title}</h2>
+            <h2>{title} {move || stale.get().then(stale_hint)}</h2>
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
-                Some(Ok(WidgetData::Weather(weather))) => {
-                    view! { <WeatherView weather/> }.into_any()
-                }
-                Some(Ok(WidgetData::Feed { items })) => {
+                // Weather renders through WeatherWidget (direct Open-Meteo
+                // fetch); the server no longer produces this payload here.
+                Some(Ok((WidgetData::Weather(_), _))) => ().into_any(),
+                Some(Ok((WidgetData::Feed { items }, _))) => {
                     let count = items.len();
                     view! {
                         <Collapsible count collapsed>
@@ -228,7 +281,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                     }
                         .into_any()
                 }
-                Some(Ok(WidgetData::Releases { items })) => {
+                Some(Ok((WidgetData::Releases { items }, _))) => {
                     let count = items.len();
                     view! {
                         <Collapsible count collapsed>
@@ -259,15 +312,70 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                     }
                         .into_any()
                 }
-                Some(Ok(WidgetData::ServerStats(stats))) => {
+                Some(Ok((WidgetData::ServerStats(stats), _))) => {
                     view! { <ServerStatsView stats/> }.into_any()
                 }
                 // Systemd widgets render through SystemdWidget; this arm only
                 // exists for exhaustiveness.
-                Some(Ok(WidgetData::Systemd { units })) => systemd_rows(units, None).into_any(),
+                Some(Ok((WidgetData::Systemd { units }, _))) => {
+                    systemd_rows(units, None).into_any()
+                }
                 Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
             }}
         </section>
+    }
+}
+
+/// A feed the client can fetch without the chaos server. Only consulted
+/// while offline: online, the server's cached copy is authoritative (and
+/// the lobsters path only exists inside the shells anyway).
+#[derive(Clone, Copy)]
+enum DirectFeed {
+    HackerNews(u32),
+    Lobsters(u32),
+}
+
+impl DirectFeed {
+    async fn fetch(self) -> Result<WidgetData, ClientError> {
+        let items = match self {
+            DirectFeed::HackerNews(limit) => {
+                chaos_client::posts::hacker_news(&crate::weather_fetch::http(), limit).await
+            }
+            DirectFeed::Lobsters(limit) => {
+                match crate::tauri_http::fetch_text("https://lobste.rs/hottest.json").await {
+                    Some(Ok(json)) => chaos_client::posts::parse_lobsters(&json, limit),
+                    Some(Err(err)) => Err(err),
+                    None => Err("lobsters needs the app shell offline".into()),
+                }
+            }
+        }
+        .map_err(ClientError::Transport)?;
+        Ok(WidgetData::Feed { items })
+    }
+}
+
+/// [`crate::offline::cached`] for a fetch that does NOT go through the
+/// chaos server. `cached()` serves the cache immediately whenever the app
+/// is not Online — exactly wrong here, since offline is when the direct
+/// fetch must actually run. So: fetch first, overwrite the cache on
+/// success (same widget key, so the server path later serves these
+/// leftovers and vice versa), fall back to the cached copy on failure.
+/// Connectivity is left untouched — a direct-fetch failure says nothing
+/// about the chaos server. Same `(value, stale)` shape as `cached()`: a
+/// fresh direct fetch is NOT stale, so it gets no "· cached" hint.
+async fn cached_direct(
+    key: &str,
+    fetch: impl Future<Output = Result<WidgetData, ClientError>>,
+) -> Result<(WidgetData, bool), ClientError> {
+    match fetch.await {
+        Ok(value) => {
+            crate::offline::cache_put(key, &value);
+            Ok((value, false))
+        }
+        Err(err) => match crate::offline::cache_get::<WidgetData>(key) {
+            Some(hit) => Ok((hit, true)),
+            None => Err(err),
+        },
     }
 }
 
@@ -320,34 +428,49 @@ fn SystemdWidget(id: String, title: Option<String>) -> impl IntoView {
         }
     });
 
+    let conn = crate::offline::use_connectivity();
     let data = crate::hooks::use_polled_resource(SERVICES_REFRESH, Some(action.version), {
         let client = client.clone();
         let id = id.clone();
         move || {
             let client = client.clone();
             let id = id.clone();
-            async move { client.widget_data(&id, None).await }
+            async move {
+                crate::offline::cached(conn, &format!("widget:{id}"), async {
+                    client.widget_data(&id).await
+                })
+                .await
+            }
         }
     });
 
     // Unit states rarely change between polls; only rebuild the rows (and
     // their control buttons) when they do.
     let data = Memo::new(move |_| data.get().map(|r| r.map_err(|e| e.to_string())));
+    let stale = Memo::new(move |_| matches!(data.get(), Some(Ok((_, true)))));
 
     view! {
         <section class="widget widget-systemd">
-            <h2>{title}</h2>
+            <h2>{title} {move || stale.get().then(stale_hint)}</h2>
             {move || action.error.get().map(|err| view! { <p class="error">{err}</p> })}
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
-                Some(Ok(WidgetData::Systemd { units })) => {
-                    systemd_rows(units, Some((action.busy, run))).into_any()
+                Some(Ok((WidgetData::Systemd { units }, stale))) => {
+                    // Cached unit states can't be acted on; drop the buttons.
+                    let controls = (!stale).then_some((action.busy, run));
+                    systemd_rows(units, controls).into_any()
                 }
                 Some(Ok(_)) => view! { <p class="error">"Unexpected widget data"</p> }.into_any(),
                 Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
             }}
         </section>
     }
+}
+
+/// Small marker next to a widget title while it renders cached (offline)
+/// data — the payload may be arbitrarily old.
+fn stale_hint() -> impl IntoView {
+    view! { <span class="muted stale-hint">" · cached"</span> }
 }
 
 fn systemd_rows(units: Vec<SystemdUnitStatus>, controls: Option<SystemdControls>) -> impl IntoView {

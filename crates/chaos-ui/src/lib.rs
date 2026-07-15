@@ -6,8 +6,11 @@ mod components;
 mod date_util;
 mod echarts;
 mod hooks;
+pub(crate) mod offline;
 mod pages;
 mod search;
+mod tauri_http;
+mod weather_fetch;
 
 use chaos_client::ChaosClient;
 use chaos_domain::User;
@@ -111,7 +114,7 @@ fn apply_theme(value: &str) {
     }
 }
 
-fn local_storage() -> Option<web_sys::Storage> {
+pub(crate) fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
 }
 
@@ -403,6 +406,7 @@ pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
         spawn_local(async move {
             let _ = client.logout().await;
             store_token(None);
+            offline::cache_clear();
             session.0.set(None);
         });
     })
@@ -424,15 +428,74 @@ pub fn App(config: AppConfig) -> impl IntoView {
     provide_context(config);
     provide_context(SharedClient(ChaosClient::new(api_base)));
 
+    // Offline support: one app-wide connectivity signal, Checking until the
+    // gate's first probe answers. The browser's `online` event buys one free
+    // re-probe (it only says "some network came back", not "the server is
+    // reachable", so it triggers a probe rather than trusting it).
+    let conn = RwSignal::new(offline::Connectivity::Checking);
+    provide_context(conn);
+    let client_for_online = use_client();
+    let online_probe = window_event_listener(leptos::ev::online, move |_| {
+        let client = client_for_online.clone();
+        spawn_local(async move {
+            offline::probe(&client, conn).await;
+        });
+    });
+    on_cleanup(move || online_probe.remove());
+
     let session = Session(RwSignal::new(None));
     provide_context(session);
 
-    // Restore the session from the cookie on startup.
+    // Restore the session. A one-shot `me()` on mount would leave the
+    // session empty forever on an offline boot (locking per-user pages like
+    // the calendar behind a sign-in prompt despite cached data), so instead:
+    // on the first run serve the cached last-known user immediately —
+    // harmless, since offline there are no API calls to authorize — and on
+    // every Offline/Checking → Online transition (including the gate's
+    // first successful probe) re-validate with a real `me()` call.
     let client = use_client();
-    spawn_local(async move {
-        if let Ok(user) = client.me().await {
+    let was_online = StoredValue::new(false);
+    Effect::new(move |prev: Option<()>| {
+        let now_online = conn.get() == offline::Connectivity::Online;
+        let came_online = now_online && !was_online.get_value();
+        was_online.set_value(now_online);
+        if prev.is_none()
+            && !now_online
+            && let Some(user) = offline::cache_get::<User>("me")
+        {
             session.0.set(Some(user));
         }
+        if !came_online {
+            return;
+        }
+        let client = client.clone();
+        spawn_local(async move {
+            match client.me().await {
+                Ok(user) => {
+                    // Cache the signed-in user so the next offline boot can
+                    // restore the session; overwritten on every success and
+                    // dropped by logout's cache_clear.
+                    offline::cache_put("me", &user);
+                    session.0.set(Some(user));
+                }
+                // Lost the server between the probe and this call: keep (or
+                // restore) the last-known user; the next Online transition
+                // re-validates.
+                Err(chaos_client::ClientError::Transport(_)) => {
+                    if let Some(user) = offline::cache_get::<User>("me") {
+                        session.0.set(Some(user));
+                    }
+                }
+                // The server answered "no session" (expired/revoked): the
+                // cached user is stale — drop it and stay signed out.
+                Err(chaos_client::ClientError::Api { .. }) => {
+                    offline::cache_remove("me");
+                    session.0.set(None);
+                }
+                // Decode noise says nothing about the session; change nothing.
+                Err(_) => {}
+            }
+        });
     });
 
     // Theme: applied as `data-theme` on <body>, persisted, all-CSS.
@@ -487,6 +550,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
         <Router>
             <ShareRedirect/>
             <search::QuickSearch open=search_open/>
+            <offline::OfflineBadge/>
             <nav class="topbar">
                 <span class="brand">"chaos"</span>
                 <A href="/"><span class="nav-icon">"▦"</span>"Dashboard"</A>
@@ -605,15 +669,27 @@ enum GateState {
 fn ServerGate(children: ChildrenFn) -> impl IntoView {
     let gate = RwSignal::new(GateState::Checking);
     let client = use_client();
+    let conn = offline::use_connectivity();
+    let seen = offline::server_seen(use_client().base().as_str());
     spawn_local(async move {
-        match client.health().await {
-            Ok(health) => {
-                // Units default from the server host's locale; kept for
-                // weather_fahrenheit before any page renders.
-                set_server_fahrenheit(health.fahrenheit);
-                gate.set(GateState::Ready);
-            }
-            Err(_) => gate.set(GateState::Unreachable),
+        // `probe` handles set_server_fahrenheit and mark_server_seen. A
+        // server we've reached before is just offline right now: boot into
+        // the cached UI with the badge instead of the connect form.
+        if offline::probe(&client, conn).await {
+            gate.set(GateState::Ready);
+        } else if seen {
+            // Known server, just offline right now: the probe couldn't
+            // deliver the server's °F/°C default, so restore the one it
+            // reported last time. `cache_get` wraps the stored value in its
+            // own Option (Option<Option<bool>>: outer = "was it cached",
+            // inner = the server's own answer); flatten collapses "never
+            // cached" and "server said None" — both mean locale fallback.
+            set_server_fahrenheit(
+                offline::cache_get::<Option<bool>>("server-fahrenheit").flatten(),
+            );
+            gate.set(GateState::Ready);
+        } else {
+            gate.set(GateState::Unreachable);
         }
     });
 

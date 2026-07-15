@@ -2,8 +2,6 @@ use chaos_domain::WeatherData;
 use chrono::Timelike;
 use leptos::prelude::*;
 
-use crate::{WEATHER_LOCATION_KEY, use_client};
-
 /// Every loaded location's hourly forecast plus its `now_index`, insertion-
 /// ordered as fetches resolve; keyed by the API's resolved display name.
 /// Charts read it for the shared y-range and the combined view.
@@ -348,16 +346,23 @@ fn WeatherRow(
     loaded: RwSignal<LoadedForecasts>,
     combined: RwSignal<bool>,
 ) -> impl IntoView {
-    let client = use_client();
     // A configured row asks for its place; the default row follows the
-    // device preference (or the server's location when unset).
-    let query = location
-        .clone()
-        .or_else(|| crate::pref(WEATHER_LOCATION_KEY));
+    // device preference (or the dashboard's configured location when unset).
+    let query = location.clone();
+    let client = crate::use_client();
     let data = LocalResource::new(move || {
-        let client = client.clone();
         let query = query.clone();
-        async move { client.weather(query.as_deref()).await }
+        let client = client.clone();
+        async move {
+            let place = match query {
+                Some(place) => place,
+                None => match crate::weather_fetch::default_location(&client).await {
+                    Some(place) => place,
+                    None => return Err("no location set — add one in settings".to_string()),
+                },
+            };
+            crate::weather_fetch::place_weather(&place).await
+        }
     });
 
     // Publish this row's forecast into the page-wide list (charts read it
@@ -408,7 +413,7 @@ fn WeatherRow(
                 Some(Ok(weather)) => weather_row_body(weather, loaded, combined).into_any(),
                 Some(Err(err)) => {
                     let place = location.clone().unwrap_or_else(|| "default location".into());
-                    view! { <p class="error">{place} ": " {err.to_string()}</p> }.into_any()
+                    view! { <p class="error">{place} ": " {err}</p> }.into_any()
                 }
             }}
             {remove}

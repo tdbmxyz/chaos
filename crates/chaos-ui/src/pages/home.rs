@@ -21,15 +21,33 @@ pub fn HomePage() -> impl IntoView {
     let now = Utc::now();
     let range = RwSignal::new((now - Duration::days(7), now));
 
+    // Cache-first reads; tracking `conn` means recovery refetches fresh
+    // data. Stale flags are dropped — the offline badge already says it.
+    let conn = crate::offline::use_connectivity();
+    let offline = Memo::new(move |_| conn.get() != crate::offline::Connectivity::Online);
     let temperature = LocalResource::new({
         let client = client.clone();
         move || {
-            let (start, end) = range.get();
+            conn.track();
+            let range = range.get();
+            let (start, end) = range;
             let client = client.clone();
             async move {
-                client
-                    .home_temperature(&TemperatureQuery { start, end })
-                    .await
+                // Key on the range's duration, not its endpoints: `start`/`end`
+                // are derived from `Utc::now()` and shift on every visit, so a
+                // key built from them would (almost) never hit. The span
+                // only approximates the selection — a custom absolute range
+                // of the same length shares the slot with the rolling one —
+                // but the cache serves *some* last-known-good series either
+                // way, which is all offline mode promises.
+                let hours = (end - start).num_hours();
+                crate::offline::cached(
+                    conn,
+                    &format!("home:temp:{hours}h"),
+                    client.home_temperature(&TemperatureQuery { start, end }),
+                )
+                .await
+                .map(|(series, _)| series)
             }
         }
     });
@@ -37,16 +55,26 @@ pub fn HomePage() -> impl IntoView {
     let lights = LocalResource::new({
         let client = client.clone();
         move || {
+            conn.track();
             let client = client.clone();
-            async move { client.home_lights().await }
+            async move {
+                crate::offline::cached(conn, "home:lights", client.home_lights())
+                    .await
+                    .map(|(list, _)| list)
+            }
         }
     });
 
     let sensors = LocalResource::new({
         let client = client.clone();
         move || {
+            conn.track();
             let client = client.clone();
-            async move { client.home_sensors().await }
+            async move {
+                crate::offline::cached(conn, "home:sensors", client.home_sensors())
+                    .await
+                    .map(|(list, _)| list)
+            }
         }
     });
 
@@ -59,6 +87,11 @@ pub fn HomePage() -> impl IntoView {
                 <DateRangePicker range/>
                 {move || match temperature.get() {
                     None => view! { <p class="muted">"Loading temperature history…"</p> }.into_any(),
+                    // Offline the raw transport text is noise; say what it
+                    // means: this view has no cached copy.
+                    Some(Err(_)) if offline.get() => {
+                        view! { <p class="muted">"Not available offline"</p> }.into_any()
+                    }
                     Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                     Some(Ok(series)) if series.is_empty() => {
                         view! { <p class="muted">"No sensors configured."</p> }.into_any()
@@ -74,6 +107,11 @@ pub fn HomePage() -> impl IntoView {
                 <h3>"Lights"</h3>
                 {move || match lights.get() {
                     None => view! { <p class="muted">"Loading lights…"</p> }.into_any(),
+                    // Offline the raw transport text is noise; say what it
+                    // means: this view has no cached copy.
+                    Some(Err(_)) if offline.get() => {
+                        view! { <p class="muted">"Not available offline"</p> }.into_any()
+                    }
                     Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                     Some(Ok(list)) if list.is_empty() => {
                         view! { <p class="muted">"No lights configured."</p> }.into_any()
@@ -81,7 +119,7 @@ pub fn HomePage() -> impl IntoView {
                     Some(Ok(list)) => {
                         view! {
                             <div class="light-grid">
-                                {list.into_iter().map(|light| view! { <LightCard light/> }).collect_view()}
+                                {list.into_iter().map(|light| view! { <LightCard light offline/> }).collect_view()}
                             </div>
                         }
                             .into_any()
@@ -93,6 +131,11 @@ pub fn HomePage() -> impl IntoView {
                 <h3>"Sensors"</h3>
                 {move || match sensors.get() {
                     None => view! { <p class="muted">"Loading sensors…"</p> }.into_any(),
+                    // Offline the raw transport text is noise; say what it
+                    // means: this view has no cached copy.
+                    Some(Err(_)) if offline.get() => {
+                        view! { <p class="muted">"Not available offline"</p> }.into_any()
+                    }
                     Some(Err(err)) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                     Some(Ok(list)) if list.is_empty() => {
                         view! { <p class="muted">"No sensors configured."</p> }.into_any()
@@ -454,7 +497,12 @@ fn chart_option(
 /// the server's response after each command — no shared resource
 /// invalidation needed across cards.
 #[component]
-fn LightCard(light: LightState) -> impl IntoView {
+fn LightCard(
+    light: LightState,
+    /// Light commands need the server: controls are disabled offline (the
+    /// cached state stays visible).
+    offline: Memo<bool>,
+) -> impl IntoView {
     let client = use_client();
     let id = light.id.clone();
 
@@ -550,7 +598,12 @@ fn LightCard(light: LightState) -> impl IntoView {
     view! {
         <div class="light-card" class:unavailable=move || !available.get()>
             <label class="light-card-head">
-                <input type="checkbox" prop:checked=on on:change=toggle/>
+                <input
+                    type="checkbox"
+                    prop:checked=on
+                    disabled=move || offline.get()
+                    on:change=toggle
+                />
                 <span class="light-card-label">{label}</span>
             </label>
             <label class="light-card-row">
@@ -560,6 +613,7 @@ fn LightCard(light: LightState) -> impl IntoView {
                     min="0"
                     max="100"
                     prop:value=brightness
+                    disabled=move || offline.get()
                     // Live readout while dragging; the command only goes
                     // out on release (change), not per pixel of drag.
                     on:input=move |ev| {
@@ -576,6 +630,7 @@ fn LightCard(light: LightState) -> impl IntoView {
                 <input
                     type="color"
                     prop:value=move || to_hex_color(&color.get())
+                    disabled=move || offline.get()
                     on:change=change_color
                 />
             </label>

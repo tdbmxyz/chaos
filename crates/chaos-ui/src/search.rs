@@ -43,12 +43,21 @@ pub fn QuickSearch(open: RwSignal<bool>) -> impl IntoView {
     let debounced = debounce_signal(query, Duration::from_millis(250));
 
     let client = use_client();
+    // Search is server-side full-text; there is no meaningful cached
+    // answer, so offline it fails fast without touching the network.
+    let conn = crate::offline::use_connectivity();
     let results = LocalResource::new(move || {
         let q = debounced.get();
         let client = client.clone();
+        let online = conn.get() == crate::offline::Connectivity::Online;
         async move {
             if q.trim().is_empty() {
                 return Ok(SearchResults::default());
+            }
+            if !online {
+                return Err(chaos_client::ClientError::Transport(
+                    "search is unavailable offline".into(),
+                ));
             }
             client.search(&q).await
         }
@@ -140,8 +149,16 @@ pub fn QuickSearch(open: RwSignal<bool>) -> impl IntoView {
                                     {move || match results.get() {
                                         None => view! { <p class="muted">"Searching…"</p> }.into_any(),
                                         Some(Err(err)) => {
-                                            view! { <p class="muted">{format!("Search failed: {err}")}</p> }
-                                                .into_any()
+                                            // Offline the raw transport text is
+                                            // noise; say what it means.
+                                            let msg = if conn.get()
+                                                != crate::offline::Connectivity::Online
+                                            {
+                                                "Search is unavailable offline".to_string()
+                                            } else {
+                                                format!("Search failed: {err}")
+                                            };
+                                            view! { <p class="muted">{msg}</p> }.into_any()
                                         }
                                         Some(Ok(res)) => {
                                             if flatten(&res).is_empty() {

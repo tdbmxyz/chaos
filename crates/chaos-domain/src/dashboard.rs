@@ -134,11 +134,11 @@ fn default_releases_limit() -> u32 {
 
 impl Widget {
     /// Whether this widget has a server-side data payload (`WidgetData`).
+    /// Weather is NOT one: clients fetch Open-Meteo directly.
     pub fn has_data(&self) -> bool {
         matches!(
             self,
-            Widget::Weather { .. }
-                | Widget::Feed { .. }
+            Widget::Feed { .. }
                 | Widget::HackerNews { .. }
                 | Widget::Lobsters { .. }
                 | Widget::Releases { .. }
