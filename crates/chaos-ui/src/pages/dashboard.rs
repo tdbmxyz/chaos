@@ -227,9 +227,10 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => String::new(),
     };
 
-    // HN/lobsters can be fetched without the server: HN's API sends CORS,
-    // lobsters only works through the shell's HTTP plugin. Cached under the
-    // same widget key either way, so each path serves the other's leftovers.
+    // HN/lobsters can be fetched without the server: HN's Algolia archive
+    // API sends CORS `*`, lobsters only works through the shell's HTTP
+    // plugin. Cached under the same widget key either way, so each path
+    // serves the other's leftovers.
     let direct = match &widget {
         Widget::HackerNews { limit, .. } => Some(DirectFeed::HackerNews(*limit)),
         Widget::Lobsters { limit, .. } => Some(DirectFeed::Lobsters(*limit)),
@@ -262,9 +263,11 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     // Serving from the local cache gets a small "· cached" hint by the title.
     let stale = Memo::new(move |_| matches!(data.get(), Some(Ok((_, true)))));
 
-    // One signal for whichever Collapsible arm renders (Feed or Releases);
-    // owned here so poll-driven rebuilds keep the user's expand state.
+    // One signal for whichever Collapsible arm renders (Feed, Posts or
+    // Releases); owned here so poll-driven rebuilds keep the user's expand
+    // state. Same story for the Posts time-window tab.
     let collapsed = RwSignal::new(true);
+    let tab = RwSignal::new(PostsTab::Day);
 
     view! {
         <section class=format!("widget widget-{kind}")>
@@ -285,8 +288,46 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                     }
                         .into_any()
                 }
-                // Placeholder: real tabs UI lands next (Task B3).
-                Some(Ok((WidgetData::Posts(_), _))) => ().into_any(),
+                // HN/lobsters window-tops: one pre-computed list per trailing
+                // window, switched client-side — tabs cost no refetch.
+                Some(Ok((WidgetData::Posts(posts), _))) => {
+                    let items = move |t: PostsTab| match t {
+                        PostsTab::Day => posts.last_24h.clone(),
+                        PostsTab::TwoDays => posts.last_48h.clone(),
+                        PostsTab::Week => posts.last_week.clone(),
+                    };
+                    view! {
+                        <div class="posts-tabs">
+                            {[
+                                (PostsTab::Day, "24h"),
+                                (PostsTab::TwoDays, "48h"),
+                                (PostsTab::Week, "Week"),
+                            ]
+                                .map(|(t, label)| {
+                                    view! {
+                                        <button
+                                            class:active=move || tab.get() == t
+                                            on:click=move |_| tab.set(t)
+                                        >
+                                            {label}
+                                        </button>
+                                    }
+                                })}
+                        </div>
+                        {move || {
+                            let items = items(tab.get());
+                            let count = items.len();
+                            view! {
+                                <Collapsible count collapsed>
+                                    <ul class="feed-list">
+                                        {items.into_iter().map(feed_item_view).collect_view()}
+                                    </ul>
+                                </Collapsible>
+                            }
+                        }}
+                    }
+                        .into_any()
+                }
                 Some(Ok((WidgetData::Releases { items }, _))) => {
                     let count = items.len();
                     view! {
@@ -332,6 +373,15 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     }
 }
 
+/// Which trailing window of a Posts widget is shown. Pure display state:
+/// all three lists arrive in the payload, so switching never refetches.
+#[derive(Clone, Copy, PartialEq)]
+enum PostsTab {
+    Day,
+    TwoDays,
+    Week,
+}
+
 /// A feed the client can fetch without the chaos server. Only consulted
 /// while offline: online, the server's cached copy is authoritative (and
 /// the lobsters path only exists inside the shells anyway).
@@ -343,21 +393,46 @@ enum DirectFeed {
 
 impl DirectFeed {
     async fn fetch(self) -> Result<WidgetData, ClientError> {
-        let items = match self {
+        let now = chrono::Utc::now();
+        let posts = match self {
             DirectFeed::HackerNews(limit) => {
-                chaos_client::posts::hacker_news(&crate::weather_fetch::http(), limit).await
+                chaos_client::posts::hacker_news(&crate::weather_fetch::http(), limit, now).await
             }
-            DirectFeed::Lobsters(limit) => {
-                match crate::tauri_http::fetch_text("https://lobste.rs/hottest.json").await {
-                    Some(Ok(json)) => chaos_client::posts::parse_lobsters(&json, limit),
-                    Some(Err(err)) => Err(err),
-                    None => Err("lobsters needs the app shell offline".into()),
-                }
-            }
+            DirectFeed::Lobsters(limit) => lobsters_direct(limit, now).await,
         }
         .map_err(ClientError::Transport)?;
-        Ok(WidgetData::Feed { items })
+        Ok(WidgetData::Posts(posts))
     }
+}
+
+/// Page through newest.json via the shell's HTTP plugin (lobste.rs sends no
+/// CORS headers) until the sweep covers a week or hits the page cap.
+async fn lobsters_direct(
+    limit: u32,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<chaos_domain::PostsData, String> {
+    use chaos_client::posts;
+    let mut items = Vec::new();
+    for page in 1..=posts::LOBSTERS_PAGE_CAP {
+        let json = match crate::tauri_http::fetch_text(&posts::lobsters_page_url(page)).await {
+            Some(Ok(json)) => json,
+            Some(Err(err)) => return Err(err),
+            None => return Err("lobsters needs the app shell offline".into()),
+        };
+        let page_items = posts::parse_lobsters_page(&json)?;
+        if page_items.is_empty() {
+            break;
+        }
+        let done = posts::lobsters_page_done(&page_items, now);
+        items.extend(page_items);
+        if done {
+            break;
+        }
+    }
+    if items.is_empty() {
+        return Err("no stories returned".into());
+    }
+    Ok(posts::posts_from_items(&items, limit, now))
 }
 
 /// [`crate::offline::cached`] for a fetch that does NOT go through the

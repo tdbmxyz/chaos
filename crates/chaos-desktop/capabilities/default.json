@@ -8,7 +8,7 @@
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://hacker-news.firebaseio.com/*" },
+        { "url": "https://hn.algolia.com/*" },
         { "url": "https://lobste.rs/*" },
         { "url": "https://api.open-meteo.com/*" },
         { "url": "https://geocoding-api.open-meteo.com/*" }

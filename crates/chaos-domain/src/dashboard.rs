@@ -63,15 +63,17 @@ pub enum Widget {
         #[serde(default = "default_feed_limit")]
         limit: u32,
     },
-    /// Hacker News front page — the live ranking from the official API,
-    /// with points and comment counts (the RSS feed has neither).
+    /// Hacker News top links per trailing 24 h / 48 h / week window, from
+    /// the Algolia archive API (`tags=front_page`), with points and comment
+    /// counts (the RSS feed has neither). Rendered as tabs.
     HackerNews {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         #[serde(default = "default_posts_limit")]
         limit: u32,
     },
-    /// Lobsters hottest posts (lobste.rs JSON API), same shape as HN.
+    /// Lobsters top links per window, paginated from `newest.json` and
+    /// bucketed by `created_at`; same tabbed shape as HN.
     Lobsters {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
