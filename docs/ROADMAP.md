@@ -48,9 +48,10 @@ server-side, one instance id per widget (`GET /api/v1/widgets/{id}`).
 
 - [x] Weather (Open-Meteo, geocoded location, 5-day forecast)
 - [x] RSS/Atom feeds (`feed` widget)
-- [x] Native Hacker News + Lobsters widgets (official APIs: live
-      front-page/hottest ranking, points, comment counts, source label
-      links to the discussion — RSS carries none of that)
+- [x] Native Hacker News + Lobsters widgets (points, comment counts,
+      source label links to the discussion — RSS carries none of that;
+      upstreams since the tabs work: HN via the Algolia archive API,
+      lobsters via `newest.json` pagination)
 - [x] GitHub releases watcher (`releases.atom`, no API token needed)
 - [x] Server stats (host metrics via sysinfo; optional `mounts` filter)
 - [x] Calendar (static month view, client-side; title links to the full
@@ -139,14 +140,26 @@ cross-origin (bearer instead of the cookie).
       and fetches Open-Meteo itself instead of through the server —
       `GET /api/v1/weather` removed, per-place localStorage cache (600s TTL,
       serves stale on failure), so weather keeps working even offline
-- [x] Direct-fetch HN + lobsters when the server is unreachable: HN via its
-      CORS-open API on every client, lobsters via the Tauri shells'
-      `tauri-plugin-http` (lobste.rs sends no CORS headers, so the plain
-      web build serves lobsters from cache only while offline); a direct
-      fetch overwrites the widget cache so later offline views see fresh
-      leftovers
+- [x] Direct-fetch HN + lobsters when the server is unreachable: HN via
+      the CORS-open Algolia API on every client, lobsters via the Tauri
+      shells' `tauri-plugin-http` (lobste.rs sends no CORS headers, so the
+      plain web build serves lobsters from cache only while offline); a
+      direct fetch overwrites the widget cache so later offline views see
+      fresh leftovers
 - [x] Hacker News and lobsters feeds ordered by upvotes (score descending,
       scoreless items last) instead of the upstream endpoint's own ranking
+- [x] HN/lobsters time-window tabs: Last 24h / 48h / Week, each a true
+      window top sorted by upvotes — HN switched from the Firebase
+      topstories API to the Algolia archive API (one query per window,
+      `tags=front_page`), lobsters from hottest.json to
+      `newest.json?page=N` pagination (up to 10 pages per refresh behind
+      the existing 10-minute cache); offline, tabs keep working from the
+      cached payload
+- [x] Weather charts on a viewer-local time axis: every chart aligns
+      places by real instant (fixes cross-timezone offset), alternating
+      day bands + weekday/date tooltips, and the combined view is the
+      persisted default, rendered above the per-place rows — still fully
+      client-side (direct Open-Meteo)
 
 ## Deferred / explicitly out of scope
 
