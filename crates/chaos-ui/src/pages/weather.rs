@@ -345,16 +345,19 @@ fn combined_chart_option(
     })
 }
 
-/// Weather in detail: one row per location with current conditions and the
-/// hour-by-hour forecast, so places compare at a glance. The location list
-/// is a device preference; with none configured the dashboard's location
-/// (device override or server default) is shown alone.
+/// Weather in detail: the combined chart on top (the persisted default view)
+/// with one row per location below it showing current conditions — and, in
+/// split view, the per-place hour-by-hour chart — so places compare at a
+/// glance. The location list is a device preference; with none configured
+/// the dashboard's location (device override or server default) is shown
+/// alone.
 #[component]
 pub fn WeatherPage() -> impl IntoView {
     let places = RwSignal::new(crate::weather_places());
     let input = RwSignal::new(String::new());
     let loaded = RwSignal::new(LoadedPlaces::new());
-    let combined = RwSignal::new(false);
+    // Combined-vs-split is a device preference; combined is the default.
+    let combined = RwSignal::new(crate::weather_combined());
 
     let add = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -391,11 +394,17 @@ pub fn WeatherPage() -> impl IntoView {
                 <button
                     class="view-toggle"
                     title="Switch between one chart per place and one combined chart"
-                    on:click=move |_| combined.update(|c| *c = !*c)
+                    on:click=move |_| {
+                        combined.update(|c| *c = !*c);
+                        crate::set_weather_combined(combined.get_untracked());
+                    }
                 >
                     {move || if combined.get() { "Split" } else { "Combine" }}
                 </button>
             </div>
+            <Show when=move || combined.get()>
+                <CombinedChart loaded/>
+            </Show>
             {move || {
                 let list = places.get();
                 if list.is_empty() {
@@ -421,9 +430,6 @@ pub fn WeatherPage() -> impl IntoView {
                         .into_any()
                 }
             }}
-            <Show when=move || combined.get()>
-                <CombinedChart loaded/>
-            </Show>
         </div>
     }
 }

@@ -144,6 +144,8 @@ pub(crate) const WEATHER_UNITS_KEY: &str = "chaos-weather-units";
 /// Locations compared on the weather page, newline-separated (names may
 /// contain commas, e.g. "Osaka, JP").
 pub(crate) const WEATHER_PLACES_KEY: &str = "chaos-weather-places";
+/// Weather page view toggle: one combined chart vs one chart per place.
+pub(crate) const WEATHER_COMBINED_KEY: &str = "weather-combined";
 
 pub(crate) fn weather_places() -> Vec<String> {
     pref(WEATHER_PLACES_KEY)
@@ -159,6 +161,19 @@ pub(crate) fn weather_places() -> Vec<String> {
 
 pub(crate) fn set_weather_places(places: &[String]) {
     set_pref(WEATHER_PLACES_KEY, &places.join("\n"));
+}
+
+/// Whether the weather page shows the combined chart (true, the default)
+/// or one chart per place.
+pub(crate) fn weather_combined() -> bool {
+    pref(WEATHER_COMBINED_KEY).as_deref() != Some("false")
+}
+
+pub(crate) fn set_weather_combined(combined: bool) {
+    set_pref(
+        WEATHER_COMBINED_KEY,
+        if combined { "true" } else { "false" },
+    );
 }
 
 /// Celsius in the display unit: °F when the preference says so.
