@@ -34,6 +34,25 @@
           });
         return "<div>" + header + "</div>" + lines.join("<br/>");
       };
+      // Weather charts: header = viewer-local weekday/date/hour of the hovered
+      // instant; one line per place with its weather emoji. value = [ts, temp, emoji].
+      window.chaosWeatherTooltip = function (params) {
+        if (!Array.isArray(params) || params.length === 0) return "";
+        var d = new Date(params[0].value[0]);
+        var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+        var header = days[d.getDay()] + " " + d.getDate() + " " + months[d.getMonth()]
+          + ", " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+        var lines = params
+          .filter(function (p) { return p.value != null && p.value[1] != null; })
+          .map(function (p) {
+            var emoji = p.value[2] ? p.value[2] + " " : "";
+            return p.marker + " " + p.seriesName + "  " + emoji + "<b>" + p.value[1] + "°</b>";
+          });
+        return "<div>" + header + "</div>" + lines.join("<br/>");
+      };
     </script>
   </head>
   <body></body>
