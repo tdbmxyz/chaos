@@ -145,7 +145,7 @@ pub(crate) const WEATHER_UNITS_KEY: &str = "chaos-weather-units";
 /// contain commas, e.g. "Osaka, JP").
 pub(crate) const WEATHER_PLACES_KEY: &str = "chaos-weather-places";
 /// Weather page view toggle: one combined chart vs one chart per place.
-pub(crate) const WEATHER_COMBINED_KEY: &str = "weather-combined";
+pub(crate) const WEATHER_COMBINED_KEY: &str = "chaos-weather-combined";
 
 pub(crate) fn weather_places() -> Vec<String> {
     pref(WEATHER_PLACES_KEY)
