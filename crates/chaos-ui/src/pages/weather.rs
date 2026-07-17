@@ -1,10 +1,13 @@
 use chaos_domain::WeatherData;
 use leptos::prelude::*;
 
+const HOUR_MS: i64 = 3_600_000;
+
 /// One loaded location published into the page-wide list: its hourly
-/// forecast, `now_index`, and the place's UTC offset (Open-Meteo hourly
-/// times are location-local; the charts convert them back to real instants);
-/// keyed by the API's resolved display name.
+/// forecast, `now_index` (whose only reader is now `CombinedChart`'s
+/// remount key), and the place's UTC offset (Open-Meteo hourly times are
+/// location-local; the charts convert them back to real instants); keyed
+/// by the API's resolved display name.
 #[derive(Clone)]
 struct LoadedPlace {
     name: String,
@@ -79,7 +82,6 @@ fn default_window_ms(now_ms: i64, min_ms: i64, max_ms: i64) -> (f64, f64) {
         return (0.0, 100.0);
     }
     let pct = |ms: i64| (((ms - min_ms) as f64) * 100.0 / span).clamp(0.0, 100.0);
-    const HOUR_MS: i64 = 3_600_000;
     (pct(now_ms - 24 * HOUR_MS), pct(now_ms + 48 * HOUR_MS))
 }
 
@@ -88,9 +90,9 @@ fn default_window_ms(now_ms: i64, min_ms: i64, max_ms: i64) -> (f64, f64) {
 /// day so day boundaries read at a glance on the time axis. The first band
 /// opens at the viewer-local midnight at-or-before `min_ms` (ECharts clips
 /// it to the axis); the last is clipped to `max_ms`. `viewer_offset_seconds`
-/// is `-(js Date.getTimezoneOffset() * 60)` at call sites — a parameter so
-/// this stays pure. A DST shift inside the 32-day span moves band edges by
-/// an hour — acceptable.
+/// comes from `viewer_clock` at call sites — a parameter so this stays pure.
+/// A DST shift inside the 32-day span moves band edges by an hour —
+/// acceptable.
 fn day_bands(min_ms: i64, max_ms: i64, viewer_offset_seconds: i32) -> serde_json::Value {
     const DAY_MS: i64 = 86_400_000;
     let offset_ms = viewer_offset_seconds as i64 * 1000;
@@ -108,6 +110,44 @@ fn day_bands(min_ms: i64, max_ms: i64, viewer_offset_seconds: i32) -> serde_json
         })
         .collect();
     serde_json::Value::Array(bands)
+}
+
+/// The dashed "now" markLine both option builders hang on a series: a
+/// vertical line at the real instant separating past from forecast.
+fn now_mark_line(now_ms: i64, muted: &str) -> serde_json::Value {
+    serde_json::json!({
+        "silent": true,
+        "symbol": "none",
+        "label": { "show": true, "formatter": "now", "color": muted },
+        "lineStyle": { "color": muted, "type": "dashed", "width": 1 },
+        "data": [{ "xAxis": now_ms }],
+    })
+}
+
+/// The alternating day-band markArea both option builders hang on a series
+/// (bands from `day_bands`, faintly filled with the border color).
+fn day_band_mark_area(
+    min_ms: i64,
+    max_ms: i64,
+    viewer_offset_seconds: i32,
+    border: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "silent": true,
+        "itemStyle": { "color": border, "opacity": 0.08 },
+        "data": day_bands(min_ms, max_ms, viewer_offset_seconds),
+    })
+}
+
+/// The viewer's clock and time zone, read from the browser: `(now_ms,
+/// viewer_offset_seconds)`. The offset is `-(js Date.getTimezoneOffset() *
+/// 60)` — JS reports minutes *behind* UTC, so the sign flips to the usual
+/// east-positive convention. Browser-only; components call it so the option
+/// builders stay pure/testable.
+fn viewer_clock() -> (i64, i32) {
+    let now_ms = js_sys::Date::now() as i64;
+    let viewer_offset_seconds = -(js_sys::Date::new_0().get_timezone_offset() as i32) * 60;
+    (now_ms, viewer_offset_seconds)
 }
 
 /// Line colors for the combined chart, one per location by list index.
@@ -214,18 +254,8 @@ fn weather_chart_option(
             "color": accent,
             "lineStyle": { "width": 1.5 },
             "data": series_points(&own.hourly, own.utc_offset_seconds, fahrenheit),
-            "markLine": {
-                "silent": true,
-                "symbol": "none",
-                "label": { "show": true, "formatter": "now", "color": muted },
-                "lineStyle": { "color": muted, "type": "dashed", "width": 1 },
-                "data": [{ "xAxis": now_ms }],
-            },
-            "markArea": {
-                "silent": true,
-                "itemStyle": { "color": border, "opacity": 0.08 },
-                "data": day_bands(min_ms, max_ms, viewer_offset_seconds),
-            },
+            "markLine": now_mark_line(now_ms, muted),
+            "markArea": day_band_mark_area(min_ms, max_ms, viewer_offset_seconds, border),
         }],
     })
 }
@@ -278,18 +308,8 @@ fn combined_chart_option(
             });
             if i == 0 {
                 // The chart-wide decorations ride the first series once.
-                s["markLine"] = serde_json::json!({
-                    "silent": true,
-                    "symbol": "none",
-                    "label": { "show": true, "formatter": "now", "color": muted },
-                    "lineStyle": { "color": muted, "type": "dashed", "width": 1 },
-                    "data": [{ "xAxis": now_ms }],
-                });
-                s["markArea"] = serde_json::json!({
-                    "silent": true,
-                    "itemStyle": { "color": border, "opacity": 0.08 },
-                    "data": day_bands(min_ms, max_ms, viewer_offset_seconds),
-                });
+                s["markLine"] = now_mark_line(now_ms, muted);
+                s["markArea"] = day_band_mark_area(min_ms, max_ms, viewer_offset_seconds, border);
             }
             s
         })
@@ -534,11 +554,7 @@ fn weather_row_body(
                     utc_offset_seconds,
                 };
                 let colors = crate::echarts::ChartColors::from_theme();
-                // Clock and time zone are read here (browser side) so the
-                // option builders stay pure.
-                let now_ms = js_sys::Date::now() as i64;
-                let viewer_offset_seconds =
-                    -(js_sys::Date::new_0().get_timezone_offset() as i32) * 60;
+                let (now_ms, viewer_offset_seconds) = viewer_clock();
                 let reset = axis_span(
                     &loaded.get_untracked(),
                     Some((&own.hourly, own.utc_offset_seconds)),
@@ -546,15 +562,16 @@ fn weather_row_body(
                 .map(|(min_ms, max_ms)| default_window_ms(now_ms, min_ms, max_ms))
                 .unwrap_or((0.0, 100.0));
                 let option = Callback::new(move |()| {
-                    let all = loaded.get();
-                    weather_chart_option(
-                        &own,
-                        &all,
-                        now_ms,
-                        viewer_offset_seconds,
-                        fahrenheit,
-                        &colors,
-                    )
+                    loaded.with(|all| {
+                        weather_chart_option(
+                            &own,
+                            all,
+                            now_ms,
+                            viewer_offset_seconds,
+                            fahrenheit,
+                            &colors,
+                        )
+                    })
                 });
                 view! {
                     <Show when=move || !combined.get()>
@@ -576,7 +593,9 @@ fn weather_row_body(
 /// One chart, every location. Remounts only when the FIRST loaded entry's
 /// shape changes (a Memo keys it), so later siblings streaming in update
 /// the mounted chart via set_option instead of resetting it; the option
-/// callback reads `loaded` so those updates are reactive.
+/// callback reads `loaded` so those updates are reactive. A `now_index`
+/// change (a refetch crossing the hour) remounting the chart is useful:
+/// it refreshes the mount-captured `now_ms` and reset window.
 #[component]
 fn CombinedChart(loaded: RwSignal<LoadedPlaces>) -> impl IntoView {
     let fahrenheit = crate::weather_fahrenheit();
@@ -588,23 +607,20 @@ fn CombinedChart(loaded: RwSignal<LoadedPlaces>) -> impl IntoView {
                 None => view! { <p class="muted">"Loading forecast…"</p> }.into_any(),
                 Some(_) => {
                     let colors = crate::echarts::ChartColors::from_theme();
-                    // Clock and time zone are read here (browser side) so the
-                    // option builder stays pure.
-                    let now_ms = js_sys::Date::now() as i64;
-                    let viewer_offset_seconds =
-                        -(js_sys::Date::new_0().get_timezone_offset() as i32) * 60;
+                    let (now_ms, viewer_offset_seconds) = viewer_clock();
                     let reset = axis_span(&loaded.get_untracked(), None)
                         .map(|(min_ms, max_ms)| default_window_ms(now_ms, min_ms, max_ms))
                         .unwrap_or((0.0, 100.0));
                     let option = Callback::new(move |()| {
-                        let all = loaded.get();
-                        combined_chart_option(
-                            &all,
-                            now_ms,
-                            viewer_offset_seconds,
-                            fahrenheit,
-                            &colors,
-                        )
+                        loaded.with(|all| {
+                            combined_chart_option(
+                                all,
+                                now_ms,
+                                viewer_offset_seconds,
+                                fahrenheit,
+                                &colors,
+                            )
+                        })
                     });
                     view! {
                         <crate::echarts::ChartCanvas
@@ -684,7 +700,7 @@ mod tests {
 
     #[test]
     fn axis_span_unions_across_offsets() {
-        // Osaka (UTC+2): local 14–15 h → 12:00–13:00 UTC; Nijar (UTC):
+        // Berlin (UTC+2): local 14–15 h → 12:00–13:00 UTC; Nijar (UTC):
         // 14:00–15:00 UTC. Union = [12:00, 15:00] — real instants, not the
         // identical-looking local hours.
         let all = two_locations();
@@ -723,13 +739,13 @@ mod tests {
         assert_eq!(hourly_temps(&hours, true), vec![68.0]);
     }
 
-    /// Two loaded locations for option tests: "Osaka" (20–21°C, UTC+2) and
+    /// Two loaded locations for option tests: "Berlin" (20–21°C, UTC+2) and
     /// "Nijar" (30–31°C, UTC), each with now at index 1. Distinct offsets, so
     /// the time-axis assertions can tell the places apart by real instant.
     fn two_locations() -> LoadedPlaces {
         vec![
             LoadedPlace {
-                name: "Osaka".to_string(),
+                name: "Berlin".to_string(),
                 hourly: vec![hour(2026, 7, 9, 14, 20.0, 0), hour(2026, 7, 9, 15, 21.0, 2)],
                 now_index: 1,
                 utc_offset_seconds: 7200,
@@ -862,10 +878,10 @@ mod tests {
         assert!(opt["xAxis"]["data"].is_null());
         assert_eq!(opt["xAxis"]["axisLabel"]["hideOverlap"], true);
         // Exactly one series, named after the location (the tooltip shows
-        // it), with [ts, temp, emoji] points on Osaka's own UTC+2 offset.
+        // it), with [ts, temp, emoji] points on Berlin's own UTC+2 offset.
         let series = opt["series"].as_array().unwrap();
         assert_eq!(series.len(), 1);
-        assert_eq!(series[0]["name"], "Osaka");
+        assert_eq!(series[0]["name"], "Berlin");
         assert_eq!(
             series[0]["data"],
             serde_json::json!([
@@ -912,7 +928,7 @@ mod tests {
         assert_eq!(series.len(), 2);
         // Each place plots on its OWN offset: the same local 14:00 lands an
         // hour apart in real time (the bug the time axis fixes).
-        assert_eq!(series[0]["name"], "Osaka");
+        assert_eq!(series[0]["name"], "Berlin");
         assert_eq!(series[0]["data"][0][0], ms(2026, 7, 9, 12));
         assert_eq!(series[1]["name"], "Nijar");
         assert_eq!(series[1]["data"][0][0], ms(2026, 7, 9, 14));
@@ -922,7 +938,10 @@ mod tests {
         }
         assert_ne!(series[0]["color"], series[1]["color"]);
         // Legend names the locations; tooltip compares them natively.
-        assert_eq!(opt["legend"]["data"], serde_json::json!(["Osaka", "Nijar"]));
+        assert_eq!(
+            opt["legend"]["data"],
+            serde_json::json!(["Berlin", "Nijar"])
+        );
         // Now-marker and day bands ride the first series only.
         assert_eq!(series[0]["markLine"]["data"][0]["xAxis"], now_ms);
         assert!(series[1]["markLine"].is_null());

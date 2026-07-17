@@ -15,18 +15,23 @@
     <!-- Self-hosted ECharts (Home tab chart); pinned, no CDN. -->
     <script src="/vendor/echarts.min.js"></script>
     <script>
-      // Axis-tooltip formatter for time-axis charts: header carries the full
-      // day + time (the default header hides the date at hour granularity),
-      // body lists each visible series with its colored marker.
-      window.chaosTimeTooltip = function (params) {
-        if (!Array.isArray(params) || params.length === 0) return "";
-        var d = new Date(params[0].axisValue);
+      // Shared tooltip header for time-axis charts: viewer-local weekday,
+      // date, and hour:minute of the hovered instant (epoch ms). The default
+      // ECharts header hides the date at hour granularity.
+      function chaosTooltipHeader(ms) {
+        var d = new Date(ms);
         var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
         var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         var pad = function (n) { return (n < 10 ? "0" : "") + n; };
-        var header = days[d.getDay()] + " " + d.getDate() + " " + months[d.getMonth()]
+        return days[d.getDay()] + " " + d.getDate() + " " + months[d.getMonth()]
           + ", " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+      }
+      // Axis-tooltip formatter for time-axis charts: full day + time header,
+      // body lists each visible series with its colored marker.
+      window.chaosTimeTooltip = function (params) {
+        if (!Array.isArray(params) || params.length === 0) return "";
+        var header = chaosTooltipHeader(params[0].axisValue);
         var lines = params
           .filter(function (p) { return p.value != null && p.value[1] != null; })
           .map(function (p) {
@@ -38,13 +43,9 @@
       // instant; one line per place with its weather emoji. value = [ts, temp, emoji].
       window.chaosWeatherTooltip = function (params) {
         if (!Array.isArray(params) || params.length === 0) return "";
-        var d = new Date(params[0].value[0]);
-        var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        var pad = function (n) { return (n < 10 ? "0" : "") + n; };
-        var header = days[d.getDay()] + " " + d.getDate() + " " + months[d.getMonth()]
-          + ", " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+        // axisValue (not value[0]): always present even when the first
+        // param's value is null, and the same viewer-local ms on a time axis.
+        var header = chaosTooltipHeader(params[0].axisValue);
         var lines = params
           .filter(function (p) { return p.value != null && p.value[1] != null; })
           .map(function (p) {
