@@ -49,9 +49,10 @@ struct LobstersStory {
     created_at: Option<DateTime<Utc>>,
 }
 
-/// Upvotes descending, scoreless items last; stable, so equal scores keep
-/// the upstream order.
-pub fn sort_by_score(items: &mut [FeedItem]) {
+/// Once gathered, both aggregators are shown by upvotes, not by their
+/// route's own ranking (Algolia relevance / newest-first pages). Stable,
+/// so equal scores keep the upstream order.
+fn sort_by_score(items: &mut [FeedItem]) {
     items.sort_by_key(|item| std::cmp::Reverse(item.score));
 }
 
