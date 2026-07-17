@@ -643,8 +643,6 @@ mod tests {
     use chaos_domain::HourlyForecast;
     use chrono::NaiveDate;
 
-    const HOUR_MS: i64 = 3_600_000;
-
     fn hour(y: i32, m: u32, d: u32, h: u32, temp_c: f64, code: i32) -> HourlyForecast {
         HourlyForecast {
             time: NaiveDate::from_ymd_opt(y, m, d)
