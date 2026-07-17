@@ -187,6 +187,7 @@ pub struct DashboardLayout {
 pub enum WidgetData {
     Weather(WeatherData),
     Feed { items: Vec<FeedItem> },
+    Posts(PostsData),
     Releases { items: Vec<ReleaseItem> },
     ServerStats(ServerStats),
     Systemd { units: Vec<SystemdUnitStatus> },
@@ -242,6 +243,16 @@ pub struct HourlyForecast {
     pub time: NaiveDateTime,
     pub temp_c: f64,
     pub weather_code: i32,
+}
+
+/// Top links of the trailing 24 h / 48 h / week, each sorted by upvotes
+/// descending and truncated to the widget limit. Produced for the
+/// HackerNews/Lobsters widgets (RSS `Feed` widgets keep `WidgetData::Feed`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PostsData {
+    pub last_24h: Vec<FeedItem>,
+    pub last_48h: Vec<FeedItem>,
+    pub last_week: Vec<FeedItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

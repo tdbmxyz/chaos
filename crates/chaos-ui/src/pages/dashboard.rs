@@ -285,6 +285,8 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                     }
                         .into_any()
                 }
+                // Placeholder: real tabs UI lands next (Task B3).
+                Some(Ok((WidgetData::Posts(_), _))) => ().into_any(),
                 Some(Ok((WidgetData::Releases { items }, _))) => {
                     let count = items.len();
                     view! {
