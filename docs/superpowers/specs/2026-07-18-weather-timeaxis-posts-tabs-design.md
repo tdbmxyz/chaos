@@ -56,8 +56,9 @@ combined view default and rendered on top.
 - **Tooltip:** new `chaosWeatherTooltip` window function in
   `chaos-web/index.html` (attached via the existing `tooltip_formatter`
   prop): header "Fri 18 Jul, 14:00" (viewer-local, from `axisValue`), body
-  one line per series: colored marker, place name (split view: no name
-  needed), weather emoji, temperature. Emoji rides as a third element of
+  one line per series: colored marker, place name (shown in split view
+  too — one shared formatter, and the split series is named after its
+  place), weather emoji, temperature. Emoji rides as a third element of
   each data point (`[ts, temp, emoji]`); the formatter reads `p.value[2]`.
   Temperatures display as `20.1°` — the letter unit stays on the y-axis
   labels, as today.
@@ -68,7 +69,7 @@ combined view default and rendered on top.
 ### View & layout
 
 - `combined` defaults to **true** and is persisted as a device pref
-  (localStorage key `weather-combined`, existing pref helpers).
+  (localStorage key `chaos-weather-combined`, existing pref helpers).
 - The combined chart section renders **above** the location rows. Rows always
   show the current-conditions header (emoji, name, details, temp, remove
   button); their individual chart only mounts in split view (as today).
@@ -146,7 +147,8 @@ desktop schemas; android/mobile schemas regenerate on next android build.
 ### Empty windows
 
 A window with no stories (rare; lobsters 24h on a slow day) renders the
-widget's existing empty state ("No items."). Not an error.
+tab strip over an empty list — the widgets' existing empty rendering.
+Not an error.
 
 ### Testing
 
