@@ -180,7 +180,11 @@ fn WeatherWidget(location: String) -> impl IntoView {
         async move {
             // Device preference: weather follows the location set on /settings.
             let place = crate::pref(crate::WEATHER_LOCATION_KEY).unwrap_or(configured);
-            crate::weather_fetch::place_weather(&place).await
+            // The dashboard card doesn't render times, so the place's
+            // utc_offset_seconds is dropped here.
+            crate::weather_fetch::place_weather(&place)
+                .await
+                .map(|(data, _)| data)
         }
     });
     let data = Memo::new(move |_| data.get());

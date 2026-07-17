@@ -2,10 +2,23 @@ use chaos_domain::WeatherData;
 use chrono::Timelike;
 use leptos::prelude::*;
 
-/// Every loaded location's hourly forecast plus its `now_index`, insertion-
-/// ordered as fetches resolve; keyed by the API's resolved display name.
-/// Charts read it for the shared y-range and the combined view.
-type LoadedForecasts = Vec<(String, Vec<chaos_domain::HourlyForecast>, usize)>;
+/// One loaded location published into the page-wide list: its hourly
+/// forecast, `now_index`, and the place's UTC offset (charts render local
+/// time); keyed by the API's resolved display name.
+#[derive(Clone)]
+struct LoadedPlace {
+    name: String,
+    hourly: Vec<chaos_domain::HourlyForecast>,
+    now_index: usize,
+    /// Not read yet: the time-axis charts (next change) consume it; the
+    /// publish plumbing lands first so they only touch rendering.
+    #[allow(dead_code)]
+    utc_offset_seconds: i32,
+}
+
+/// Every loaded location, insertion-ordered as fetches resolve. Charts read
+/// it for the shared y-range and the combined view.
+type LoadedForecasts = Vec<LoadedPlace>;
 
 /// Two-line x-axis labels: weather emoji on top, then the hour (`"14h"`), or
 /// the weekday and day-of-month ("Fri 10") at midnight so day boundaries read
@@ -111,7 +124,7 @@ fn weather_chart_option(
 
     let mut everyone: Vec<(&str, &[chaos_domain::HourlyForecast])> = all
         .iter()
-        .map(|(name, hourly, _)| (name.as_str(), hourly.as_slice()))
+        .map(|p| (p.name.as_str(), p.hourly.as_slice()))
         .collect();
     everyone.push(("", hourly)); // y-range only; names unused there, duplicates harmless.
     let (y_min, y_max) = y_range(&everyone, fahrenheit);
@@ -181,10 +194,10 @@ fn combined_chart_option(
     let unit = if fahrenheit { "°F" } else { "°C" };
     // Retraction can empty the list before the chart unmounts (framework
     // scheduling); render an empty option instead of indexing into nothing.
-    let Some((_, first_hourly, first_now)) = all.first() else {
+    let Some(first) = all.first() else {
         return serde_json::json!({});
     };
-    let labels = time_labels(first_hourly);
+    let labels = time_labels(&first.hourly);
 
     let text = colors.text.as_str();
     let muted = colors.muted.as_str();
@@ -193,22 +206,22 @@ fn combined_chart_option(
 
     let everyone: Vec<(&str, &[chaos_domain::HourlyForecast])> = all
         .iter()
-        .map(|(name, hourly, _)| (name.as_str(), hourly.as_slice()))
+        .map(|p| (p.name.as_str(), p.hourly.as_slice()))
         .collect();
     let (y_min, y_max) = y_range(&everyone, fahrenheit);
 
-    let names: Vec<&str> = all.iter().map(|(name, _, _)| name.as_str()).collect();
+    let names: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
     let series: Vec<serde_json::Value> = all
         .iter()
         .enumerate()
-        .map(|(i, (name, hourly, _))| {
+        .map(|(i, p)| {
             let mut s = serde_json::json!({
-                "name": name,
+                "name": p.name,
                 "type": "line",
                 "showSymbol": false,
                 "color": LOCATION_PALETTE[i % LOCATION_PALETTE.len()],
                 "lineStyle": { "width": 1.5 },
-                "data": hourly_temps(hourly, fahrenheit),
+                "data": hourly_temps(&p.hourly, fahrenheit),
             });
             if i == 0 {
                 // `now_index` may equal len (all data in the past); ECharts
@@ -218,7 +231,7 @@ fn combined_chart_option(
                     "symbol": "none",
                     "label": { "show": true, "formatter": "now", "color": muted },
                     "lineStyle": { "color": muted, "type": "dashed", "width": 1 },
-                    "data": [{ "xAxis": first_now }],
+                    "data": [{ "xAxis": first.now_index }],
                 });
             }
             s
@@ -371,26 +384,33 @@ fn WeatherRow(
     // row unmounts (location removed / page left).
     let published = StoredValue::new(None::<String>);
     Effect::new(move |_| {
-        let Some(Ok(weather)) = data.get() else {
+        let Some(Ok((weather, utc_offset_seconds))) = data.get() else {
             return;
         };
         if weather.hourly.is_empty() {
             return;
         }
-        let (name, hourly, now_index) = (weather.location, weather.hourly, weather.now_index);
-        published.set_value(Some(name.clone()));
+        let place = LoadedPlace {
+            name: weather.location,
+            hourly: weather.hourly,
+            now_index: weather.now_index,
+            utc_offset_seconds,
+        };
+        published.set_value(Some(place.name.clone()));
         // Known edge: two place strings resolving to the same display name
         // share one entry, and removing one row retracts the entry the other
         // still uses — self-healing, because the y-range folds each row's
         // own data in regardless.
-        loaded.update(|list| match list.iter_mut().find(|(n, _, _)| *n == name) {
-            Some(entry) => (entry.1, entry.2) = (hourly.clone(), now_index),
-            None => list.push((name.clone(), hourly.clone(), now_index)),
-        });
+        loaded.update(
+            |list| match list.iter_mut().find(|p| p.name == place.name) {
+                Some(entry) => *entry = place,
+                None => list.push(place),
+            },
+        );
     });
     on_cleanup(move || {
         if let Some(name) = published.get_value() {
-            loaded.update(|list| list.retain(|(n, _, _)| n != &name));
+            loaded.update(|list| list.retain(|p| p.name != name));
         }
     });
 
@@ -410,7 +430,7 @@ fn WeatherRow(
         <section class="weather-row">
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading forecast…"</p> }.into_any(),
-                Some(Ok(weather)) => weather_row_body(weather, loaded, combined).into_any(),
+                Some(Ok((weather, _))) => weather_row_body(weather, loaded, combined).into_any(),
                 Some(Err(err)) => {
                     let place = location.clone().unwrap_or_else(|| "default location".into());
                     view! { <p class="error">{place} ": " {err}</p> }.into_any()
@@ -476,9 +496,8 @@ fn weather_row_body(
 #[component]
 fn CombinedChart(loaded: RwSignal<LoadedForecasts>) -> impl IntoView {
     let fahrenheit = crate::weather_fahrenheit();
-    let first = Memo::new(move |_| {
-        loaded.with(|list| list.first().map(|(_, hourly, now)| (hourly.len(), *now)))
-    });
+    let first =
+        Memo::new(move |_| loaded.with(|list| list.first().map(|p| (p.hourly.len(), p.now_index))));
     view! {
         <section class="weather-row">
             {move || match first.get() {
@@ -555,20 +574,23 @@ mod tests {
         assert_eq!(hourly_temps(&hours, true), vec![68.0]);
     }
 
-    /// Two loaded locations for option tests: "Osaka" (20–21°C) and
-    /// "Nijar" (30–31°C), each with now at index 1.
+    /// Two loaded locations for option tests: "Osaka" (20–21°C, UTC+2) and
+    /// "Nijar" (30–31°C, UTC), each with now at index 1. Distinct offsets so
+    /// time-axis tests can tell the places apart.
     fn two_locations() -> LoadedForecasts {
         vec![
-            (
-                "Osaka".to_string(),
-                vec![hour(2026, 7, 9, 14, 20.0, 0), hour(2026, 7, 9, 15, 21.0, 2)],
-                1,
-            ),
-            (
-                "Nijar".to_string(),
-                vec![hour(2026, 7, 9, 14, 30.0, 1), hour(2026, 7, 9, 15, 31.0, 1)],
-                1,
-            ),
+            LoadedPlace {
+                name: "Osaka".to_string(),
+                hourly: vec![hour(2026, 7, 9, 14, 20.0, 0), hour(2026, 7, 9, 15, 21.0, 2)],
+                now_index: 1,
+                utc_offset_seconds: 7200,
+            },
+            LoadedPlace {
+                name: "Nijar".to_string(),
+                hourly: vec![hour(2026, 7, 9, 14, 30.0, 1), hour(2026, 7, 9, 15, 31.0, 1)],
+                now_index: 1,
+                utc_offset_seconds: 0,
+            },
         ]
     }
 
@@ -577,7 +599,7 @@ mod tests {
         let all = two_locations();
         let everyone: Vec<(&str, &[HourlyForecast])> = all
             .iter()
-            .map(|(n, h, _)| (n.as_str(), h.as_slice()))
+            .map(|p| (p.name.as_str(), p.hourly.as_slice()))
             .collect();
         // min 20, max 31, ±1° padding → (19, 32).
         assert_eq!(y_range(&everyone, false), (19.0, 32.0));
@@ -622,7 +644,7 @@ mod tests {
     #[test]
     fn split_option_has_one_series_and_now_marker() {
         let all = two_locations();
-        let own = all[0].1.clone();
+        let own = all[0].hourly.clone();
         let opt = weather_chart_option(
             &own,
             1,
