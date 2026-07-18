@@ -120,8 +120,12 @@ impl WidgetHub {
     async fn fetch(&self, widget: &Widget) -> Result<WidgetData, String> {
         match widget {
             Widget::Feed { urls, limit, .. } => feed::fetch(&self.http, urls, *limit).await,
-            Widget::HackerNews { limit, .. } => posts::hacker_news(&self.http, *limit).await,
-            Widget::Lobsters { limit, .. } => posts::lobsters(&self.http, *limit).await,
+            Widget::HackerNews { limit, .. } => {
+                posts::hacker_news(&self.http, *limit, chrono::Utc::now()).await
+            }
+            Widget::Lobsters { limit, .. } => {
+                posts::lobsters(&self.http, *limit, chrono::Utc::now()).await
+            }
             Widget::Releases { repos, limit } => releases::fetch(&self.http, repos, *limit).await,
             Widget::ServerStats { mounts } => {
                 let history = self

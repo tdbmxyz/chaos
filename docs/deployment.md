@@ -209,7 +209,21 @@ instead of going through the server. The client and server ship together
 (same repo, same release), so there's no compatibility window to worry
 about: deploy both at once and there's nothing else to do — the existing
 `type = "weather"` config entry keeps working, it just no longer causes a
-server-side fetch.
+server-side fetch. Charts render on the viewer's local time axis, so
+places in different timezones line up by real instant.
+
+## Changed upstreams: Hacker News and lobsters
+
+If the host filters egress, note the widget upstreams changed with the
+Last 24h / 48h / Week tabs:
+
+- **Hacker News**: the server (and clients fetching directly) now query
+  the Algolia archive API at `hn.algolia.com` (one request per window,
+  `tags=front_page`). The Firebase topstories API
+  (`hacker-news.firebaseio.com`) is no longer called by anything.
+- **lobsters**: `lobste.rs/newest.json?page=N` pagination (up to 10
+  pages per refresh) instead of `hottest.json`, still behind the
+  existing 10-minute cache.
 
 ## Desktop and phone apps
 
@@ -234,10 +248,12 @@ Shells talk to the server cross-origin, so they sign in with a bearer
 token stored on the device instead of the browser cookie; nothing needs
 configuring server-side (CORS is already open — LAN posture).
 
-The desktop and Android shells now bundle `tauri-plugin-http` with a
+The desktop and Android shells bundle `tauri-plugin-http` with a
 capability allowlist scoped to the hosts the dashboard fetches directly
-when offline or for weather (Hacker News, lobste.rs, Open-Meteo). Nothing
-to configure — the next `just apk` / `just bundle` build picks it up.
+when offline or for weather (hn.algolia.com, lobste.rs, Open-Meteo —
+hn.algolia.com replaced firebaseio with the tabs work). Nothing to
+configure, but the allowlist is baked into the app: rebuild the Android
+APK (`just apk`) and desktop bundles to pick up the new scope.
 
 ## Migrating Linkwarden data
 

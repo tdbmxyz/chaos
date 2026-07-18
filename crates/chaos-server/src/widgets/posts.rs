@@ -1,30 +1,40 @@
 //! Link-aggregator providers: Hacker News and Lobsters, with points and
 //! comment counts (their RSS feeds carry neither, hence not `feed.rs`).
 //!
-//! Hacker News: the official Firebase API. `topstories.json` is the live
-//! front-page ranking ("trending"), NOT newest-first; items are fetched
-//! concurrently. Lobsters: one request to `hottest.json`.
+//! Both produce [`WidgetData::Posts`]: the top-by-upvotes links of the
+//! trailing 24 h, 48 h and week. Hacker News comes from the Algolia archive
+//! API (one `front_page` query per window, re-sorted by points — Algolia
+//! ranks by relevance). Lobsters pages `newest.json` back until the sweep
+//! covers a week, then buckets by `created_at`.
 
-use chaos_domain::{FeedItem, WidgetData};
+use chaos_domain::{FeedItem, PostsData, WidgetData};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use url::Url;
 
 use crate::http_util::get_json;
 
-const HN_API: &str = "https://hacker-news.firebaseio.com/v0";
 const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
-const LOBSTERS_HOTTEST: &str = "https://lobste.rs/hottest.json";
+const ALGOLIA_SEARCH: &str = "https://hn.algolia.com/api/v1/search";
+const LOBSTERS_NEWEST: &str = "https://lobste.rs/newest.json";
+/// newest.json covers ~1.3 days per 25-story page; 10 pages safely spans a week.
+const LOBSTERS_PAGE_CAP: u32 = 10;
+const WEEK_HOURS: i64 = 24 * 7;
 
 #[derive(Deserialize)]
-struct HnItem {
-    id: u64,
+struct AlgoliaResponse {
+    hits: Vec<AlgoliaHit>,
+}
+
+#[derive(Deserialize)]
+struct AlgoliaHit {
     title: Option<String>,
-    url: Option<Url>,
-    score: Option<u64>,
-    /// Total comment count, unlike `kids` (direct replies only).
-    descendants: Option<u64>,
-    time: Option<i64>,
+    url: Option<String>,
+    points: Option<u64>,
+    num_comments: Option<u64>,
+    created_at_i: Option<i64>,
+    #[serde(rename = "objectID")]
+    object_id: String,
 }
 
 #[derive(Deserialize)]
@@ -38,59 +48,108 @@ struct LobstersStory {
 }
 
 /// Once gathered, both aggregators are shown by upvotes, not by their
-/// route's own ranking (still `topstories`/`hottest` — not the "best"
-/// endpoints). Stable, so equal scores keep the upstream order.
+/// route's own ranking (Algolia relevance / newest-first pages). Stable,
+/// so equal scores keep the upstream order.
 fn sort_by_score(items: &mut [FeedItem]) {
     items.sort_by_key(|item| std::cmp::Reverse(item.score));
 }
 
-pub async fn hacker_news(http: &reqwest::Client, limit: u32) -> Result<WidgetData, String> {
-    let ids: Vec<u64> = get_json(http, &format!("{HN_API}/topstories.json"))
-        .await
-        .map_err(|e| format!("hn topstories: {e}"))?;
-
-    let mut items = futures::future::join_all(ids.iter().take(limit as usize).map(|id| {
-        let url = format!("{HN_API}/item/{id}.json");
-        async move { get_json::<HnItem>(http, &url).await }
-    }))
-    .await
-    .into_iter()
-    // A single dead/deleted item must not take the widget down.
-    .filter_map(|result| result.ok().map(hn_item))
-    .collect::<Vec<_>>();
-
-    sort_by_score(&mut items);
-    if items.is_empty() {
-        return Err("no stories returned".into());
-    }
-    Ok(WidgetData::Feed { items })
-}
-
-fn hn_item(item: HnItem) -> FeedItem {
-    let discussion: Option<Url> = format!("{HN_ITEM}{}", item.id).parse().ok();
+fn algolia_item(hit: AlgoliaHit) -> FeedItem {
+    let discussion: Option<Url> = format!("{HN_ITEM}{}", hit.object_id).parse().ok();
     FeedItem {
-        title: item.title.unwrap_or_else(|| "(untitled)".into()),
+        title: hit.title.unwrap_or_else(|| "(untitled)".into()),
         // Ask HN / Show HN text posts have no external URL.
-        url: item.url.or_else(|| discussion.clone()),
+        url: hit
+            .url
+            .filter(|u| !u.is_empty())
+            .and_then(|u| u.parse().ok())
+            .or_else(|| discussion.clone()),
         source: Some("Hacker News".into()),
-        published: item.time.and_then(|t| DateTime::from_timestamp(t, 0)),
-        score: item.score,
-        comments: item.descendants,
+        published: hit
+            .created_at_i
+            .and_then(|t| DateTime::from_timestamp(t, 0)),
+        score: hit.points,
+        comments: hit.num_comments,
         comments_url: discussion,
     }
 }
 
-pub async fn lobsters(http: &reqwest::Client, limit: u32) -> Result<WidgetData, String> {
-    let stories: Vec<LobstersStory> = get_json(http, LOBSTERS_HOTTEST)
-        .await
-        .map_err(|e| format!("lobsters: {e}"))?;
-    let mut items: Vec<FeedItem> = stories
-        .into_iter()
-        .take(limit as usize)
-        .map(lobsters_item)
+/// Items published within the trailing `hours`, by upvotes, top `limit`.
+fn windowed(items: &[FeedItem], now: DateTime<Utc>, hours: i64, limit: u32) -> Vec<FeedItem> {
+    let cutoff = now - chrono::Duration::hours(hours);
+    let mut hits: Vec<FeedItem> = items
+        .iter()
+        .filter(|i| i.published.is_some_and(|p| p >= cutoff))
+        .cloned()
         .collect();
-    sort_by_score(&mut items);
-    Ok(WidgetData::Feed { items })
+    sort_by_score(&mut hits);
+    hits.truncate(limit as usize);
+    hits
+}
+
+pub async fn hacker_news(
+    http: &reqwest::Client,
+    limit: u32,
+    now: DateTime<Utc>,
+) -> Result<WidgetData, String> {
+    // One archive query per window: relevance-ranked top-50 among stories
+    // that made the front page in the window; re-sorted by points below.
+    let window = |hours: i64| async move {
+        let cutoff = (now - chrono::Duration::hours(hours)).timestamp();
+        let url = format!(
+            "{ALGOLIA_SEARCH}?tags=front_page&numericFilters=created_at_i>{cutoff}&hitsPerPage=50"
+        );
+        let resp: AlgoliaResponse = get_json(http, &url)
+            .await
+            .map_err(|e| format!("hn algolia: {e}"))?;
+        let items: Vec<FeedItem> = resp.hits.into_iter().map(algolia_item).collect();
+        Ok::<_, String>(windowed(&items, now, hours, limit))
+    };
+    let (last_24h, last_48h, last_week) =
+        futures::try_join!(window(24), window(48), window(WEEK_HOURS))?;
+    if last_week.is_empty() {
+        return Err("no stories returned".into());
+    }
+    Ok(WidgetData::Posts(PostsData {
+        last_24h,
+        last_48h,
+        last_week,
+    }))
+}
+
+pub async fn lobsters(
+    http: &reqwest::Client,
+    limit: u32,
+    now: DateTime<Utc>,
+) -> Result<WidgetData, String> {
+    let cutoff = now - chrono::Duration::hours(WEEK_HOURS);
+    let mut items: Vec<FeedItem> = Vec::new();
+    for page in 1..=LOBSTERS_PAGE_CAP {
+        let stories: Vec<LobstersStory> = get_json(http, &format!("{LOBSTERS_NEWEST}?page={page}"))
+            .await
+            .map_err(|e| format!("lobsters: {e}"))?;
+        if stories.is_empty() {
+            break;
+        }
+        // Newest-first: once a page's oldest story predates the cutoff,
+        // later pages are all older.
+        let done = stories
+            .last()
+            .and_then(|s| s.created_at)
+            .is_none_or(|t| t < cutoff);
+        items.extend(stories.into_iter().map(lobsters_item));
+        if done {
+            break;
+        }
+    }
+    if items.is_empty() {
+        return Err("no stories returned".into());
+    }
+    Ok(WidgetData::Posts(PostsData {
+        last_24h: windowed(&items, now, 24, limit),
+        last_48h: windowed(&items, now, 48, limit),
+        last_week: windowed(&items, now, WEEK_HOURS, limit),
+    }))
 }
 
 fn lobsters_item(story: LobstersStory) -> FeedItem {
@@ -151,26 +210,66 @@ mod tests {
     }
 
     #[test]
-    fn maps_a_hacker_news_item() {
-        let raw = r#"{"id":1234,"title":"Rust 2.0","url":"https://blog.rust-lang.org/2","score":256,"descendants":142,"time":1783300000,"by":"pcwalton","type":"story","kids":[1,2]}"#;
-        let item = hn_item(serde_json::from_str(raw).expect("parse"));
-        assert_eq!(item.title, "Rust 2.0");
-        assert_eq!(item.score, Some(256));
-        assert_eq!(item.comments, Some(142));
+    fn algolia_hit_maps_points_comments_and_discussion() {
+        let raw = r#"{"title":"Ask HN: editors?","url":null,"points":73,"num_comments":41,"created_at_i":1783300000,"objectID":"9876","author":"pg","_tags":["story","front_page"]}"#;
+        let item = algolia_item(serde_json::from_str(raw).expect("parse"));
+        assert_eq!(item.title, "Ask HN: editors?");
+        assert_eq!(item.score, Some(73));
+        assert_eq!(item.comments, Some(41));
         assert_eq!(
             item.comments_url.as_ref().map(Url::as_str),
-            Some("https://news.ycombinator.com/item?id=1234")
+            Some("https://news.ycombinator.com/item?id=9876")
         );
-        assert_eq!(item.url.unwrap().as_str(), "https://blog.rust-lang.org/2");
+        // No external url: point at the discussion instead.
+        assert_eq!(item.url, item.comments_url);
         assert!(item.published.is_some());
     }
 
     #[test]
-    fn hn_text_post_links_to_the_discussion() {
-        let raw =
-            r#"{"id":42,"title":"Ask HN: editors?","score":10,"descendants":3,"time":1783300000}"#;
-        let item = hn_item(serde_json::from_str(raw).expect("parse"));
-        assert_eq!(item.url, item.comments_url);
+    fn algolia_hit_keeps_the_external_url() {
+        let raw = r#"{"title":"Rust 2.0","url":"https://blog.rust-lang.org/2","points":256,"num_comments":142,"created_at_i":1783300000,"objectID":"1234"}"#;
+        let item = algolia_item(serde_json::from_str(raw).expect("parse"));
+        assert_eq!(item.url.unwrap().as_str(), "https://blog.rust-lang.org/2");
+        assert_eq!(item.source.as_deref(), Some("Hacker News"));
+    }
+
+    #[test]
+    fn windowed_filters_sorts_and_truncates() {
+        let now = Utc::now();
+        let aged = |hours: i64, score: u64, title: &str| FeedItem {
+            title: title.into(),
+            published: Some(now - chrono::Duration::hours(hours)),
+            score: Some(score),
+            ..blank_item()
+        };
+        let items = vec![
+            aged(1, 5, "fresh"),
+            aged(30, 50, "yesterday"),
+            aged(24 * 6, 9, "last week"),
+            aged(24 * 9, 99, "too old"),
+            FeedItem {
+                title: "undated".into(),
+                score: Some(100),
+                ..blank_item()
+            },
+        ];
+        let titles = |window: Vec<FeedItem>| -> Vec<String> {
+            window.into_iter().map(|i| i.title).collect()
+        };
+        assert_eq!(titles(windowed(&items, now, 24, 10)), ["fresh"]);
+        assert_eq!(
+            titles(windowed(&items, now, 48, 10)),
+            ["yesterday", "fresh"]
+        );
+        // The 9-day-old and unpublished items never qualify.
+        assert_eq!(
+            titles(windowed(&items, now, WEEK_HOURS, 10)),
+            ["yesterday", "last week", "fresh"]
+        );
+        assert_eq!(
+            titles(windowed(&items, now, WEEK_HOURS, 2)),
+            ["yesterday", "last week"]
+        );
     }
 
     #[test]

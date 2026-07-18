@@ -692,6 +692,35 @@ button.primary {
 
 /* feeds & releases */
 
+/* HN/lobsters time-window tab strip (24h / 48h / Week) */
+.posts-tabs {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.posts-tabs button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+}
+
+.posts-tabs button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.posts-tabs button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
 .feed-list {
   list-style: none;
   margin: 0;

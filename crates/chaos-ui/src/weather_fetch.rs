@@ -45,8 +45,9 @@ async fn place(location: &str) -> Result<Place, String> {
 /// The one weather read path: fresh cache → cached copy; otherwise fetch
 /// and overwrite; on fetch failure serve the stale copy if there is one.
 /// `now_index` is recomputed on EVERY cached read so a forecast fetched
-/// hours ago still points at the current hour.
-pub(crate) async fn place_weather(location: &str) -> Result<WeatherData, String> {
+/// hours ago still points at the current hour. The `i32` alongside the
+/// data is the place's `utc_offset_seconds` (charts render local time).
+pub(crate) async fn place_weather(location: &str) -> Result<(WeatherData, i32), String> {
     let place = place(location).await?;
     let key = format!("weather:{}", place.name.to_lowercase());
     let now_ms = js_sys::Date::now();
@@ -66,7 +67,7 @@ pub(crate) async fn place_weather(location: &str) -> Result<WeatherData, String>
                     forecast: forecast.clone(),
                 },
             );
-            Ok(forecast.data)
+            Ok((forecast.data, forecast.utc_offset_seconds))
         }
         Err(err) => match cached {
             Some(hit) => Ok(revalidated(hit.forecast)),
@@ -75,15 +76,13 @@ pub(crate) async fn place_weather(location: &str) -> Result<WeatherData, String>
     }
 }
 
-/// A cached forecast with `now_index` moved to the current local hour.
-fn revalidated(forecast: PlaceForecast) -> WeatherData {
+/// A cached forecast with `now_index` moved to the current local hour,
+/// paired with its `utc_offset_seconds`.
+fn revalidated(forecast: PlaceForecast) -> (WeatherData, i32) {
+    let offset = forecast.utc_offset_seconds;
     let mut data = forecast.data;
-    data.now_index = open_meteo::recompute_now_index(
-        &data.hourly,
-        chrono::Utc::now(),
-        forecast.utc_offset_seconds,
-    );
-    data
+    data.now_index = open_meteo::recompute_now_index(&data.hourly, chrono::Utc::now(), offset);
+    (data, offset)
 }
 
 /// The place to show when none is given: the device preference, else the

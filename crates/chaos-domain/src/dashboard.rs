@@ -63,15 +63,17 @@ pub enum Widget {
         #[serde(default = "default_feed_limit")]
         limit: u32,
     },
-    /// Hacker News front page — the live ranking from the official API,
-    /// with points and comment counts (the RSS feed has neither).
+    /// Hacker News top links per trailing 24 h / 48 h / week window, from
+    /// the Algolia archive API (`tags=front_page`), with points and comment
+    /// counts (the RSS feed has neither). Rendered as tabs.
     HackerNews {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         #[serde(default = "default_posts_limit")]
         limit: u32,
     },
-    /// Lobsters hottest posts (lobste.rs JSON API), same shape as HN.
+    /// Lobsters top links per window, paginated from `newest.json` and
+    /// bucketed by `created_at`; same tabbed shape as HN.
     Lobsters {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
@@ -187,6 +189,7 @@ pub struct DashboardLayout {
 pub enum WidgetData {
     Weather(WeatherData),
     Feed { items: Vec<FeedItem> },
+    Posts(PostsData),
     Releases { items: Vec<ReleaseItem> },
     ServerStats(ServerStats),
     Systemd { units: Vec<SystemdUnitStatus> },
@@ -242,6 +245,16 @@ pub struct HourlyForecast {
     pub time: NaiveDateTime,
     pub temp_c: f64,
     pub weather_code: i32,
+}
+
+/// Top links of the trailing 24 h / 48 h / week, each sorted by upvotes
+/// descending and truncated to the widget limit. Produced for the
+/// HackerNews/Lobsters widgets (RSS `Feed` widgets keep `WidgetData::Feed`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PostsData {
+    pub last_24h: Vec<FeedItem>,
+    pub last_48h: Vec<FeedItem>,
+    pub last_week: Vec<FeedItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
