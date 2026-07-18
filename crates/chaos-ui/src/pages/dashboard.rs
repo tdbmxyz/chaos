@@ -279,10 +279,14 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 Some(Ok((WidgetData::Weather(_), _))) => ().into_any(),
                 Some(Ok((WidgetData::Feed { items }, _))) => {
                     let count = items.len();
+                    let anchor = score_anchor(items.iter().map(|i| i.score));
                     view! {
                         <Collapsible count collapsed>
                             <ul class="feed-list">
-                                {items.into_iter().map(feed_item_view).collect_view()}
+                                {items
+                                    .into_iter()
+                                    .map(|item| feed_item_view(item, anchor))
+                                    .collect_view()}
                             </ul>
                         </Collapsible>
                     }
@@ -291,6 +295,16 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                 // HN/lobsters window-tops: one pre-computed list per trailing
                 // window, switched client-side — tabs cost no refetch.
                 Some(Ok((WidgetData::Posts(posts), _))) => {
+                    // One anchor over the union of the three windows, so
+                    // switching tabs never rescales the colors.
+                    let anchor = score_anchor(
+                        posts
+                            .last_24h
+                            .iter()
+                            .chain(&posts.last_48h)
+                            .chain(&posts.last_week)
+                            .map(|i| i.score),
+                    );
                     let items = move |t: PostsTab| match t {
                         PostsTab::Day => posts.last_24h.clone(),
                         PostsTab::TwoDays => posts.last_48h.clone(),
@@ -320,7 +334,10 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                             view! {
                                 <Collapsible count collapsed>
                                     <ul class="feed-list">
-                                        {items.into_iter().map(feed_item_view).collect_view()}
+                                        {items
+                                            .into_iter()
+                                            .map(|item| feed_item_view(item, anchor))
+                                            .collect_view()}
                                     </ul>
                                 </Collapsible>
                             }
@@ -798,11 +815,60 @@ fn ServerStatsView(stats: ServerStats) -> impl IntoView {
     }
 }
 
+/// Heat-gradient stops for score coloring, coldest (t = 0) to hottest
+/// (t = 1): faint yellow → yellow → orange → soft red → hard red.
+const HEAT_STOPS: [(u8, u8, u8); 5] = [
+    (0xe8, 0xd2, 0x88),
+    (0xff, 0xd6, 0x0a),
+    (0xff, 0x95, 0x00),
+    (0xf4, 0x67, 0x4f),
+    (0xff, 0x22, 0x00),
+];
+
+/// Top of the score color scale: the nearest-rank 99th percentile of the
+/// scores present (sort ascending, take index `ceil(0.99·n) - 1`). `None`
+/// when nothing in scope carries a score. For n ≤ 30 this is simply the
+/// max; on larger populations it lets a lone viral outlier stay clamped
+/// at hard red without washing out everything below it.
+fn score_anchor(scores: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
+    let mut scores: Vec<u64> = scores.into_iter().flatten().collect();
+    if scores.is_empty() {
+        return None;
+    }
+    scores.sort_unstable();
+    let rank = (0.99 * scores.len() as f64).ceil() as usize; // ≥ 1 since n ≥ 1
+    Some(scores[rank - 1])
+}
+
+/// `#rrggbb` heat color for a score: `t = score / anchor` clamped to
+/// [0, 1], linearly interpolated in RGB between the adjacent [`HEAT_STOPS`].
+/// Anchor 0 (guarding the division) renders the faint end.
+fn score_color(score: u64, anchor: u64) -> String {
+    let t = if anchor == 0 {
+        0.0
+    } else {
+        (score as f64 / anchor as f64).clamp(0.0, 1.0)
+    };
+    let pos = t * (HEAT_STOPS.len() - 1) as f64;
+    let i = (pos as usize).min(HEAT_STOPS.len() - 2);
+    let f = pos - i as f64;
+    let (lo, hi) = (HEAT_STOPS[i], HEAT_STOPS[i + 1]);
+    let lerp = |a: u8, b: u8| (f64::from(a) + (f64::from(b) - f64::from(a)) * f).round() as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        lerp(lo.0, hi.0),
+        lerp(lo.1, hi.1),
+        lerp(lo.2, hi.2)
+    )
+}
+
 /// One feed/aggregator entry: title → article, source label → discussion
 /// page (HN/lobsters), plus points, comment count and age when available.
 /// Each meta part is its own span so the aggregator widgets can align them
-/// as columns across rows (see `.feed-meta` in the stylesheet).
-fn feed_item_view(item: FeedItem) -> impl IntoView {
+/// as columns across rows (see `.feed-meta` in the stylesheet). `anchor`
+/// (the caller's [`score_anchor`] over the whole widget) heat-colors the
+/// points; without one — or on scoreless items — the muted styling stands.
+fn feed_item_view(item: FeedItem, anchor: Option<u64>) -> impl IntoView {
     let source = item
         .source
         .filter(|s| !s.is_empty())
@@ -816,6 +882,10 @@ fn feed_item_view(item: FeedItem) -> impl IntoView {
             None => view! { <span class="feed-source">{s}</span> }.into_any(),
         });
     let score = item.score.map(|score| format!("▲ {score}"));
+    let score_style = match (item.score, anchor) {
+        (Some(score), Some(anchor)) => Some(score_color(score, anchor)),
+        _ => None,
+    };
     let comments = item
         .comments
         .map(|n| format!("{n} comment{}", if n == 1 { "" } else { "s" }));
@@ -832,7 +902,9 @@ fn feed_item_view(item: FeedItem) -> impl IntoView {
             </a>
             <span class="muted feed-meta">
                 {source}
-                <span class="feed-score">{score}</span>
+                <span class="feed-score" style:color=score_style>
+                    {score}
+                </span>
                 <span class="feed-comments">{comments}</span>
                 <span class="feed-age">{age}</span>
             </span>
@@ -948,6 +1020,87 @@ fn SearchBar(template: String) -> impl IntoView {
                 on:input=move |ev| query.set(event_target_value(&ev))
             />
         </form>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- score_anchor: nearest-rank 99th percentile ------------------------
+
+    #[test]
+    fn anchor_single_score() {
+        assert_eq!(score_anchor([Some(42)]), Some(42));
+    }
+
+    #[test]
+    fn anchor_n10_is_max() {
+        // ceil(0.99 * 10) = 10 → last element after ascending sort.
+        let scores = (1..=10).map(Some);
+        assert_eq!(score_anchor(scores), Some(10));
+    }
+
+    #[test]
+    fn anchor_all_equal() {
+        assert_eq!(score_anchor(vec![Some(7); 25]), Some(7));
+    }
+
+    #[test]
+    fn anchor_small_n_includes_outlier() {
+        // With n ≤ 30, ceil(0.99·n) = n, so p99 is honestly just the max —
+        // an outlier still becomes the anchor at these sizes.
+        let mut scores = vec![Some(5); 29];
+        scores.push(Some(10_000));
+        assert_eq!(score_anchor(scores), Some(10_000));
+    }
+
+    #[test]
+    fn anchor_large_n_shrugs_off_outlier() {
+        // n = 200: ceil(0.99 · 200) = 198 → index 197, below the outlier.
+        let mut scores = vec![Some(10); 199];
+        scores.push(Some(10_000));
+        assert_eq!(score_anchor(scores), Some(10));
+    }
+
+    #[test]
+    fn anchor_ignores_scoreless_items() {
+        assert_eq!(score_anchor([None, Some(3), None, Some(9)]), Some(9));
+    }
+
+    #[test]
+    fn anchor_none_without_scores() {
+        assert_eq!(score_anchor([None, None]), None);
+        assert_eq!(score_anchor([]), None);
+    }
+
+    // -- score_color: five-stop heat gradient ------------------------------
+
+    #[test]
+    fn color_hits_the_five_stops_exactly() {
+        assert_eq!(score_color(0, 100), "#e8d288");
+        assert_eq!(score_color(25, 100), "#ffd60a");
+        assert_eq!(score_color(50, 100), "#ff9500");
+        assert_eq!(score_color(75, 100), "#f4674f");
+        assert_eq!(score_color(100, 100), "#ff2200");
+    }
+
+    #[test]
+    fn color_midpoint_between_stops() {
+        // t = 0.125, halfway from #e8d288 to #ffd60a:
+        // r (232+255)/2 → 244, g (210+214)/2 → 212, b (136+10)/2 → 73.
+        assert_eq!(score_color(125, 1000), "#f4d449");
+    }
+
+    #[test]
+    fn color_clamps_above_anchor() {
+        assert_eq!(score_color(9999, 100), "#ff2200");
+    }
+
+    #[test]
+    fn color_anchor_zero_renders_faint_end() {
+        assert_eq!(score_color(0, 0), "#e8d288");
+        assert_eq!(score_color(50, 0), "#e8d288");
     }
 }
 
