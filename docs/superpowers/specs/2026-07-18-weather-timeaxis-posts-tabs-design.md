@@ -161,3 +161,28 @@ bucketing across cutoffs, stop-condition logic (cutoff page / cap), sorting
 `docs/ROADMAP.md` note; `docs/deployment.md`: HN/lobsters upstreams changed
 to hn.algolia.com and lobste.rs/newest (firewall/egress note), weather page
 now viewer-local.
+
+## Addendum (2026-07-18): score-colored points
+
+Requested before release: color the score ("▲ N") of HN/lobsters items on a
+heat gradient — hard (brilliant) red → soft red → orange → yellow → faint
+yellow, hottest to coldest.
+
+- **Scale**: per widget, anchor the top of the scale at the **99th
+  percentile** (nearest-rank) of all scores across the widget's three
+  windows (Posts payloads) or across the list (Feed payloads, which carry
+  scores when RSS sources are aggregators). Scores above the anchor clamp
+  to the brightest red. Minimum anchor is **0**: scores cannot be negative
+  in our model (`FeedItem::score: Option<u64>`; lobsters' negative scores
+  already map to `None`, HN stories floor at 0). `t = score / anchor`
+  clamped to [0, 1]; anchor 0 (or no scored items) renders the faint end.
+- **Gradient**: five stops, linearly interpolated in RGB between adjacent
+  stops: t=1 `#ff2200` (hard red), t=0.75 `#f4674f` (soft red), t=0.5
+  `#ff9500` (orange), t=0.25 `#ffd60a` (yellow), t=0 `#e8d288` (faint
+  yellow, still legible on both themes).
+- **Where**: `feed_item_view` sets an inline `color` style on the
+  `.feed-score` span; scoreless items keep the current muted styling.
+  Pure helpers (`score_anchor(items) -> Option<u64>`,
+  `score_color(score, anchor) -> String`) unit-tested; the Posts arm
+  computes one anchor over the union of the three windows so tab switches
+  don't rescale colors, the Feed arm over its items.
