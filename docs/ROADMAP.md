@@ -152,9 +152,9 @@ cross-origin (bearer instead of the cookie).
       window top sorted by upvotes — HN switched from the Firebase
       topstories API to the Algolia archive API (one query per window,
       `tags=front_page`), lobsters from hottest.json to
-      `newest.json?page=N` pagination (up to 10 pages per refresh behind
-      the existing 10-minute cache); offline, tabs keep working from the
-      cached payload
+      `newest/page/{N}.json` pagination (up to 10 pages per refresh behind
+      the existing 10-minute cache, deduped by id); offline, tabs keep
+      working from the cached payload
 - [x] Weather charts on a viewer-local time axis: every chart aligns
       places by real instant (fixes cross-timezone offset), alternating
       day bands + weekday/date tooltips, and the combined view is the
