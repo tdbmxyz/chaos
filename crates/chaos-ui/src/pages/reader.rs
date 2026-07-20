@@ -4,10 +4,15 @@
 //! (HN's Algolia item API in browser/shell alike, lobste.rs through the shell
 //! HTTP plugin) and renders PLAIN TEXT.
 //!
-//! SECURITY: `inner_html` is used for a body ONLY when online (server-sanitized
-//! HTML). The offline direct path carries plain text, which is rendered as a
-//! Leptos text node (escaped `textContent`) and NEVER as `inner_html`. Titles
-//! and authors are always text nodes. See [`use_inner_html`].
+//! SECURITY: `inner_html` renders a body ONLY when it is server-sanitized. That
+//! provenance is decided at fetch time and travels WITH the loaded thread (the
+//! `sanitized` bool from [`load_thread`]) — it is never re-derived from the live
+//! connectivity signal, which would desync from a stale-while-revalidate value.
+//! The offline direct path carries plain text (whose entities `strip_to_text`
+//! decodes back into live markup), so it is rendered as a Leptos text node
+//! (escaped `textContent`) and NEVER as `inner_html`. The server and direct
+//! paths use DISTINCT cache keys so a stale server-cache read can never surface
+//! a plain-text body marked sanitized. Titles and authors are always text nodes.
 
 use chaos_client::ChaosClient;
 use chaos_domain::{Comment, PostThread, Source};
@@ -19,10 +24,16 @@ use super::dashboard::{rel_time, score_color};
 use crate::offline::Connectivity;
 use crate::use_client;
 
-/// `inner_html` is safe only for server-sanitized bodies (online). Offline
-/// bodies are plain text and must render as escaped text.
-fn use_inner_html(conn: Connectivity) -> bool {
-    conn == Connectivity::Online
+/// Cache key for the SERVER path (sanitized HTML); only ever written by
+/// `client.post_thread`, so a stale read from it is always sanitized.
+fn server_thread_key(source: Source, id: &str) -> String {
+    format!("thread:{}:{id}", source.as_str())
+}
+
+/// Cache key for the DIRECT path (plain text); kept distinct from the server
+/// key so the two provenances can never contaminate each other.
+fn direct_thread_key(source: Source, id: &str) -> String {
+    format!("thread-direct:{}:{id}", source.as_str())
 }
 
 /// Total number of descendants under `node` (for the `[+N]` collapse badge).
@@ -38,20 +49,27 @@ async fn load_thread(
     id: &str,
     conn: RwSignal<Connectivity>,
     client: &ChaosClient,
-) -> Result<PostThread, String> {
-    let key = format!("thread:{}:{id}", source.as_str());
+) -> Result<(PostThread, bool), String> {
+    // `bool` = SANITIZED: true only for the server path, so the caller's
+    // `inner_html` decision travels with the data instead of being re-read from
+    // the live `conn` signal (which can desync from a stale resource value).
     if conn.get_untracked() != Connectivity::Online {
-        return thread_direct(source, id, &key).await;
+        return thread_direct(source, id)
+            .await
+            .map(|thread| (thread, false));
     }
+    let key = server_thread_key(source, id);
     match crate::offline::cached(conn, &key, async { client.post_thread(source, id).await }).await {
-        Ok((thread, _stale)) => Ok(thread),
+        Ok((thread, _stale)) => Ok((thread, true)),
         Err(err) => Err(err.to_string()),
     }
 }
 
-/// The offline direct path: fetch from the provider, overwrite the cache on
-/// success, fall back to the cached copy on failure. Bodies are plain text.
-async fn thread_direct(source: Source, id: &str, key: &str) -> Result<PostThread, String> {
+/// The offline direct path: fetch from the provider, overwrite the (direct)
+/// cache on success, fall back to the cached copy on failure. Bodies are plain
+/// text, cached under a key distinct from the server path's.
+async fn thread_direct(source: Source, id: &str) -> Result<PostThread, String> {
+    let key = direct_thread_key(source, id);
     let fetched = match source {
         Source::HackerNews => {
             chaos_client::posts::hacker_news_thread(&crate::weather_fetch::http(), id).await
@@ -60,10 +78,10 @@ async fn thread_direct(source: Source, id: &str, key: &str) -> Result<PostThread
     };
     match fetched {
         Ok(thread) => {
-            crate::offline::cache_put(key, &thread);
+            crate::offline::cache_put(&key, &thread);
             Ok(thread)
         }
-        Err(err) => crate::offline::cache_get::<PostThread>(key).ok_or(err),
+        Err(err) => crate::offline::cache_get::<PostThread>(&key).ok_or(err),
     }
 }
 
@@ -129,10 +147,9 @@ pub fn PostReader() -> impl IntoView {
             {move || match thread.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
                 Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
-                Some(Ok(t)) => {
-                    let online = use_inner_html(conn.get());
+                Some(Ok((t, sanitized))) => {
                     let src = source().unwrap_or(Source::HackerNews);
-                    reader_body(t, online, src, client.clone()).into_any()
+                    reader_body(t, sanitized, src, client.clone()).into_any()
                 }
             }}
         </section>
@@ -142,7 +159,7 @@ pub fn PostReader() -> impl IntoView {
 /// The loaded story header, optional self-text, and the comment tree.
 fn reader_body(
     thread: PostThread,
-    online: bool,
+    sanitized: bool,
     source: Source,
     client: ChaosClient,
 ) -> impl IntoView {
@@ -167,9 +184,9 @@ fn reader_body(
         .into_any(),
         None => view! { <span class="reader-title">{title}</span> }.into_any(),
     };
-    // Self-text body: inner_html only online (server-sanitized); text offline.
+    // Self-text body: inner_html only for server-sanitized HTML; text otherwise.
     let body_view = thread.body.map(|body| {
-        if online {
+        if sanitized {
             view! { <div class="reader-selftext comment-body" inner_html=body></div> }.into_any()
         } else {
             view! { <div class="reader-selftext comment-body">{body}</div> }.into_any()
@@ -191,7 +208,7 @@ fn reader_body(
         </header>
         {body_view}
         <ul class="comment-children reader-tree">
-            {tree.into_iter().map(|c| comment_view(c, online)).collect_view()}
+            {tree.into_iter().map(|c| comment_view(c, sanitized)).collect_view()}
         </ul>
     }
 }
@@ -199,7 +216,7 @@ fn reader_body(
 /// One comment and its subtree, with per-node collapse: clicking the header
 /// folds this node's own subtree (showing a `[+N]` descendant badge); clicking
 /// again expands it.
-fn comment_view(node: Comment, online: bool) -> AnyView {
+fn comment_view(node: Comment, sanitized: bool) -> AnyView {
     let collapsed = RwSignal::new(false);
     let child_count = count_descendants(&node);
     // Author is ALWAYS a text node (never inner_html).
@@ -222,15 +239,15 @@ fn comment_view(node: Comment, online: bool) -> AnyView {
             <Show when=move || !collapsed.get()>
                 {
                     let body = body.clone();
-                    // inner_html ONLY online (server-sanitized); text offline.
-                    if online {
+                    // inner_html ONLY for server-sanitized HTML; text otherwise.
+                    if sanitized {
                         view! { <div class="comment-body" inner_html=body></div> }.into_any()
                     } else {
                         view! { <div class="comment-body">{body}</div> }.into_any()
                     }
                 }
                 <ul class="comment-children">
-                    {children.clone().into_iter().map(|c| comment_view(c, online)).collect_view()}
+                    {children.clone().into_iter().map(|c| comment_view(c, sanitized)).collect_view()}
                 </ul>
             </Show>
         </li>
@@ -252,11 +269,16 @@ mod tests {
     }
 
     #[test]
-    fn reader_renders_html_online_text_offline() {
-        // online → inner_html path; offline (or still checking) → escaped text.
-        assert!(use_inner_html(Connectivity::Online));
-        assert!(!use_inner_html(Connectivity::Offline));
-        assert!(!use_inner_html(Connectivity::Checking));
+    fn server_and_direct_cache_keys_are_distinct() {
+        // The provenance safety rests on these never colliding: a stale read
+        // from the server key must never surface a plain-text (direct) body.
+        let s = server_thread_key(Source::HackerNews, "42");
+        let d = direct_thread_key(Source::HackerNews, "42");
+        assert_ne!(s, d);
+        assert!(
+            !d.starts_with(&s),
+            "direct key must not be a prefix-collision of the server key"
+        );
     }
 
     #[test]
