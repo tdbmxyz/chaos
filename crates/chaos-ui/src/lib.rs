@@ -463,12 +463,11 @@ pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
 
 /// Primary navigation destinations. The glyphs are plain Unicode (like
 /// yomu's tab bar) so no icon font or SVG set is needed.
-const NAV_PRIMARY: [(&str, &str, &str); 6] = [
+const NAV_PRIMARY: [(&str, &str, &str); 5] = [
     ("/", "▦", "Dash"),
     ("/links", "⛓", "Links"),
     ("/news", "▤", "News"),
     ("/weather", "☀", "Weather"),
-    ("/home", "⌂", "Home"),
     ("/more", "≡", "More"),
 ];
 

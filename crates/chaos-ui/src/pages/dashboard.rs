@@ -8,6 +8,7 @@ use chaos_domain::{
 };
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use leptos::prelude::*;
+use leptos_router::components::A;
 
 use crate::components::ServiceGrid;
 use crate::use_client;
@@ -1054,8 +1055,8 @@ pub(crate) fn post_row_view(
     let title = item.title.clone();
 
     let title_link = match reader_href {
-        // Internal reader route: normal SPA navigation.
-        Some(href) => view! { <a class="post-title" href=href>{title}</a> }.into_any(),
+        // Internal reader route: client-side SPA navigation (no full reload).
+        Some(href) => view! { <A href=href attr:class="post-title">{title}</A> }.into_any(),
         // No reader id: link the article, opening out of the app.
         None => view! {
             <a class="post-title" href=external_href target="_blank" rel="noreferrer">{title}</a>
