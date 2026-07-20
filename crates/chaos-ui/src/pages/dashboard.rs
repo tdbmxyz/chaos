@@ -264,10 +264,12 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     // Serving from the local cache gets a small "· cached" hint by the title.
     let stale = Memo::new(move |_| matches!(data.get(), Some(Ok((_, true)))));
 
-    // One signal for whichever Collapsible arm renders (Feed or Releases);
-    // owned here so poll-driven rebuilds keep the user's expand state. The
-    // Posts arm owns its own collapsed/tab state inside PostsBody.
+    // Widget UI state owned here — not inside the reactive `match` arm — so a
+    // poll refresh (which rebuilds that arm) keeps the user's expand choice and
+    // selected posts window instead of snapping back to defaults. `collapsed`
+    // serves whichever Collapsible arm renders; `posts_tab` is the Posts window.
     let collapsed = RwSignal::new(true);
+    let posts_tab = RwSignal::new(PostsTab::Day);
 
     view! {
         <section class=format!("widget widget-{kind}")>
@@ -305,7 +307,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                             .chain(&posts.last_week)
                             .map(|i| i.score),
                     );
-                    view! { <PostsBody posts anchor/> }.into_any()
+                    view! { <PostsBody posts anchor collapsed tab=posts_tab/> }.into_any()
                 }
                 Some(Ok((WidgetData::Releases { items }, _))) => {
                     let count = items.len();
@@ -372,15 +374,19 @@ fn posts_window(posts: &PostsData, tab: PostsTab) -> Vec<FeedItem> {
 }
 
 /// Body of a Posts (HN/lobsters) widget: the 24h/48h/Week tabs and the list
-/// they switch between. `tab` and a top-level `Memo` live in this
-/// component's owner scope so `tab.set` actually re-renders the list — when
-/// this lived in a closure nested inside the type-erased `match` arm the
-/// subscription was dropped and clicks did nothing. `collapsed` is owned
-/// here too so poll-driven rebuilds keep the user's expand choice.
+/// they switch between. `tab` is passed in from the parent so its value (and
+/// the expand state in `collapsed`) survive poll-driven rebuilds of this
+/// component. The top-level `Memo` below lives in this component's owner scope
+/// and subscribes to the passed-in `tab`, so `tab.set` actually re-renders the
+/// list — when this lived in a closure nested inside the type-erased `match`
+/// arm the subscription was dropped and clicks did nothing.
 #[component]
-fn PostsBody(posts: PostsData, anchor: Option<u64>) -> impl IntoView {
-    let collapsed = RwSignal::new(true);
-    let tab = RwSignal::new(PostsTab::Day);
+fn PostsBody(
+    posts: PostsData,
+    anchor: Option<u64>,
+    collapsed: RwSignal<bool>,
+    tab: RwSignal<PostsTab>,
+) -> impl IntoView {
     let shown = Memo::new(move |_| posts_window(&posts, tab.get()));
     view! {
         <div class="posts-tabs">
