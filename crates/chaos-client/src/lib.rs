@@ -114,6 +114,18 @@ impl ChaosClient {
         self.get(&format!("api/v1/posts/{}", source.as_str())).await
     }
 
+    /// A post's discussion thread (story header + sanitized comment tree) for
+    /// the in-app reader. Server-sanitized HTML online; the offline path uses
+    /// the direct plain-text parsers in [`posts`] instead.
+    pub async fn post_thread(
+        &self,
+        source: chaos_domain::Source,
+        id: &str,
+    ) -> Result<chaos_domain::PostThread> {
+        self.get(&format!("api/v1/posts/{}/{}/comments", source.as_str(), id))
+            .await
+    }
+
     /// Start/stop an on-demand service's systemd unit (services configured
     /// with a `unit`); returns the service with its re-checked status.
     pub async fn service_action(

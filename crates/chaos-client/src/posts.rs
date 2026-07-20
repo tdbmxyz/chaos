@@ -9,14 +9,17 @@
 //! The server has its own copy of this mapping in widgets/posts.rs — kept
 //! separate because the server must not depend on this crate.
 
-use chaos_domain::{FeedItem, PostsData};
+use chaos_domain::{Comment, FeedItem, PostThread, PostsData, strip_to_text};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use url::Url;
 
 use crate::http::http_get_json as get_json;
+use crate::http::http_get_text as get_text;
 
 const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
+const HN_ITEM_API: &str = "https://hn.algolia.com/api/v1/items/";
+const LOBSTERS_STORY: &str = "https://lobste.rs/s/";
 const ALGOLIA_SEARCH: &str = "https://hn.algolia.com/api/v1/search";
 const LOBSTERS_NEWEST: &str = "https://lobste.rs/newest.json";
 /// newest.json covers ~1.3 days per 25-story page; 10 pages safely spans a week.
@@ -175,6 +178,192 @@ fn lobsters_item(story: LobstersStory) -> FeedItem {
         comments_url: Some(discussion),
         id: Some(short_id),
     }
+}
+
+// ---- Direct comment-thread fetch (offline fallback, plain text) ----
+//
+// Mirrors the server's widgets/threads.rs tree-building, but every comment
+// body / self-text is flattened to PLAIN TEXT via `strip_to_text` instead of
+// `ammonia`-sanitized HTML — the offline path must never carry HTML into the
+// webview. Kept in lock-step with the server mapping (project policy keeps the
+// client/server parsers mirrored).
+
+#[derive(Deserialize)]
+struct HnThreadItem {
+    id: i64,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    points: Option<u64>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    created_at_i: Option<i64>,
+    #[serde(default)]
+    children: Vec<HnThreadItem>,
+}
+
+fn hn_ts(secs: Option<i64>) -> Option<DateTime<Utc>> {
+    secs.and_then(|t| DateTime::from_timestamp(t, 0))
+}
+
+fn hn_thread_comment(item: HnThreadItem) -> Comment {
+    Comment {
+        author: item.author,
+        html: strip_to_text(item.text.as_deref().unwrap_or_default()),
+        published: hn_ts(item.created_at_i),
+        children: item.children.into_iter().map(hn_thread_comment).collect(),
+    }
+}
+
+/// Parse Algolia's `/items/{id}` (nested tree) into a [`PostThread`] with
+/// plain-text bodies. Mirror of the server's `map_hn_item`.
+pub fn parse_hn_thread(json: &str) -> Result<PostThread, String> {
+    let root: HnThreadItem = serde_json::from_str(json).map_err(|e| format!("hn item: {e}"))?;
+    let id = root.id.to_string();
+    let comments_url = format!("{HN_ITEM}{id}").parse().ok();
+    let published = hn_ts(root.created_at_i);
+    let body = root
+        .text
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .map(strip_to_text);
+    let tree: Vec<Comment> = root.children.into_iter().map(hn_thread_comment).collect();
+    Ok(PostThread {
+        id,
+        title: root.title.unwrap_or_else(|| "(untitled)".into()),
+        url: root
+            .url
+            .filter(|u| !u.is_empty())
+            .and_then(|u| Url::parse(&u).ok()),
+        source: Some("Hacker News".into()),
+        published,
+        score: root.points,
+        comments: None,
+        comments_url,
+        body,
+        tree,
+    })
+}
+
+#[derive(Deserialize)]
+struct LobstersThreadStory {
+    short_id: String,
+    title: String,
+    #[serde(default)]
+    score: i64,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    comments_url: Option<Url>,
+    #[serde(default)]
+    created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    comment_count: Option<u64>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    comments: Vec<LobstersThreadComment>,
+}
+
+#[derive(Deserialize)]
+struct LobstersThreadComment {
+    #[serde(default)]
+    comment: String,
+    depth: usize,
+    #[serde(default)]
+    commenting_user: Option<String>,
+    #[serde(default)]
+    created_at: Option<DateTime<Utc>>,
+}
+
+/// Rebuild a tree from the flat, pre-ordered depth list. `depth` is 1-based;
+/// each item attaches under the last item seen at `depth - 1`. Mirror of the
+/// server's `lobsters_tree`, plain-text bodies.
+fn lobsters_thread_tree(comments: Vec<LobstersThreadComment>) -> Vec<Comment> {
+    let mut arena: Vec<Option<Comment>> = Vec::with_capacity(comments.len());
+    let mut children: Vec<Vec<usize>> = Vec::with_capacity(comments.len());
+    let mut roots: Vec<usize> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    for c in comments {
+        let idx = arena.len();
+        arena.push(Some(Comment {
+            author: c.commenting_user,
+            html: strip_to_text(&c.comment),
+            published: c.created_at,
+            children: Vec::new(),
+        }));
+        children.push(Vec::new());
+        let depth = c.depth.max(1);
+        stack.truncate(depth - 1);
+        match stack.last() {
+            Some(&parent) => children[parent].push(idx),
+            None => roots.push(idx),
+        }
+        stack.push(idx);
+    }
+    roots
+        .into_iter()
+        .map(|r| assemble(r, &mut arena, &children))
+        .collect()
+}
+
+fn assemble(idx: usize, arena: &mut Vec<Option<Comment>>, children: &[Vec<usize>]) -> Comment {
+    let mut node = arena[idx].take().expect("each node assembled once");
+    node.children = children[idx]
+        .iter()
+        .map(|&c| assemble(c, arena, children))
+        .collect();
+    node
+}
+
+/// Parse lobste.rs `/s/{id}.json` (flat depth list) into a [`PostThread`] with
+/// plain-text bodies. Mirror of the server's `map_lobsters_story`.
+pub fn parse_lobsters_thread(json: &str) -> Result<PostThread, String> {
+    let story: LobstersThreadStory =
+        serde_json::from_str(json).map_err(|e| format!("lobsters story: {e}"))?;
+    let body = story
+        .description
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .map(strip_to_text);
+    let comments_url = story
+        .comments_url
+        .clone()
+        .or_else(|| format!("{LOBSTERS_STORY}{}", story.short_id).parse().ok());
+    let tree = lobsters_thread_tree(story.comments);
+    Ok(PostThread {
+        id: story.short_id,
+        title: story.title,
+        url: Some(story.url)
+            .filter(|u| !u.is_empty())
+            .and_then(|u| Url::parse(&u).ok())
+            .or_else(|| comments_url.clone()),
+        source: Some("Lobsters".into()),
+        published: story.created_at,
+        score: u64::try_from(story.score).ok(),
+        comments: story.comment_count,
+        comments_url,
+        body,
+        tree,
+    })
+}
+
+/// Direct HN thread fetch via Algolia's item API (CORS `*`, works in browsers
+/// and shells alike). Mirrors `hacker_news`'s direct-access shape.
+pub async fn hacker_news_thread(http: &reqwest::Client, id: &str) -> Result<PostThread, String> {
+    let body = get_text(http, &format!("{HN_ITEM_API}{id}")).await?;
+    parse_hn_thread(&body)
+}
+
+/// Where a lobsters story's JSON lives (fetched by the caller — browsers need
+/// the Tauri HTTP plugin for lobste.rs). Mirrors `lobsters_page_url`.
+pub fn lobsters_thread_url(id: &str) -> String {
+    format!("{LOBSTERS_STORY}{id}.json")
 }
 
 #[cfg(test)]
@@ -351,6 +540,50 @@ mod tests {
         assert!(lobsters_page_done(&[aged(1), aged(WEEK_HOURS + 1)], now));
         // No date on the oldest story: stop rather than page forever.
         assert!(lobsters_page_done(&[aged(1), blank_item()], now));
+    }
+
+    #[test]
+    fn direct_hn_thread_is_plain_text() {
+        let json = r#"{"id":1,"title":"Story","points":10,"url":"https://x.io",
+          "author":"u","created_at_i":1700000000,
+          "children":[{"id":2,"author":"a","text":"<p>top</p>","created_at_i":1700000100,
+            "children":[{"id":3,"author":"b","text":"reply","created_at_i":1700000200,"children":[]}]}]}"#;
+        let t = parse_hn_thread(json).unwrap();
+        assert_eq!(t.title, "Story");
+        assert_eq!(t.tree.len(), 1);
+        assert_eq!(t.tree[0].children.len(), 1);
+        // <p> stripped to plain text, no HTML carried into the offline path.
+        assert_eq!(t.tree[0].html, "top");
+        assert!(!t.tree[0].html.contains('<'));
+        assert_eq!(t.tree[0].children[0].author.as_deref(), Some("b"));
+        assert_eq!(
+            t.comments_url.as_ref().map(Url::as_str),
+            Some("https://news.ycombinator.com/item?id=1")
+        );
+    }
+
+    #[test]
+    fn direct_lobsters_thread_is_plain_text_tree() {
+        let json = r#"{"short_id":"abc","title":"S","score":4,"url":"https://x.io",
+          "comments":[
+            {"comment":"<p>a &amp; b</p>","depth":1,"commenting_user":"u1","created_at":"2024-01-01T00:00:00Z"},
+            {"comment":"b","depth":2,"commenting_user":"u2","created_at":"2024-01-01T00:01:00Z"},
+            {"comment":"c","depth":1,"commenting_user":"u3","created_at":"2024-01-01T00:02:00Z"}]}"#;
+        let t = parse_lobsters_thread(json).unwrap();
+        assert_eq!(t.tree.len(), 2); // c1, c3 at top level
+        assert_eq!(t.tree[0].children.len(), 1); // c2 under c1
+        assert_eq!(t.tree[0].author.as_deref(), Some("u1"));
+        // Tags stripped, entities decoded — plain text, no `<`.
+        assert_eq!(t.tree[0].html, "a & b");
+        assert!(!t.tree[0].html.contains('<'));
+    }
+
+    #[test]
+    fn lobsters_thread_url_points_at_the_story_json() {
+        assert_eq!(
+            lobsters_thread_url("abc123"),
+            "https://lobste.rs/s/abc123.json"
+        );
     }
 
     #[test]
