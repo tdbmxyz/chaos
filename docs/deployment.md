@@ -221,7 +221,7 @@ Last 24h / 48h / Week tabs:
   the Algolia archive API at `hn.algolia.com` (one request per window,
   `tags=front_page`). The Firebase topstories API
   (`hacker-news.firebaseio.com`) is no longer called by anything.
-- **lobsters**: `lobste.rs/newest.json?page=N` pagination (up to 10
+- **lobsters**: `lobste.rs/newest/page/{N}.json` pagination (up to 10
   pages per refresh) instead of `hottest.json`, still behind the
   existing 10-minute cache.
 
