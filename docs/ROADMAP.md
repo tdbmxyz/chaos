@@ -148,10 +148,10 @@ cross-origin (bearer instead of the cookie).
       fresh leftovers
 - [x] Hacker News and lobsters feeds ordered by upvotes (score descending,
       scoreless items last) instead of the upstream endpoint's own ranking
-- [x] HN/lobsters time-window tabs: Last 24h / 48h / Week as DISTINCT top
-      lists — each the top-by-upvotes of its trailing window minus stories
-      already shown in a shorter tab, so no story repeats across tabs. HN
-      via the Algolia archive API (one weekly `tags=story`, `points>=50`
+- [x] HN/lobsters time-window tabs: Last 24h / 48h / Week — each the
+      top-by-upvotes of its whole trailing window (cumulative, so 48h/Week
+      include today's big stories mixed in by score), deduped and capped.
+      HN via the Algolia archive API (one weekly `tags=story`, `points>=50`
       query), lobsters via `newest/page/{N}.json` pagination (up to 10
       pages, deduped by id); offline, tabs keep working from the cached
       payload
