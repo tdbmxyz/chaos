@@ -309,6 +309,44 @@ impl Source {
     }
 }
 
+/// A post's discussion: the story header plus its comment tree, served by
+/// `GET /api/v1/posts/{source}/{id}/comments`. Comment bodies are
+/// server-sanitized HTML online, or plain text on the offline direct path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostThread {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<Url>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments_url: Option<Url>,
+    /// Sanitized self-text (Ask HN / story text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub tree: Vec<Comment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Comment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Sanitized HTML (server) or plain text (offline).
+    pub html: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub children: Vec<Comment>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseItem {
     /// `owner/name`.
@@ -367,6 +405,34 @@ mod tests {
         assert_eq!(Source::from_str("nope"), None);
         assert_eq!(Source::HackerNews.as_str(), "hackernews");
         assert_eq!(Source::Lobsters.as_str(), "lobsters");
+    }
+
+    #[test]
+    fn comment_tree_round_trips() {
+        let t = PostThread {
+            id: "1".into(),
+            title: "t".into(),
+            url: None,
+            source: None,
+            published: None,
+            score: Some(3),
+            comments: Some(1),
+            comments_url: None,
+            body: None,
+            tree: vec![Comment {
+                author: Some("a".into()),
+                html: "hi".into(),
+                published: None,
+                children: vec![Comment {
+                    author: None,
+                    html: "re".into(),
+                    published: None,
+                    children: vec![],
+                }],
+            }],
+        };
+        let s = serde_json::to_string(&t).unwrap();
+        assert_eq!(serde_json::from_str::<PostThread>(&s).unwrap(), t);
     }
 
     #[test]
