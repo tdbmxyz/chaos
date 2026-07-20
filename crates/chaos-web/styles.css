@@ -788,6 +788,79 @@ button.primary {
   opacity: 0.5;
 }
 
+/* ---- comment reader (/news/:source/:id) ---- */
+.reader-back {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+  color: var(--accent);
+}
+
+.reader-head {
+  margin-bottom: 0.8rem;
+}
+
+.reader-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.reader-title {
+  font-weight: 600;
+}
+
+.reader-favicon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-self: center;
+}
+
+.reader-selftext {
+  margin: 0.6rem 0;
+}
+
+.reader-tree {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
+}
+
+.comment {
+  list-style: none;
+}
+
+.comment-children {
+  list-style: none;
+  margin: 0 0 0 0.8rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+}
+
+.comment-head {
+  cursor: pointer;
+  user-select: none;
+}
+
+.comment-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.comment-badge {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.comment-body {
+  margin: 0.2rem 0 0.5rem;
+}
+
+.comment-body pre {
+  overflow-x: auto;
+}
+
 .feed-list {
   list-style: none;
   margin: 0;

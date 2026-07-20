@@ -660,12 +660,9 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     <Route path=path!("/") view=pages::Dashboard/>
                     <Route path=path!("/links") view=pages::Links/>
                     <Route path=path!("/news") view=pages::NewsPage/>
-                    // Temporary stub: the reader route lands in Plan C. Kept so a
-                    // title tap resolves instead of hitting the router fallback.
-                    <Route
-                        path=path!("/news/:source/:id")
-                        view=|| view! { <p class="muted">"Reader coming soon"</p> }
-                    />
+                    // The static `/news` route above wins over this param route
+                    // in leptos_router, so the list page is never shadowed.
+                    <Route path=path!("/news/:source/:id") view=pages::PostReader/>
                     <Route path=path!("/calendar") view=pages::CalendarPage/>
                     <Route path=path!("/weather") view=pages::WeatherPage/>
                     <Route path=path!("/home") view=pages::HomePage/>

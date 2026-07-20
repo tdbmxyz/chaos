@@ -920,7 +920,7 @@ pub(crate) fn score_anchor(scores: impl IntoIterator<Item = Option<u64>>) -> Opt
 /// [`HEAT_STOPS`]. The logarithmic normalization spreads the clustered
 /// mid-range scores apart instead of clumping them at the faint end.
 /// Anchor 0 (guarding the division) renders the faint end.
-fn score_color(score: u64, anchor: u64) -> String {
+pub(crate) fn score_color(score: u64, anchor: u64) -> String {
     let t = if anchor == 0 {
         0.0
     } else {
@@ -1161,7 +1161,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn rel_time(when: DateTime<Utc>) -> String {
+pub(crate) fn rel_time(when: DateTime<Utc>) -> String {
     let minutes = (Utc::now() - when).num_minutes().max(0);
     match minutes {
         0..60 => format!("{minutes}m"),

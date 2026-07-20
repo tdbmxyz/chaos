@@ -6,6 +6,7 @@ mod links;
 mod login;
 mod more;
 mod news;
+mod reader;
 mod settings;
 mod weather;
 
@@ -17,5 +18,6 @@ pub use links::Links;
 pub use login::Login;
 pub use more::MorePage;
 pub use news::NewsPage;
+pub use reader::PostReader;
 pub use settings::Settings;
 pub use weather::WeatherPage;
