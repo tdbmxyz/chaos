@@ -18,6 +18,21 @@ pub async fn widget_data(
     state.widgets.data(&id).await.map(Json).map_err(Into::into)
 }
 
+/// Standalone posts feed for the `/news` page, keyed by source
+/// (`hackernews`/`lobsters`). Unknown sources 404.
+pub async fn posts_list(
+    State(state): State<AppState>,
+    Path(source): Path<String>,
+) -> Result<Json<WidgetData>, ApiError> {
+    let source = chaos_domain::Source::from_str(&source).ok_or(ApiError::NotFound)?;
+    state
+        .widgets
+        .posts_list(source)
+        .await
+        .map(Json)
+        .map_err(Into::into)
+}
+
 pub async fn widget_systemd(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -29,4 +44,22 @@ pub async fn widget_systemd(
         .await
         .map(Json)
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::Config;
+    use crate::db::Db;
+
+    #[tokio::test]
+    async fn posts_list_unknown_source_is_404() {
+        let db = Db::in_memory().await.unwrap();
+        let state = AppState::new(Config::default(), db).unwrap();
+        let err = posts_list(State(state), Path("nope".into()))
+            .await
+            .expect_err("unknown source must be rejected");
+        assert!(matches!(err, ApiError::NotFound));
+    }
 }

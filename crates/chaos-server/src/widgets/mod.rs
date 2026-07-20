@@ -31,6 +31,10 @@ use crate::config::{ColumnConfig, Config};
 /// Cap on cache growth. Generous for any real dashboard.
 const WIDGET_CACHE_ENTRIES: usize = 512;
 
+/// How many posts the standalone news endpoint fetches per window (larger
+/// than the dashboard widget default: the `/news` page is the full reader).
+pub const NEWS_LIMIT: u32 = 50;
+
 /// Resolved widget instances plus their payload caches. One per process,
 /// shared via `AppState`.
 pub struct WidgetHub {
@@ -80,6 +84,26 @@ impl WidgetHub {
         let ttl = ttl(widget);
         self.cached_fetch(id.to_string(), ttl, self.fetch(widget))
             .await
+    }
+
+    /// Posts (HN/lobsters) for the standalone `/news` page, independent of
+    /// any configured widget. Cached per source with the same staleness
+    /// rules as the posts widgets (300s TTL).
+    pub async fn posts_list(
+        &self,
+        source: chaos_domain::Source,
+    ) -> Result<WidgetData, WidgetError> {
+        use chaos_domain::Source;
+        let key = format!("posts:{}", source.as_str());
+        let ttl = Duration::from_secs(300);
+        let now = chrono::Utc::now();
+        let fetch = async {
+            match source {
+                Source::HackerNews => posts::hacker_news(&self.http, NEWS_LIMIT, now).await,
+                Source::Lobsters => posts::lobsters(&self.http, NEWS_LIMIT, now).await,
+            }
+        };
+        self.cached_fetch(key, ttl, fetch).await
     }
 
     /// Fetch-through-cache with the hub's staleness rules: serve a cached

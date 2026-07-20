@@ -39,6 +39,7 @@ struct AlgoliaHit {
 
 #[derive(Deserialize)]
 struct LobstersStory {
+    short_id: String,
     title: String,
     url: String,
     score: i64,
@@ -71,7 +72,7 @@ fn algolia_item(hit: AlgoliaHit) -> FeedItem {
         score: hit.points,
         comments: hit.num_comments,
         comments_url: discussion,
-        id: None,
+        id: Some(hit.object_id.clone()),
     }
 }
 
@@ -155,6 +156,7 @@ pub async fn lobsters(
 
 fn lobsters_item(story: LobstersStory) -> FeedItem {
     let discussion = story.comments_url;
+    let short_id = story.short_id;
     FeedItem {
         title: story.title,
         // Text posts have an empty url; point at the discussion instead.
@@ -167,7 +169,7 @@ fn lobsters_item(story: LobstersStory) -> FeedItem {
         score: u64::try_from(story.score).ok(),
         comments: Some(story.comment_count),
         comments_url: Some(discussion),
-        id: None,
+        id: Some(short_id),
     }
 }
 
@@ -286,6 +288,18 @@ mod tests {
             item.comments_url.unwrap().as_str(),
             "https://lobste.rs/s/abc123/a_story"
         );
+    }
+
+    #[test]
+    fn mapped_items_carry_a_non_empty_id() {
+        let raw_hn = r#"{"title":"t","url":null,"points":1,"num_comments":0,"created_at_i":1783300000,"objectID":"9876"}"#;
+        let hn = algolia_item(serde_json::from_str(raw_hn).expect("parse"));
+        assert_eq!(hn.id.as_deref(), Some("9876"));
+        let raw_lob = r#"{"short_id":"abc123","title":"A","url":"https://e.org","score":1,"comment_count":0,"comments_url":"https://lobste.rs/s/abc123","created_at":"2026-07-06T01:02:03Z"}"#;
+        let lob = lobsters_item(serde_json::from_str(raw_lob).expect("parse"));
+        assert_eq!(lob.id.as_deref(), Some("abc123"));
+        assert!(hn.id.is_some_and(|id| !id.is_empty()));
+        assert!(lob.id.is_some_and(|id| !id.is_empty()));
     }
 
     #[test]
