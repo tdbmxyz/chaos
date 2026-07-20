@@ -45,6 +45,7 @@ pub fn router(state: AppState) -> Router {
         .route("/widgets/{id}", get(widgets::widget_data))
         .route("/widgets/{id}/systemd", post(widgets::widget_systemd))
         .route("/posts/{source}", get(widgets::posts_list))
+        .route("/posts/{source}/{id}/comments", get(widgets::post_thread))
         .route("/home/sensors", get(home::sensors))
         .route("/home/lights", get(home::lights))
         .route("/home/lights/{id}", post(home::set_light))

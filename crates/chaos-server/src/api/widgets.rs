@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use chaos_domain::{DashboardLayout, SystemdActionRequest, WidgetData};
+use chaos_domain::{DashboardLayout, PostThread, SystemdActionRequest, WidgetData};
 
 use crate::api::ApiError;
 use crate::state::AppState;
@@ -33,6 +33,21 @@ pub async fn posts_list(
         .map_err(Into::into)
 }
 
+/// Comment thread for one post (`source` + provider id), served by the
+/// reader. Unknown sources 404.
+pub async fn post_thread(
+    State(state): State<AppState>,
+    Path((source, id)): Path<(String, String)>,
+) -> Result<Json<PostThread>, ApiError> {
+    let source = chaos_domain::Source::from_str(&source).ok_or(ApiError::NotFound)?;
+    state
+        .widgets
+        .post_thread(source, &id)
+        .await
+        .map(Json)
+        .map_err(Into::into)
+}
+
 pub async fn widget_systemd(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -58,6 +73,16 @@ mod tests {
         let db = Db::in_memory().await.unwrap();
         let state = AppState::new(Config::default(), db).unwrap();
         let err = posts_list(State(state), Path("nope".into()))
+            .await
+            .expect_err("unknown source must be rejected");
+        assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn thread_unknown_source_is_404() {
+        let db = Db::in_memory().await.unwrap();
+        let state = AppState::new(Config::default(), db).unwrap();
+        let err = post_thread(State(state), Path(("nope".into(), "1".into())))
             .await
             .expect_err("unknown source must be rejected");
         assert!(matches!(err, ApiError::NotFound));
