@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use chaos_client::ClientError;
+use chaos_client::{ChaosClient, ClientError};
 use chaos_domain::{
     BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, PostsData, ServerStats,
-    SystemdAction, SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData,
-    WidgetInstance,
+    Source, SystemdAction, SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget,
+    WidgetData, WidgetInstance,
 };
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use leptos::prelude::*;
@@ -238,6 +238,13 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => None,
     };
 
+    // Which provider a Posts payload belongs to, so its rows can link to the
+    // matching reader/favicon. Only HN/lobsters widgets yield `WidgetData::Posts`.
+    let posts_source = match &widget {
+        Widget::Lobsters { .. } => Source::Lobsters,
+        _ => Source::HackerNews,
+    };
+
     let conn = crate::offline::use_connectivity();
     // `poll_offline: direct.is_some()` — the direct-capable widgets keep
     // their cadence while the server is unreachable; the others pause.
@@ -307,7 +314,10 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                             .chain(&posts.last_week)
                             .map(|i| i.score),
                     );
-                    view! { <PostsBody posts anchor collapsed tab=posts_tab/> }.into_any()
+                    let source = posts_source;
+                    let client = client.clone();
+                    view! { <PostsBody posts anchor collapsed tab=posts_tab source client/> }
+                        .into_any()
                 }
                 Some(Ok((WidgetData::Releases { items }, _))) => {
                     let count = items.len();
@@ -386,6 +396,8 @@ fn PostsBody(
     anchor: Option<u64>,
     collapsed: RwSignal<bool>,
     tab: RwSignal<PostsTab>,
+    source: Source,
+    client: ChaosClient,
 ) -> impl IntoView {
     let shown = Memo::new(move |_| posts_window(&posts, tab.get()));
     view! {
@@ -405,12 +417,13 @@ fn PostsBody(
         {move || {
             let items = shown.get();
             let count = items.len();
+            let client = client.clone();
             view! {
                 <Collapsible count collapsed>
                     <ul class="feed-list">
                         {items
                             .into_iter()
-                            .map(|item| feed_item_view(item, anchor))
+                            .map(|item| post_row_view(item, anchor, source, client.clone()))
                             .collect_view()}
                     </ul>
                 </Collapsible>
@@ -934,6 +947,110 @@ fn feed_item_view(item: FeedItem, anchor: Option<u64>) -> impl IntoView {
     }
 }
 
+/// The `fav:` icon-proxy spec for a posts row: the article host when there
+/// is a link, else the provider's own host (so Ask-HN/self posts still get a
+/// recognizable favicon rather than a blank).
+fn favicon_spec(item: &FeedItem, source: Source) -> String {
+    let host = item
+        .url
+        .as_ref()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| {
+            match source {
+                Source::HackerNews => "news.ycombinator.com",
+                Source::Lobsters => "lobste.rs",
+            }
+            .to_owned()
+        });
+    format!("fav:{host}")
+}
+
+/// A rich posts row for the news page and the dashboard aggregator widgets:
+/// the title opens the in-app reader (`/news/{source}/{id}`), and a favicon on
+/// the right links out to the article itself. When the item carries no reader
+/// id (shouldn't happen for HN/lobsters, but keeps the row alive) the title
+/// falls back to the external article/discussion link so it is never dead.
+/// A broken favicon `<img>` hides itself; CSS then shows a neutral glyph.
+fn post_row_view(
+    item: FeedItem,
+    anchor: Option<u64>,
+    source: Source,
+    client: ChaosClient,
+) -> impl IntoView {
+    let fav_url = client
+        .icon_url(&favicon_spec(&item, source))
+        .map(|u| u.to_string())
+        .unwrap_or_default();
+    // The favicon always points at the article (or the discussion when there
+    // is no article), opening outside the app.
+    let fav_href = item
+        .url
+        .as_ref()
+        .or(item.comments_url.as_ref())
+        .map(|u| u.to_string())
+        .unwrap_or_default();
+    // The title prefers the in-app reader; without an id it links the article
+    // (external) so the row still does something.
+    let reader_href = item
+        .id
+        .as_ref()
+        .map(|id| format!("/news/{}/{}", source.as_str(), id));
+    let external_href = item
+        .url
+        .as_ref()
+        .or(item.comments_url.as_ref())
+        .map(|u| u.to_string())
+        .unwrap_or_default();
+    let score = item.score.map(|score| format!("▲ {score}"));
+    let score_style = match (item.score, anchor) {
+        (Some(score), Some(anchor)) => Some(score_color(score, anchor)),
+        _ => None,
+    };
+    let comments = item
+        .comments
+        .map(|n| format!("{n} comment{}", if n == 1 { "" } else { "s" }));
+    let age = item.published.map(rel_time);
+    let title = item.title.clone();
+
+    let title_link = match reader_href {
+        // Internal reader route: normal SPA navigation.
+        Some(href) => view! { <a class="post-title" href=href>{title}</a> }.into_any(),
+        // No reader id: link the article, opening out of the app.
+        None => view! {
+            <a class="post-title" href=external_href target="_blank" rel="noreferrer">{title}</a>
+        }
+        .into_any(),
+    };
+
+    view! {
+        <li class="post-row">
+            <div class="post-main">
+                {title_link}
+                <span class="muted feed-meta">
+                    <span class="feed-score" style:color=score_style>{score}</span>
+                    <span class="feed-comments">{comments}</span>
+                    <span class="feed-age">{age}</span>
+                </span>
+            </div>
+            <a class="post-favicon" href=fav_href target="_blank" rel="noreferrer">
+                <img
+                    src=fav_url
+                    alt=""
+                    loading="lazy"
+                    on:error=|ev| {
+                        use leptos::wasm_bindgen::JsCast;
+                        if let Some(target) = ev.target()
+                            && let Ok(el) = target.dyn_into::<web_sys::Element>()
+                        {
+                            el.set_class_name("hidden");
+                        }
+                    }
+                />
+            </a>
+        </li>
+    }
+}
+
 /// Tiny history graph (values normalized to 0..=1, oldest first). Drawn as
 /// an area + line in a stretched SVG so it costs nothing to render.
 #[component]
@@ -1176,6 +1293,43 @@ mod tests {
             green(&score_color(181, 2146)) < 150,
             "low score must reach the orange/red band under the log scale"
         );
+    }
+
+    // -- favicon_spec: article host, or the provider's host as a fallback --
+
+    #[test]
+    fn favicon_spec_uses_article_host() {
+        let item = FeedItem {
+            title: "t".into(),
+            url: Some("https://example.com/a".parse().unwrap()),
+            source: Some("Hacker News".into()),
+            published: None,
+            score: Some(5),
+            comments: None,
+            comments_url: None,
+            id: Some("1".into()),
+        };
+        assert_eq!(favicon_spec(&item, Source::HackerNews), "fav:example.com");
+    }
+
+    #[test]
+    fn favicon_spec_falls_back_to_source_host() {
+        let item = FeedItem {
+            title: "Ask HN".into(),
+            url: None,
+            source: Some("Hacker News".into()),
+            published: None,
+            score: Some(5),
+            comments: None,
+            comments_url: None,
+            id: Some("1".into()),
+        };
+        assert_eq!(
+            favicon_spec(&item, Source::HackerNews),
+            "fav:news.ycombinator.com"
+        );
+        let lob = FeedItem { url: None, ..item };
+        assert_eq!(favicon_spec(&lob, Source::Lobsters), "fav:lobste.rs");
     }
 
     // -- posts_window: tab selects the matching trailing window ------------

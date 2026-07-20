@@ -721,6 +721,49 @@ button.primary {
   background: var(--surface);
 }
 
+/* Posts rows (news page + HN/lobsters widgets): a title + meta block on the
+   left and the article's favicon on the right, linking out. */
+.post-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.post-row .post-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.post-favicon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.post-favicon img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+.post-favicon img.hidden {
+  display: none;
+}
+
+/* Broken or missing favicon → a neutral link glyph so the row stays aligned. */
+.post-favicon:has(img.hidden)::after,
+.post-favicon:not(:has(img))::after {
+  content: "🔗";
+  font-size: 13px;
+  opacity: 0.5;
+}
+
 .feed-list {
   list-style: none;
   margin: 0;
