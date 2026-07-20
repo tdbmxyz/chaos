@@ -217,10 +217,11 @@ places in different timezones line up by real instant.
 If the host filters egress, note the widget upstreams changed with the
 Last 24h / 48h / Week tabs:
 
-- **Hacker News**: the server (and clients fetching directly) now query
-  the Algolia archive API at `hn.algolia.com` (one request per window,
-  `tags=front_page`). The Firebase topstories API
-  (`hacker-news.firebaseio.com`) is no longer called by anything.
+- **Hacker News**: the server (and clients fetching directly) query the
+  Algolia archive API at `hn.algolia.com` — one request for the whole week
+  (`tags=story`, `points>=50`), split client-side into the three distinct
+  tabs. The Firebase topstories API (`hacker-news.firebaseio.com`) is no
+  longer called by anything.
 - **lobsters**: `lobste.rs/newest/page/{N}.json` pagination (up to 10
   pages per refresh) instead of `hottest.json`, still behind the
   existing 10-minute cache.

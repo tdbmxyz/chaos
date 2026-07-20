@@ -16,6 +16,11 @@ use crate::http_util::get_json;
 
 const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
 const ALGOLIA_SEARCH: &str = "https://hn.algolia.com/api/v1/search";
+/// Only count stories that cleared this many upvotes — a "notable story" floor
+/// that replaces the sparse, bursty `front_page` tag (which left the 24-48h tab
+/// empty and even missed the week's biggest stories). Stories above it are
+/// plentiful and evenly spread across the week.
+const HN_MIN_POINTS: u32 = 50;
 /// Base for the paginated newest feed. The page number goes in the PATH
 /// (`/newest/page/{n}.json`) — the `?page=` query form is silently ignored by
 /// lobste.rs and returns page 1 every time, which floods every window with
@@ -80,29 +85,39 @@ fn algolia_item(hit: AlgoliaHit) -> FeedItem {
     }
 }
 
-/// Drop later duplicates that share an `id`, keeping the first (after sorting,
-/// the highest-scored copy). Items without an id are always kept. Defends
-/// against the same story arriving on more than one fetched page.
-fn dedup_by_id(items: &mut Vec<FeedItem>) {
-    let mut seen = std::collections::HashSet::new();
-    items.retain(|i| match &i.id {
-        Some(id) => seen.insert(id.clone()),
-        None => true,
-    });
-}
-
-/// Items published within the trailing `hours`, by upvotes, deduped, top `limit`.
-fn windowed(items: &[FeedItem], now: DateTime<Utc>, hours: i64, limit: u32) -> Vec<FeedItem> {
-    let cutoff = now - chrono::Duration::hours(hours);
-    let mut hits: Vec<FeedItem> = items
-        .iter()
-        .filter(|i| i.published.is_some_and(|p| p >= cutoff))
-        .cloned()
-        .collect();
-    sort_by_score(&mut hits);
-    dedup_by_id(&mut hits);
-    hits.truncate(limit as usize);
-    hits
+/// The three tabs as DISTINCT top lists: each is the top-by-upvotes of its
+/// trailing window (24h / 48h / week), minus any story already shown in a
+/// shorter window, so nothing repeats across tabs. Computed shortest-first;
+/// `limit` caps each window after de-overlapping. Same-id duplicates within a
+/// window (e.g. a story fetched on two pages) collapse to the highest-scored
+/// copy.
+fn distinct_windows(
+    items: &[FeedItem],
+    now: DateTime<Utc>,
+    limit: u32,
+) -> (Vec<FeedItem>, Vec<FeedItem>, Vec<FeedItem>) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut bucket = |hours: i64| -> Vec<FeedItem> {
+        let cutoff = now - chrono::Duration::hours(hours);
+        let mut hits: Vec<FeedItem> = items
+            .iter()
+            .filter(|i| i.published.is_some_and(|p| p >= cutoff))
+            .filter(|i| i.id.as_ref().is_none_or(|id| !seen.contains(id)))
+            .cloned()
+            .collect();
+        sort_by_score(&mut hits);
+        let mut here: std::collections::HashSet<String> = std::collections::HashSet::new();
+        hits.retain(|i| i.id.as_ref().is_none_or(|id| here.insert(id.clone())));
+        hits.truncate(limit as usize);
+        for id in hits.iter().filter_map(|i| i.id.clone()) {
+            seen.insert(id);
+        }
+        hits
+    };
+    let w24 = bucket(24);
+    let w48 = bucket(48);
+    let wweek = bucket(WEEK_HOURS);
+    (w24, w48, wweek)
 }
 
 pub async fn hacker_news(
@@ -110,22 +125,18 @@ pub async fn hacker_news(
     limit: u32,
     now: DateTime<Utc>,
 ) -> Result<WidgetData, String> {
-    // One archive query per window: relevance-ranked top-50 among stories
-    // that made the front page in the window; re-sorted by points below.
-    let window = |hours: i64| async move {
-        let cutoff = (now - chrono::Duration::hours(hours)).timestamp();
-        let url = format!(
-            "{ALGOLIA_SEARCH}?tags=front_page&numericFilters=created_at_i>{cutoff}&hitsPerPage=50"
-        );
-        let resp: AlgoliaResponse = get_json(http, &url)
-            .await
-            .map_err(|e| format!("hn algolia: {e}"))?;
-        let items: Vec<FeedItem> = resp.hits.into_iter().map(algolia_item).collect();
-        Ok::<_, String>(windowed(&items, now, hours, limit))
-    };
-    let (last_24h, last_48h, last_week) =
-        futures::try_join!(window(24), window(48), window(WEEK_HOURS))?;
-    if last_week.is_empty() {
+    // Every notable story (>= HN_MIN_POINTS) in the past week, then split into
+    // the three distinct tabs by time + upvotes.
+    let cutoff = (now - chrono::Duration::hours(WEEK_HOURS)).timestamp();
+    let url = format!(
+        "{ALGOLIA_SEARCH}?tags=story&numericFilters=created_at_i>{cutoff},points>={HN_MIN_POINTS}&hitsPerPage=1000"
+    );
+    let resp: AlgoliaResponse = get_json(http, &url)
+        .await
+        .map_err(|e| format!("hn algolia: {e}"))?;
+    let items: Vec<FeedItem> = resp.hits.into_iter().map(algolia_item).collect();
+    let (last_24h, last_48h, last_week) = distinct_windows(&items, now, limit);
+    if last_24h.is_empty() && last_48h.is_empty() && last_week.is_empty() {
         return Err("no stories returned".into());
     }
     Ok(WidgetData::Posts(PostsData {
@@ -164,10 +175,11 @@ pub async fn lobsters(
     if items.is_empty() {
         return Err("no stories returned".into());
     }
+    let (last_24h, last_48h, last_week) = distinct_windows(&items, now, limit);
     Ok(WidgetData::Posts(PostsData {
-        last_24h: windowed(&items, now, 24, limit),
-        last_48h: windowed(&items, now, 48, limit),
-        last_week: windowed(&items, now, WEEK_HOURS, limit),
+        last_24h,
+        last_48h,
+        last_week,
     }))
 }
 
@@ -256,66 +268,45 @@ mod tests {
     }
 
     #[test]
-    fn windowed_filters_sorts_and_truncates() {
+    fn distinct_windows_are_disjoint_top_lists() {
         let now = Utc::now();
-        let aged = |hours: i64, score: u64, title: &str| FeedItem {
-            title: title.into(),
+        let s = |hours: i64, score: u64, id: &str| FeedItem {
+            title: id.into(),
             published: Some(now - chrono::Duration::hours(hours)),
             score: Some(score),
+            id: Some(id.into()),
             ..blank_item()
         };
         let items = vec![
-            aged(1, 5, "fresh"),
-            aged(30, 50, "yesterday"),
-            aged(24 * 6, 9, "last week"),
-            aged(24 * 9, 99, "too old"),
-            FeedItem {
-                title: "undated".into(),
-                score: Some(100),
-                ..blank_item()
-            },
+            s(1, 500, "a"),        // in the last 24h
+            s(2, 100, "b"),        // in the last 24h
+            s(30, 400, "c"),       // 24-48h old
+            s(24 * 5, 300, "d"),   // within the week
+            s(24 * 9, 999, "old"), // older than a week — excluded everywhere
         ];
-        let titles = |window: Vec<FeedItem>| -> Vec<String> {
-            window.into_iter().map(|i| i.title).collect()
-        };
-        assert_eq!(titles(windowed(&items, now, 24, 10)), ["fresh"]);
-        assert_eq!(
-            titles(windowed(&items, now, 48, 10)),
-            ["yesterday", "fresh"]
-        );
-        // The 9-day-old and unpublished items never qualify.
-        assert_eq!(
-            titles(windowed(&items, now, WEEK_HOURS, 10)),
-            ["yesterday", "last week", "fresh"]
-        );
-        assert_eq!(
-            titles(windowed(&items, now, WEEK_HOURS, 2)),
-            ["yesterday", "last week"]
-        );
+        let ids = |w: Vec<FeedItem>| -> Vec<String> { w.into_iter().map(|i| i.title).collect() };
+        let (w24, w48, wk) = distinct_windows(&items, now, 10);
+        assert_eq!(ids(w24), ["a", "b"]); // top of last 24h by score
+        assert_eq!(ids(w48), ["c"]); // top of last 48h, minus the 24h items
+        assert_eq!(ids(wk), ["d"]); // top of the week, minus the shorter tabs
     }
 
     #[test]
-    fn windowed_dedups_by_id_keeping_the_best() {
+    fn distinct_windows_dedup_and_truncate() {
         let now = Utc::now();
-        let dup = |score: u64, id: &str, title: &str| FeedItem {
-            title: title.into(),
+        let s = |score: u64, id: &str| FeedItem {
+            title: id.into(),
             published: Some(now - chrono::Duration::hours(1)),
             score: Some(score),
             id: Some(id.into()),
             ..blank_item()
         };
-        // The same story arriving on two pages, plus a distinct one.
-        let items = vec![
-            dup(10, "abc", "abc low copy"),
-            dup(42, "abc", "abc high copy"),
-            dup(30, "xyz", "other"),
-        ];
-        let titles: Vec<String> = windowed(&items, now, 24, 10)
-            .into_iter()
-            .map(|i| i.title)
-            .collect();
-        // One row per id; the higher-scored copy of `abc` is the survivor.
-        assert_eq!(titles, ["abc high copy", "other"]);
+        // `abc` arrives twice (two pages); limit of 2 caps the window.
+        let items = vec![s(10, "abc"), s(42, "abc"), s(30, "xyz"), s(20, "def")];
+        let (w24, _, _) = distinct_windows(&items, now, 2);
+        let titles: Vec<String> = w24.into_iter().map(|i| i.title).collect();
+        // One row per id (highest-scored `abc` kept), truncated to 2 by score.
+        assert_eq!(titles, ["abc", "xyz"]);
     }
 
     #[test]
