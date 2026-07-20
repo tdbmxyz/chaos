@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use chaos_client::ClientError;
 use chaos_domain::{
-    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, ServerStats, SystemdAction,
-    SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
+    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, PostsData, ServerStats,
+    SystemdAction, SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData,
+    WidgetInstance,
 };
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use leptos::prelude::*;
@@ -263,11 +264,10 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     // Serving from the local cache gets a small "· cached" hint by the title.
     let stale = Memo::new(move |_| matches!(data.get(), Some(Ok((_, true)))));
 
-    // One signal for whichever Collapsible arm renders (Feed, Posts or
-    // Releases); owned here so poll-driven rebuilds keep the user's expand
-    // state. Same story for the Posts time-window tab.
+    // One signal for whichever Collapsible arm renders (Feed or Releases);
+    // owned here so poll-driven rebuilds keep the user's expand state. The
+    // Posts arm owns its own collapsed/tab state inside PostsBody.
     let collapsed = RwSignal::new(true);
-    let tab = RwSignal::new(PostsTab::Day);
 
     view! {
         <section class=format!("widget widget-{kind}")>
@@ -305,45 +305,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                             .chain(&posts.last_week)
                             .map(|i| i.score),
                     );
-                    let items = move |t: PostsTab| match t {
-                        PostsTab::Day => posts.last_24h.clone(),
-                        PostsTab::TwoDays => posts.last_48h.clone(),
-                        PostsTab::Week => posts.last_week.clone(),
-                    };
-                    view! {
-                        <div class="posts-tabs">
-                            {[
-                                (PostsTab::Day, "24h"),
-                                (PostsTab::TwoDays, "48h"),
-                                (PostsTab::Week, "Week"),
-                            ]
-                                .map(|(t, label)| {
-                                    view! {
-                                        <button
-                                            class:active=move || tab.get() == t
-                                            on:click=move |_| tab.set(t)
-                                        >
-                                            {label}
-                                        </button>
-                                    }
-                                })}
-                        </div>
-                        {move || {
-                            let items = items(tab.get());
-                            let count = items.len();
-                            view! {
-                                <Collapsible count collapsed>
-                                    <ul class="feed-list">
-                                        {items
-                                            .into_iter()
-                                            .map(|item| feed_item_view(item, anchor))
-                                            .collect_view()}
-                                    </ul>
-                                </Collapsible>
-                            }
-                        }}
-                    }
-                        .into_any()
+                    view! { <PostsBody posts anchor/> }.into_any()
                 }
                 Some(Ok((WidgetData::Releases { items }, _))) => {
                     let count = items.len();
@@ -397,6 +359,58 @@ enum PostsTab {
     Day,
     TwoDays,
     Week,
+}
+
+/// The list shown for a tab. Pure selection over the pre-computed windows,
+/// pulled out of the view so it can be unit-tested.
+fn posts_window(posts: &PostsData, tab: PostsTab) -> Vec<FeedItem> {
+    match tab {
+        PostsTab::Day => posts.last_24h.clone(),
+        PostsTab::TwoDays => posts.last_48h.clone(),
+        PostsTab::Week => posts.last_week.clone(),
+    }
+}
+
+/// Body of a Posts (HN/lobsters) widget: the 24h/48h/Week tabs and the list
+/// they switch between. `tab` and a top-level `Memo` live in this
+/// component's owner scope so `tab.set` actually re-renders the list — when
+/// this lived in a closure nested inside the type-erased `match` arm the
+/// subscription was dropped and clicks did nothing. `collapsed` is owned
+/// here too so poll-driven rebuilds keep the user's expand choice.
+#[component]
+fn PostsBody(posts: PostsData, anchor: Option<u64>) -> impl IntoView {
+    let collapsed = RwSignal::new(true);
+    let tab = RwSignal::new(PostsTab::Day);
+    let shown = Memo::new(move |_| posts_window(&posts, tab.get()));
+    view! {
+        <div class="posts-tabs">
+            {[(PostsTab::Day, "24h"), (PostsTab::TwoDays, "48h"), (PostsTab::Week, "Week")]
+                .map(|(t, label)| {
+                    view! {
+                        <button
+                            class:active=move || tab.get() == t
+                            on:click=move |_| tab.set(t)
+                        >
+                            {label}
+                        </button>
+                    }
+                })}
+        </div>
+        {move || {
+            let items = shown.get();
+            let count = items.len();
+            view! {
+                <Collapsible count collapsed>
+                    <ul class="feed-list">
+                        {items
+                            .into_iter()
+                            .map(|item| feed_item_view(item, anchor))
+                            .collect_view()}
+                    </ul>
+                </Collapsible>
+            }
+        }}
+    }
 }
 
 /// A feed the client can fetch without the chaos server. Only consulted
@@ -1143,6 +1157,29 @@ mod tests {
     #[test]
     fn log_scale_zero_anchor_is_faint() {
         assert_eq!(score_color(0, 0), "#e8d288");
+    }
+
+    // -- posts_window: tab selects the matching trailing window ------------
+
+    #[test]
+    fn posts_window_selects_by_tab() {
+        let mk = |title: &str| FeedItem {
+            title: title.into(),
+            url: None,
+            source: None,
+            published: None,
+            score: None,
+            comments: None,
+            comments_url: None,
+        };
+        let posts = PostsData {
+            last_24h: vec![mk("a")],
+            last_48h: vec![mk("a"), mk("b")],
+            last_week: vec![mk("a"), mk("b"), mk("c")],
+        };
+        assert_eq!(posts_window(&posts, PostsTab::Day).len(), 1);
+        assert_eq!(posts_window(&posts, PostsTab::TwoDays).len(), 2);
+        assert_eq!(posts_window(&posts, PostsTab::Week).len(), 3);
     }
 }
 
