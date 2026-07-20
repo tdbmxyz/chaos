@@ -693,6 +693,30 @@ button.primary {
 /* feeds & releases */
 
 /* HN/lobsters time-window tab strip (24h / 48h / Week) */
+/* News page source switch (HN / lobste.rs): the primary control, so a touch
+   larger and full-width than the smaller in-widget range tabs below it. */
+.news-sources {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.news-sources button {
+  flex: 1;
+  padding: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.news-sources button:hover,
+.news-sources button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .posts-tabs {
   display: flex;
   gap: 0.3rem;
@@ -719,6 +743,122 @@ button.primary {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--surface);
+}
+
+/* Posts rows (news page + HN/lobsters widgets): a title + meta block on the
+   left and the article's favicon on the right, linking out. */
+.post-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.post-row .post-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.post-favicon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.post-favicon img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+.post-favicon img.hidden {
+  display: none;
+}
+
+/* Broken or missing favicon → a neutral link glyph so the row stays aligned. */
+.post-favicon:has(img.hidden)::after,
+.post-favicon:not(:has(img))::after {
+  content: "🔗";
+  font-size: 13px;
+  opacity: 0.5;
+}
+
+/* ---- comment reader (/news/:source/:id) ---- */
+.reader-back {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+  color: var(--accent);
+}
+
+.reader-head {
+  margin-bottom: 0.8rem;
+}
+
+.reader-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.reader-title {
+  font-weight: 600;
+}
+
+.reader-favicon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-self: center;
+}
+
+.reader-selftext {
+  margin: 0.6rem 0;
+}
+
+.reader-tree {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
+}
+
+.comment {
+  list-style: none;
+}
+
+.comment-children {
+  list-style: none;
+  margin: 0 0 0 0.8rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+}
+
+.comment-head {
+  cursor: pointer;
+  user-select: none;
+}
+
+.comment-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.comment-badge {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.comment-body {
+  margin: 0.2rem 0 0.5rem;
+}
+
+.comment-body pre {
+  overflow-x: auto;
 }
 
 .feed-list {
@@ -1401,8 +1541,14 @@ button.primary {
     overflow-wrap: anywhere;
   }
 
-  /* Sidebar is replaced by the fixed five-tab bottom bar. */
+  /* Sidebar is replaced by the fixed bottom tab bar. */
   .topbar {
+    display: none;
+  }
+
+  /* The HN/lobsters aggregator widgets move to the dedicated /news page on
+     phones — desktop keeps them on the dashboard. */
+  .hide-on-phone {
     display: none;
   }
 

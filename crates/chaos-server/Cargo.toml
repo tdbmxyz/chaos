@@ -23,6 +23,7 @@ tracing-subscriber.workspace = true
 url.workspace = true
 uuid = { workspace = true, features = ["v7"] }
 scraper = "0.27.0"
+ammonia = "4"
 feed-rs = "2"
 sysinfo = { version = "0.35", default-features = false, features = ["system", "disk"] }
 argon2 = { version = "0.5", features = ["std"] }

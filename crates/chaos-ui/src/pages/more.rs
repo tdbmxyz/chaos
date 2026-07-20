@@ -16,6 +16,7 @@ pub fn MorePage() -> impl IntoView {
         <div class="more-page">
             <h2>"More"</h2>
             <nav class="more-list">
+                <A href="/home"><span class="nav-icon">"⌂"</span>"Home"</A>
                 <A href="/calendar"><span class="nav-icon">"▣"</span>"Calendar"</A>
                 <A href="/settings"><span class="nav-icon">"⚙"</span>"Settings"</A>
                 <A href="/about"><span class="nav-icon">"ⓘ"</span>"About"</A>

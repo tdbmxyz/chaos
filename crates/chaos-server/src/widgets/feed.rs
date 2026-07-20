@@ -58,6 +58,7 @@ fn map_entries(feed: feed_rs::model::Feed) -> Vec<FeedItem> {
             score: None,
             comments: None,
             comments_url: None,
+            id: None,
         })
         .collect()
 }

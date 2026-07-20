@@ -176,6 +176,40 @@ pub(crate) fn set_weather_combined(combined: bool) {
     );
 }
 
+// ---- news page preferences (device, persisted) ----
+
+/// Which posts provider the news page opens on (HN vs lobste.rs).
+pub(crate) const NEWS_SOURCE_KEY: &str = "chaos-news-source";
+/// Which trailing window the news page opens on: "0"=24h, "1"=48h, "2"=week.
+pub(crate) const NEWS_RANGE_KEY: &str = "chaos-news-range";
+
+/// Pure mapping of a stored source string to a [`Source`]; unknown/absent
+/// falls back to the HackerNews default.
+fn news_source_from(raw: Option<&str>) -> chaos_domain::Source {
+    raw.and_then(chaos_domain::Source::from_str)
+        .unwrap_or(chaos_domain::Source::HackerNews)
+}
+
+pub(crate) fn news_source() -> chaos_domain::Source {
+    news_source_from(pref(NEWS_SOURCE_KEY).as_deref())
+}
+
+pub(crate) fn set_news_source(source: chaos_domain::Source) {
+    set_pref(NEWS_SOURCE_KEY, source.as_str());
+}
+
+/// The news range index: 0=24h, 1=48h, 2=week (default 0).
+pub(crate) fn news_range() -> u8 {
+    pref(NEWS_RANGE_KEY)
+        .and_then(|v| v.parse().ok())
+        .filter(|n| *n <= 2)
+        .unwrap_or(0)
+}
+
+pub(crate) fn set_news_range(idx: u8) {
+    set_pref(NEWS_RANGE_KEY, &idx.to_string());
+}
+
 /// Celsius in the display unit: °F when the preference says so.
 pub(crate) fn convert_temp(celsius: f64, fahrenheit: bool) -> f64 {
     if fahrenheit {
@@ -432,8 +466,8 @@ pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
 const NAV_PRIMARY: [(&str, &str, &str); 5] = [
     ("/", "▦", "Dash"),
     ("/links", "⛓", "Links"),
+    ("/news", "▤", "News"),
     ("/weather", "☀", "Weather"),
-    ("/home", "⌂", "Home"),
     ("/more", "≡", "More"),
 ];
 
@@ -570,6 +604,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <span class="brand">"chaos"</span>
                 <A href="/"><span class="nav-icon">"▦"</span>"Dashboard"</A>
                 <A href="/links"><span class="nav-icon">"⛓"</span>"Links"</A>
+                <A href="/news"><span class="nav-icon">"▤"</span>"News"</A>
                 <A href="/calendar"><span class="nav-icon">"▣"</span>"Calendar"</A>
                 <A href="/weather"><span class="nav-icon">"☀"</span>"Weather"</A>
                 <A href="/home"><span class="nav-icon">"⌂"</span>"Home"</A>
@@ -624,6 +659,10 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <Routes fallback=|| view! { <p class="muted">"Page not found"</p> }>
                     <Route path=path!("/") view=pages::Dashboard/>
                     <Route path=path!("/links") view=pages::Links/>
+                    <Route path=path!("/news") view=pages::NewsPage/>
+                    // The static `/news` route above wins over this param route
+                    // in leptos_router, so the list page is never shadowed.
+                    <Route path=path!("/news/:source/:id") view=pages::PostReader/>
                     <Route path=path!("/calendar") view=pages::CalendarPage/>
                     <Route path=path!("/weather") view=pages::WeatherPage/>
                     <Route path=path!("/home") view=pages::HomePage/>
@@ -768,6 +807,19 @@ mod tests {
             hourly: Vec::new(),
             now_index: 0,
         }
+    }
+
+    #[test]
+    fn news_source_parses() {
+        assert_eq!(
+            news_source_from(Some("lobsters")),
+            chaos_domain::Source::Lobsters
+        );
+        assert_eq!(news_source_from(None), chaos_domain::Source::HackerNews);
+        assert_eq!(
+            news_source_from(Some("garbage")),
+            chaos_domain::Source::HackerNews
+        );
     }
 
     #[test]

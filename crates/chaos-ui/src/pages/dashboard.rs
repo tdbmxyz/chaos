@@ -1,12 +1,14 @@
 use std::time::Duration;
 
-use chaos_client::ClientError;
+use chaos_client::{ChaosClient, ClientError};
 use chaos_domain::{
-    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, ServerStats, SystemdAction,
-    SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget, WidgetData, WidgetInstance,
+    BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, PostsData, ServerStats,
+    Source, SystemdAction, SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget,
+    WidgetData, WidgetInstance,
 };
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use leptos::prelude::*;
+use leptos_router::components::A;
 
 use crate::components::ServiceGrid;
 use crate::use_client;
@@ -237,6 +239,13 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => None,
     };
 
+    // Which provider a Posts payload belongs to, so its rows can link to the
+    // matching reader/favicon. Only HN/lobsters widgets yield `WidgetData::Posts`.
+    let posts_source = match &widget {
+        Widget::Lobsters { .. } => Source::Lobsters,
+        _ => Source::HackerNews,
+    };
+
     let conn = crate::offline::use_connectivity();
     // `poll_offline: direct.is_some()` — the direct-capable widgets keep
     // their cadence while the server is unreachable; the others pause.
@@ -263,14 +272,24 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     // Serving from the local cache gets a small "· cached" hint by the title.
     let stale = Memo::new(move |_| matches!(data.get(), Some(Ok((_, true)))));
 
-    // One signal for whichever Collapsible arm renders (Feed, Posts or
-    // Releases); owned here so poll-driven rebuilds keep the user's expand
-    // state. Same story for the Posts time-window tab.
+    // Widget UI state owned here — not inside the reactive `match` arm — so a
+    // poll refresh (which rebuilds that arm) keeps the user's expand choice and
+    // selected posts window instead of snapping back to defaults. `collapsed`
+    // serves whichever Collapsible arm renders; `posts_tab` is the Posts window.
     let collapsed = RwSignal::new(true);
-    let tab = RwSignal::new(PostsTab::Day);
+    let posts_tab = RwSignal::new(PostsTab::Day);
+
+    // The HN/lobsters aggregator widgets get their own dedicated /news page on
+    // phones, so they drop off the (already crowded) phone dashboard — desktop
+    // keeps them. `direct.is_some()` is exactly the two posts widgets.
+    let phone_hide = if direct.is_some() {
+        " hide-on-phone"
+    } else {
+        ""
+    };
 
     view! {
-        <section class=format!("widget widget-{kind}")>
+        <section class=format!("widget widget-{kind}{phone_hide}")>
             <h2>{title} {move || stale.get().then(stale_hint)}</h2>
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
@@ -305,44 +324,9 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
                             .chain(&posts.last_week)
                             .map(|i| i.score),
                     );
-                    let items = move |t: PostsTab| match t {
-                        PostsTab::Day => posts.last_24h.clone(),
-                        PostsTab::TwoDays => posts.last_48h.clone(),
-                        PostsTab::Week => posts.last_week.clone(),
-                    };
-                    view! {
-                        <div class="posts-tabs">
-                            {[
-                                (PostsTab::Day, "24h"),
-                                (PostsTab::TwoDays, "48h"),
-                                (PostsTab::Week, "Week"),
-                            ]
-                                .map(|(t, label)| {
-                                    view! {
-                                        <button
-                                            class:active=move || tab.get() == t
-                                            on:click=move |_| tab.set(t)
-                                        >
-                                            {label}
-                                        </button>
-                                    }
-                                })}
-                        </div>
-                        {move || {
-                            let items = items(tab.get());
-                            let count = items.len();
-                            view! {
-                                <Collapsible count collapsed>
-                                    <ul class="feed-list">
-                                        {items
-                                            .into_iter()
-                                            .map(|item| feed_item_view(item, anchor))
-                                            .collect_view()}
-                                    </ul>
-                                </Collapsible>
-                            }
-                        }}
-                    }
+                    let source = posts_source;
+                    let client = client.clone();
+                    view! { <PostsBody posts anchor collapsed tab=posts_tab source client/> }
                         .into_any()
                 }
                 Some(Ok((WidgetData::Releases { items }, _))) => {
@@ -393,10 +377,69 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
 /// Which trailing window of a Posts widget is shown. Pure display state:
 /// all three lists arrive in the payload, so switching never refetches.
 #[derive(Clone, Copy, PartialEq)]
-enum PostsTab {
+pub(crate) enum PostsTab {
     Day,
     TwoDays,
     Week,
+}
+
+/// The list shown for a tab. Pure selection over the pre-computed windows,
+/// pulled out of the view so it can be unit-tested.
+pub(crate) fn posts_window(posts: &PostsData, tab: PostsTab) -> Vec<FeedItem> {
+    match tab {
+        PostsTab::Day => posts.last_24h.clone(),
+        PostsTab::TwoDays => posts.last_48h.clone(),
+        PostsTab::Week => posts.last_week.clone(),
+    }
+}
+
+/// Body of a Posts (HN/lobsters) widget: the 24h/48h/Week tabs and the list
+/// they switch between. `tab` is passed in from the parent so its value (and
+/// the expand state in `collapsed`) survive poll-driven rebuilds of this
+/// component. The top-level `Memo` below lives in this component's owner scope
+/// and subscribes to the passed-in `tab`, so `tab.set` actually re-renders the
+/// list — when this lived in a closure nested inside the type-erased `match`
+/// arm the subscription was dropped and clicks did nothing.
+#[component]
+fn PostsBody(
+    posts: PostsData,
+    anchor: Option<u64>,
+    collapsed: RwSignal<bool>,
+    tab: RwSignal<PostsTab>,
+    source: Source,
+    client: ChaosClient,
+) -> impl IntoView {
+    let shown = Memo::new(move |_| posts_window(&posts, tab.get()));
+    view! {
+        <div class="posts-tabs">
+            {[(PostsTab::Day, "24h"), (PostsTab::TwoDays, "48h"), (PostsTab::Week, "Week")]
+                .map(|(t, label)| {
+                    view! {
+                        <button
+                            class:active=move || tab.get() == t
+                            on:click=move |_| tab.set(t)
+                        >
+                            {label}
+                        </button>
+                    }
+                })}
+        </div>
+        {move || {
+            let items = shown.get();
+            let count = items.len();
+            let client = client.clone();
+            view! {
+                <Collapsible count collapsed>
+                    <ul class="feed-list">
+                        {items
+                            .into_iter()
+                            .map(|item| post_row_view(item, anchor, source, client.clone()))
+                            .collect_view()}
+                    </ul>
+                </Collapsible>
+            }
+        }}
+    }
 }
 
 /// A feed the client can fetch without the chaos server. Only consulted
@@ -474,6 +517,38 @@ async fn cached_direct(
             Some(hit) => Ok((hit, true)),
             None => Err(err),
         },
+    }
+}
+
+/// How many rows the news page pulls per source when it has to fetch a
+/// provider directly (offline). Matches the server's own news limit.
+const NEWS_LIMIT: u32 = 50;
+
+/// Load a source's [`PostsData`] the same way a dashboard posts widget does,
+/// but keyed to the dedicated news page: online it hits `posts_list(source)`
+/// (cached under `posts:{source}`); offline it fetches the provider directly
+/// (HN's Algolia archive, or lobsters through the shell's HTTP plugin) and
+/// falls back to the cached copy. The `bool` is the same "· cached" staleness
+/// flag `cached()`/`cached_direct()` return.
+pub(crate) async fn load_posts(
+    source: Source,
+    conn: RwSignal<crate::offline::Connectivity>,
+    client: &ChaosClient,
+) -> Result<(PostsData, bool), String> {
+    let key = format!("posts:{}", source.as_str());
+    let direct = match source {
+        Source::HackerNews => DirectFeed::HackerNews(NEWS_LIMIT),
+        Source::Lobsters => DirectFeed::Lobsters(NEWS_LIMIT),
+    };
+    let result = if conn.get_untracked() != crate::offline::Connectivity::Online {
+        cached_direct(&key, direct.fetch()).await
+    } else {
+        crate::offline::cached(conn, &key, async { client.posts_list(source).await }).await
+    };
+    match result {
+        Ok((WidgetData::Posts(posts), stale)) => Ok((posts, stale)),
+        Ok(_) => Err("unexpected payload".into()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -830,7 +905,7 @@ const HEAT_STOPS: [(u8, u8, u8); 5] = [
 /// when nothing in scope carries a score. For n ≤ 30 this is simply the
 /// max; on larger populations it lets a lone viral outlier stay clamped
 /// at hard red without washing out everything below it.
-fn score_anchor(scores: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
+pub(crate) fn score_anchor(scores: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
     let mut scores: Vec<u64> = scores.into_iter().flatten().collect();
     if scores.is_empty() {
         return None;
@@ -840,14 +915,16 @@ fn score_anchor(scores: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
     Some(scores[rank - 1])
 }
 
-/// `#rrggbb` heat color for a score: `t = score / anchor` clamped to
-/// [0, 1], linearly interpolated in RGB between the adjacent [`HEAT_STOPS`].
+/// `#rrggbb` heat color for a score: `t = ln(1+score) / ln(1+anchor)`
+/// clamped to [0, 1], linearly interpolated in RGB between the adjacent
+/// [`HEAT_STOPS`]. The logarithmic normalization spreads the clustered
+/// mid-range scores apart instead of clumping them at the faint end.
 /// Anchor 0 (guarding the division) renders the faint end.
-fn score_color(score: u64, anchor: u64) -> String {
+pub(crate) fn score_color(score: u64, anchor: u64) -> String {
     let t = if anchor == 0 {
         0.0
     } else {
-        (score as f64 / anchor as f64).clamp(0.0, 1.0)
+        (((score as f64) + 1.0).ln() / ((anchor as f64) + 1.0).ln()).clamp(0.0, 1.0)
     };
     let pos = t * (HEAT_STOPS.len() - 1) as f64;
     let i = (pos as usize).min(HEAT_STOPS.len() - 2);
@@ -908,6 +985,110 @@ fn feed_item_view(item: FeedItem, anchor: Option<u64>) -> impl IntoView {
                 <span class="feed-comments">{comments}</span>
                 <span class="feed-age">{age}</span>
             </span>
+        </li>
+    }
+}
+
+/// The `fav:` icon-proxy spec for a posts row: the article host when there
+/// is a link, else the provider's own host (so Ask-HN/self posts still get a
+/// recognizable favicon rather than a blank).
+fn favicon_spec(item: &FeedItem, source: Source) -> String {
+    let host = item
+        .url
+        .as_ref()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| {
+            match source {
+                Source::HackerNews => "news.ycombinator.com",
+                Source::Lobsters => "lobste.rs",
+            }
+            .to_owned()
+        });
+    format!("fav:{host}")
+}
+
+/// A rich posts row for the news page and the dashboard aggregator widgets:
+/// the title opens the in-app reader (`/news/{source}/{id}`), and a favicon on
+/// the right links out to the article itself. When the item carries no reader
+/// id (shouldn't happen for HN/lobsters, but keeps the row alive) the title
+/// falls back to the external article/discussion link so it is never dead.
+/// A broken favicon `<img>` hides itself; CSS then shows a neutral glyph.
+pub(crate) fn post_row_view(
+    item: FeedItem,
+    anchor: Option<u64>,
+    source: Source,
+    client: ChaosClient,
+) -> impl IntoView {
+    let fav_url = client
+        .icon_url(&favicon_spec(&item, source))
+        .map(|u| u.to_string())
+        .unwrap_or_default();
+    // The favicon always points at the article (or the discussion when there
+    // is no article), opening outside the app.
+    let fav_href = item
+        .url
+        .as_ref()
+        .or(item.comments_url.as_ref())
+        .map(|u| u.to_string())
+        .unwrap_or_default();
+    // The title prefers the in-app reader; without an id it links the article
+    // (external) so the row still does something.
+    let reader_href = item
+        .id
+        .as_ref()
+        .map(|id| format!("/news/{}/{}", source.as_str(), id));
+    let external_href = item
+        .url
+        .as_ref()
+        .or(item.comments_url.as_ref())
+        .map(|u| u.to_string())
+        .unwrap_or_default();
+    let score = item.score.map(|score| format!("▲ {score}"));
+    let score_style = match (item.score, anchor) {
+        (Some(score), Some(anchor)) => Some(score_color(score, anchor)),
+        _ => None,
+    };
+    let comments = item
+        .comments
+        .map(|n| format!("{n} comment{}", if n == 1 { "" } else { "s" }));
+    let age = item.published.map(rel_time);
+    let title = item.title.clone();
+
+    let title_link = match reader_href {
+        // Internal reader route: client-side SPA navigation (no full reload).
+        Some(href) => view! { <A href=href attr:class="post-title">{title}</A> }.into_any(),
+        // No reader id: link the article, opening out of the app.
+        None => view! {
+            <a class="post-title" href=external_href target="_blank" rel="noreferrer">{title}</a>
+        }
+        .into_any(),
+    };
+
+    view! {
+        <li class="post-row">
+            <div class="post-main">
+                {title_link}
+                <span class="muted feed-meta">
+                    <span class="feed-score" style:color=score_style>{score}</span>
+                    <span class="feed-comments">{comments}</span>
+                    <span class="feed-age">{age}</span>
+                </span>
+            </div>
+            <a class="post-favicon" href=fav_href target="_blank" rel="noreferrer">
+                <img
+                    src=fav_url
+                    alt=""
+                    loading="lazy"
+                    on:error=|ev| {
+                        use leptos::wasm_bindgen::JsCast;
+                        if let Some(target) = ev.target()
+                            && let Ok(el) = target.dyn_into::<web_sys::Element>()
+                        {
+                            el.set_class_name("hidden");
+                        }
+                    }
+                />
+            </a>
         </li>
     }
 }
@@ -980,7 +1161,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn rel_time(when: DateTime<Utc>) -> String {
+pub(crate) fn rel_time(when: DateTime<Utc>) -> String {
     let minutes = (Utc::now() - when).num_minutes().max(0);
     match minutes {
         0..60 => format!("{minutes}m"),
@@ -1078,18 +1259,20 @@ mod tests {
 
     #[test]
     fn color_hits_the_five_stops_exactly() {
-        assert_eq!(score_color(0, 100), "#e8d288");
-        assert_eq!(score_color(25, 100), "#ffd60a");
-        assert_eq!(score_color(50, 100), "#ff9500");
-        assert_eq!(score_color(75, 100), "#f4674f");
-        assert_eq!(score_color(100, 100), "#ff2200");
+        // Under the log scale, anchor 15 (ln 16 = 4·ln 2) lands scores
+        // 0/1/3/7/15 on t = 0/¼/½/¾/1 — exactly the five stops.
+        assert_eq!(score_color(0, 15), "#e8d288");
+        assert_eq!(score_color(1, 15), "#ffd60a");
+        assert_eq!(score_color(3, 15), "#ff9500");
+        assert_eq!(score_color(7, 15), "#f4674f");
+        assert_eq!(score_color(15, 15), "#ff2200");
     }
 
     #[test]
     fn color_midpoint_between_stops() {
-        // t = 0.125, halfway from #e8d288 to #ffd60a:
+        // t = ln 2 / ln 256 = 0.125, halfway from #e8d288 to #ffd60a:
         // r (232+255)/2 → 244, g (210+214)/2 → 212, b (136+10)/2 → 73.
-        assert_eq!(score_color(125, 1000), "#f4d449");
+        assert_eq!(score_color(1, 255), "#f4d449");
     }
 
     #[test]
@@ -1101,6 +1284,118 @@ mod tests {
     fn color_anchor_zero_renders_faint_end() {
         assert_eq!(score_color(0, 0), "#e8d288");
         assert_eq!(score_color(50, 0), "#e8d288");
+    }
+
+    // -- score_color: logarithmic scale -----------------------------------
+
+    #[test]
+    fn log_scale_separates_midrange_scores() {
+        // Real clustered set: anchor is the top score.
+        let anchor = 2146u64;
+        // Under linear score/anchor, 334 and 497 both sit ~0.15-0.23 → both in the
+        // first gradient segment (faint→yellow). Under log they diverge.
+        let c334 = score_color(334, anchor);
+        let c497 = score_color(497, anchor);
+        assert_ne!(c334, c497, "mid-range scores must be distinguishable");
+    }
+
+    #[test]
+    fn log_scale_is_monotonic() {
+        let anchor = 2146u64;
+        // Higher score → not-lighter color: compare the red channel (first two hex
+        // chars), which increases toward hard red.
+        let red = |s: &str| u8::from_str_radix(&s[1..3], 16).unwrap();
+        assert!(red(&score_color(865, anchor)) >= red(&score_color(193, anchor)));
+        assert!(red(&score_color(2146, anchor)) >= red(&score_color(865, anchor)));
+    }
+
+    #[test]
+    fn log_scale_anchor_hits_hard_red() {
+        assert_eq!(score_color(2146, 2146), "#ff2200");
+    }
+
+    #[test]
+    fn log_scale_overflow_clamps_to_hard_red() {
+        assert_eq!(score_color(9000, 2146), "#ff2200");
+    }
+
+    #[test]
+    fn log_scale_zero_anchor_is_faint() {
+        assert_eq!(score_color(0, 0), "#e8d288");
+    }
+
+    #[test]
+    fn log_scale_lifts_low_score_out_of_yellow() {
+        // Real clustered set: 181 against anchor 2146. Linear 181/2146 = 0.084
+        // → pos 0.34, stuck in the faint→yellow first segment (green ≈ 211).
+        // Log ln(182)/ln(2147) = 0.68 → pos 2.71, the orange→red segment
+        // (green ≈ 116). Asserting it left the yellow band FAILS under linear.
+        let green = |s: &str| u8::from_str_radix(&s[3..5], 16).unwrap();
+        assert!(
+            green(&score_color(181, 2146)) < 150,
+            "low score must reach the orange/red band under the log scale"
+        );
+    }
+
+    // -- favicon_spec: article host, or the provider's host as a fallback --
+
+    #[test]
+    fn favicon_spec_uses_article_host() {
+        let item = FeedItem {
+            title: "t".into(),
+            url: Some("https://example.com/a".parse().unwrap()),
+            source: Some("Hacker News".into()),
+            published: None,
+            score: Some(5),
+            comments: None,
+            comments_url: None,
+            id: Some("1".into()),
+        };
+        assert_eq!(favicon_spec(&item, Source::HackerNews), "fav:example.com");
+    }
+
+    #[test]
+    fn favicon_spec_falls_back_to_source_host() {
+        let item = FeedItem {
+            title: "Ask HN".into(),
+            url: None,
+            source: Some("Hacker News".into()),
+            published: None,
+            score: Some(5),
+            comments: None,
+            comments_url: None,
+            id: Some("1".into()),
+        };
+        assert_eq!(
+            favicon_spec(&item, Source::HackerNews),
+            "fav:news.ycombinator.com"
+        );
+        let lob = FeedItem { url: None, ..item };
+        assert_eq!(favicon_spec(&lob, Source::Lobsters), "fav:lobste.rs");
+    }
+
+    // -- posts_window: tab selects the matching trailing window ------------
+
+    #[test]
+    fn posts_window_selects_by_tab() {
+        let mk = |title: &str| FeedItem {
+            title: title.into(),
+            url: None,
+            source: None,
+            published: None,
+            score: None,
+            comments: None,
+            comments_url: None,
+            id: None,
+        };
+        let posts = PostsData {
+            last_24h: vec![mk("a")],
+            last_48h: vec![mk("a"), mk("b")],
+            last_week: vec![mk("a"), mk("b"), mk("c")],
+        };
+        assert_eq!(posts_window(&posts, PostsTab::Day).len(), 1);
+        assert_eq!(posts_window(&posts, PostsTab::TwoDays).len(), 2);
+        assert_eq!(posts_window(&posts, PostsTab::Week).len(), 3);
     }
 }
 

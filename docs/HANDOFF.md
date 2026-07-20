@@ -26,6 +26,20 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   `GET /api/v1/widgets/{id}`, cached server-side with per-kind TTLs
   (10min/5min/30min/10s), stale payload on upstream failure. See
   `chaos-server/src/widgets/` and chaos.example.toml.
+- **News page & reader**: `/news` is a dedicated page (its own tab on
+  phone, topbar link on desktop) with HN/lobste.rs sub-tabs and the
+  24h/48h/Week windows, served from `GET /api/v1/posts/{source}` (offline
+  direct fallback). Rows show a source favicon linking to the article; the
+  title opens the in-app comment reader at `/news/:source/:id`. The reader
+  fetches a thread from `GET /api/v1/posts/{source}/{id}/comments` (HN
+  Algolia item API; lobste.rs `/s/{id}.json` flat-depth list rebuilt into a
+  tree), sanitizes comment HTML server-side (ammonia allowlist) and renders
+  it via `inner_html` — offline it falls back to a direct fetch rendered as
+  plain text, and the sanitized-vs-text choice travels with the payload so
+  `inner_html` never sees unsanitized content. Comments collapse per
+  subtree. On phone the two posts widgets are dropped from the dashboard in
+  favor of this page (desktop keeps them); Home moved to the More page to
+  make room for News in the tab bar. Scores use a logarithmic heat scale.
 - **Calendar**: static month widget, fully client-side (Monday-first,
   prev/today/next).
 - **Systemd manager**: `systemd` widget lists configured units with state

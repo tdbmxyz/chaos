@@ -160,6 +160,25 @@ cross-origin (bearer instead of the cookie).
       day bands + weekday/date tooltips, and the combined view is the
       persisted default, rendered above the per-place rows — still fully
       client-side (direct Open-Meteo)
+- [x] Dedicated News page (`/news`): HN and lobste.rs sub-tabs with the
+      24h/48h/Week windows, served from `GET /api/v1/posts/{source}`
+      (offline direct fallback). Rows carry a source favicon (existing
+      `fav:` icon proxy) that links straight to the article; the title
+      opens the in-app reader. The phone dashboard drops the two posts
+      widgets in favor of this page (desktop keeps them as glances); News
+      takes Home's slot in the phone tab bar, Home moves to the More page
+- [x] In-app comment reader (`/news/:source/:id`): story header plus a
+      collapsible comment tree (short-press a comment to fold its own
+      subtree, `[+N]` badge). Threads come from
+      `GET /api/v1/posts/{source}/{id}/comments` — HN via the Algolia item
+      API, lobste.rs via `/s/{id}.json` (flat depth list rebuilt into a
+      tree) — with comment HTML sanitized server-side (ammonia allowlist).
+      Offline falls back to a direct fetch rendered as plain text; the
+      sanitized-vs-text decision travels with the payload so `inner_html`
+      only ever renders server-sanitized HTML
+- [x] Logarithmic score heat scale: `ln(1+score)/ln(1+p99)` instead of
+      linear, so clustered mid-range scores stop collapsing into
+      indistinguishable yellows
 
 ## Deferred / explicitly out of scope
 

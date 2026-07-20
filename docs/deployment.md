@@ -225,6 +225,12 @@ Last 24h / 48h / Week tabs:
   pages per refresh) instead of `hottest.json`, still behind the
   existing 10-minute cache.
 
+The News page and in-app comment reader talk to the same two hosts (so a
+host-level egress filter needs no change), on additional paths: the reader
+fetches per-post threads from `hn.algolia.com/api/v1/items/{id}` and
+`lobste.rs/s/{id}.json`. The Tauri capability already allows both hosts via
+wildcards.
+
 ## Desktop and phone apps
 
 The web UI served by the server is the primary interface; the Tauri shells
