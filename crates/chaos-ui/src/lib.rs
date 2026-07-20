@@ -185,26 +185,20 @@ pub(crate) const NEWS_RANGE_KEY: &str = "chaos-news-range";
 
 /// Pure mapping of a stored source string to a [`Source`]; unknown/absent
 /// falls back to the HackerNews default.
-// `allow(dead_code)`: consumers land in Task B5 (the news page); the parse
-// helper is exercised by the unit test meanwhile.
-#[allow(dead_code)]
 fn news_source_from(raw: Option<&str>) -> chaos_domain::Source {
     raw.and_then(chaos_domain::Source::from_str)
         .unwrap_or(chaos_domain::Source::HackerNews)
 }
 
-#[allow(dead_code)]
 pub(crate) fn news_source() -> chaos_domain::Source {
     news_source_from(pref(NEWS_SOURCE_KEY).as_deref())
 }
 
-#[allow(dead_code)]
 pub(crate) fn set_news_source(source: chaos_domain::Source) {
     set_pref(NEWS_SOURCE_KEY, source.as_str());
 }
 
 /// The news range index: 0=24h, 1=48h, 2=week (default 0).
-#[allow(dead_code)]
 pub(crate) fn news_range() -> u8 {
     pref(NEWS_RANGE_KEY)
         .and_then(|v| v.parse().ok())
@@ -212,7 +206,6 @@ pub(crate) fn news_range() -> u8 {
         .unwrap_or(0)
 }
 
-#[allow(dead_code)]
 pub(crate) fn set_news_range(idx: u8) {
     set_pref(NEWS_RANGE_KEY, &idx.to_string());
 }
@@ -470,9 +463,10 @@ pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
 
 /// Primary navigation destinations. The glyphs are plain Unicode (like
 /// yomu's tab bar) so no icon font or SVG set is needed.
-const NAV_PRIMARY: [(&str, &str, &str); 5] = [
+const NAV_PRIMARY: [(&str, &str, &str); 6] = [
     ("/", "▦", "Dash"),
     ("/links", "⛓", "Links"),
+    ("/news", "▤", "News"),
     ("/weather", "☀", "Weather"),
     ("/home", "⌂", "Home"),
     ("/more", "≡", "More"),
@@ -611,6 +605,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <span class="brand">"chaos"</span>
                 <A href="/"><span class="nav-icon">"▦"</span>"Dashboard"</A>
                 <A href="/links"><span class="nav-icon">"⛓"</span>"Links"</A>
+                <A href="/news"><span class="nav-icon">"▤"</span>"News"</A>
                 <A href="/calendar"><span class="nav-icon">"▣"</span>"Calendar"</A>
                 <A href="/weather"><span class="nav-icon">"☀"</span>"Weather"</A>
                 <A href="/home"><span class="nav-icon">"⌂"</span>"Home"</A>
@@ -665,6 +660,13 @@ pub fn App(config: AppConfig) -> impl IntoView {
                 <Routes fallback=|| view! { <p class="muted">"Page not found"</p> }>
                     <Route path=path!("/") view=pages::Dashboard/>
                     <Route path=path!("/links") view=pages::Links/>
+                    <Route path=path!("/news") view=pages::NewsPage/>
+                    // Temporary stub: the reader route lands in Plan C. Kept so a
+                    // title tap resolves instead of hitting the router fallback.
+                    <Route
+                        path=path!("/news/:source/:id")
+                        view=|| view! { <p class="muted">"Reader coming soon"</p> }
+                    />
                     <Route path=path!("/calendar") view=pages::CalendarPage/>
                     <Route path=path!("/weather") view=pages::WeatherPage/>
                     <Route path=path!("/home") view=pages::HomePage/>

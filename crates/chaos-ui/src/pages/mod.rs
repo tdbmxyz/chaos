@@ -5,6 +5,7 @@ mod home;
 mod links;
 mod login;
 mod more;
+mod news;
 mod settings;
 mod weather;
 
@@ -15,5 +16,6 @@ pub use home::HomePage;
 pub use links::Links;
 pub use login::Login;
 pub use more::MorePage;
+pub use news::NewsPage;
 pub use settings::Settings;
 pub use weather::WeatherPage;

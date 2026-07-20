@@ -278,8 +278,17 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
     let collapsed = RwSignal::new(true);
     let posts_tab = RwSignal::new(PostsTab::Day);
 
+    // The HN/lobsters aggregator widgets get their own dedicated /news page on
+    // phones, so they drop off the (already crowded) phone dashboard — desktop
+    // keeps them. `direct.is_some()` is exactly the two posts widgets.
+    let phone_hide = if direct.is_some() {
+        " hide-on-phone"
+    } else {
+        ""
+    };
+
     view! {
-        <section class=format!("widget widget-{kind}")>
+        <section class=format!("widget widget-{kind}{phone_hide}")>
             <h2>{title} {move || stale.get().then(stale_hint)}</h2>
             {move || match data.get() {
                 None => view! { <p class="muted">"Loading…"</p> }.into_any(),
@@ -367,7 +376,7 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
 /// Which trailing window of a Posts widget is shown. Pure display state:
 /// all three lists arrive in the payload, so switching never refetches.
 #[derive(Clone, Copy, PartialEq)]
-enum PostsTab {
+pub(crate) enum PostsTab {
     Day,
     TwoDays,
     Week,
@@ -375,7 +384,7 @@ enum PostsTab {
 
 /// The list shown for a tab. Pure selection over the pre-computed windows,
 /// pulled out of the view so it can be unit-tested.
-fn posts_window(posts: &PostsData, tab: PostsTab) -> Vec<FeedItem> {
+pub(crate) fn posts_window(posts: &PostsData, tab: PostsTab) -> Vec<FeedItem> {
     match tab {
         PostsTab::Day => posts.last_24h.clone(),
         PostsTab::TwoDays => posts.last_48h.clone(),
@@ -507,6 +516,38 @@ async fn cached_direct(
             Some(hit) => Ok((hit, true)),
             None => Err(err),
         },
+    }
+}
+
+/// How many rows the news page pulls per source when it has to fetch a
+/// provider directly (offline). Matches the server's own news limit.
+const NEWS_LIMIT: u32 = 50;
+
+/// Load a source's [`PostsData`] the same way a dashboard posts widget does,
+/// but keyed to the dedicated news page: online it hits `posts_list(source)`
+/// (cached under `posts:{source}`); offline it fetches the provider directly
+/// (HN's Algolia archive, or lobsters through the shell's HTTP plugin) and
+/// falls back to the cached copy. The `bool` is the same "· cached" staleness
+/// flag `cached()`/`cached_direct()` return.
+pub(crate) async fn load_posts(
+    source: Source,
+    conn: RwSignal<crate::offline::Connectivity>,
+    client: &ChaosClient,
+) -> Result<(PostsData, bool), String> {
+    let key = format!("posts:{}", source.as_str());
+    let direct = match source {
+        Source::HackerNews => DirectFeed::HackerNews(NEWS_LIMIT),
+        Source::Lobsters => DirectFeed::Lobsters(NEWS_LIMIT),
+    };
+    let result = if conn.get_untracked() != crate::offline::Connectivity::Online {
+        cached_direct(&key, direct.fetch()).await
+    } else {
+        crate::offline::cached(conn, &key, async { client.posts_list(source).await }).await
+    };
+    match result {
+        Ok((WidgetData::Posts(posts), stale)) => Ok((posts, stale)),
+        Ok(_) => Err("unexpected payload".into()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -863,7 +904,7 @@ const HEAT_STOPS: [(u8, u8, u8); 5] = [
 /// when nothing in scope carries a score. For n ≤ 30 this is simply the
 /// max; on larger populations it lets a lone viral outlier stay clamped
 /// at hard red without washing out everything below it.
-fn score_anchor(scores: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
+pub(crate) fn score_anchor(scores: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
     let mut scores: Vec<u64> = scores.into_iter().flatten().collect();
     if scores.is_empty() {
         return None;
@@ -971,7 +1012,7 @@ fn favicon_spec(item: &FeedItem, source: Source) -> String {
 /// id (shouldn't happen for HN/lobsters, but keeps the row alive) the title
 /// falls back to the external article/discussion link so it is never dead.
 /// A broken favicon `<img>` hides itself; CSS then shows a neutral glyph.
-fn post_row_view(
+pub(crate) fn post_row_view(
     item: FeedItem,
     anchor: Option<u64>,
     source: Source,

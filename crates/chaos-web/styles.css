@@ -693,6 +693,30 @@ button.primary {
 /* feeds & releases */
 
 /* HN/lobsters time-window tab strip (24h / 48h / Week) */
+/* News page source switch (HN / lobste.rs): the primary control, so a touch
+   larger and full-width than the smaller in-widget range tabs below it. */
+.news-sources {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.news-sources button {
+  flex: 1;
+  padding: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.news-sources button:hover,
+.news-sources button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .posts-tabs {
   display: flex;
   gap: 0.3rem;
@@ -1444,8 +1468,14 @@ button.primary {
     overflow-wrap: anywhere;
   }
 
-  /* Sidebar is replaced by the fixed five-tab bottom bar. */
+  /* Sidebar is replaced by the fixed bottom tab bar. */
   .topbar {
+    display: none;
+  }
+
+  /* The HN/lobsters aggregator widgets move to the dedicated /news page on
+     phones — desktop keeps them on the dashboard. */
+  .hide-on-phone {
     display: none;
   }
 
