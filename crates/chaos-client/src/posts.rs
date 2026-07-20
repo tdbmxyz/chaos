@@ -73,6 +73,7 @@ fn algolia_item(hit: AlgoliaHit) -> FeedItem {
         score: hit.points,
         comments: hit.num_comments,
         comments_url: discussion,
+        id: None,
     }
 }
 
@@ -170,6 +171,7 @@ fn lobsters_item(story: LobstersStory) -> FeedItem {
         score: u64::try_from(story.score).ok(),
         comments: Some(story.comment_count),
         comments_url: Some(discussion),
+        id: None,
     }
 }
 
@@ -186,6 +188,7 @@ mod tests {
             score: None,
             comments: None,
             comments_url: None,
+            id: None,
         }
     }
 

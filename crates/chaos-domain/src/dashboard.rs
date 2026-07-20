@@ -275,6 +275,38 @@ pub struct FeedItem {
     /// The discussion page; the source label links here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comments_url: Option<Url>,
+    /// Provider id for the discussion (HN objectId, lobsters short_id).
+    /// `None` for RSS/releases rows. Enables linking to the reader.
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+/// A posts provider with a comment-reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    HackerNews,
+    Lobsters,
+}
+
+impl Source {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::HackerNews => "hackernews",
+            Source::Lobsters => "lobsters",
+        }
+    }
+
+    // Deliberately an inherent `Option`-returning constructor, not `FromStr`:
+    // callers want `Option`, and there is no meaningful `Err`.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "hackernews" => Some(Source::HackerNews),
+            "lobsters" => Some(Source::Lobsters),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,4 +354,27 @@ pub struct DiskUsage {
     pub mount: String,
     pub total_bytes: u64,
     pub used_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_round_trips() {
+        assert_eq!(Source::from_str("hackernews"), Some(Source::HackerNews));
+        assert_eq!(Source::from_str("lobsters"), Some(Source::Lobsters));
+        assert_eq!(Source::from_str("nope"), None);
+        assert_eq!(Source::HackerNews.as_str(), "hackernews");
+        assert_eq!(Source::Lobsters.as_str(), "lobsters");
+    }
+
+    #[test]
+    fn feed_item_id_defaults_none_in_json() {
+        // Existing wire payloads without `id` still deserialize.
+        let json = r#"{"title":"t","url":null,"source":null,"published":null,
+            "score":null,"comments":null,"comments_url":null}"#;
+        let item: FeedItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.id, None);
+    }
 }

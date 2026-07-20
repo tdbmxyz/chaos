@@ -1190,6 +1190,7 @@ mod tests {
             score: None,
             comments: None,
             comments_url: None,
+            id: None,
         };
         let posts = PostsData {
             last_24h: vec![mk("a")],
