@@ -747,9 +747,11 @@ button.primary {
 
 /* Posts rows (news page + HN/lobsters widgets): a title + meta block on the
    left and the article's favicon on the right, linking out. */
-.post-row {
+/* `.feed-list li.post-row` (not just `.post-row`) so it beats the generic
+   `.feed-list li` rule that sets `align-items: baseline`. */
+.feed-list li.post-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.6rem;
 }
 
@@ -761,13 +763,20 @@ button.primary {
   gap: 0.15rem;
 }
 
-.post-favicon {
+/* `.post-row .post-favicon` (two classes) outranks the generic `.feed-list a`
+   (`flex: 1`, and `flex: 1 1 100%` on phones), which would otherwise stretch
+   this anchor and float the icon toward the middle. `margin-left: auto` pins it
+   hard right; `white-space: normal` undoes the feed-link ellipsis reset. */
+.post-row .post-favicon {
   flex: 0 0 auto;
+  margin-left: auto;
   width: 20px;
   height: 20px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
+  white-space: normal;
+  overflow: visible;
 }
 
 .post-favicon img {
