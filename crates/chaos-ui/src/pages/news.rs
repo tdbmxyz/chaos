@@ -37,22 +37,43 @@ pub fn NewsPage() -> impl IntoView {
         }
     });
 
-    // Top-level Memo (owner scope, not nested in a type-erased match arm) so a
-    // range click actually re-renders the list. Carries the union anchor so
-    // switching windows never rescales the score colors.
-    let window = Memo::new(move |_| {
-        data.get().and_then(|r| r.ok()).map(|(posts, _)| {
-            let anchor = score_anchor(
-                posts
-                    .last_24h
-                    .iter()
-                    .chain(&posts.last_48h)
-                    .chain(&posts.last_week)
-                    .map(|i| i.score),
-            );
-            (posts_window(&posts, range_tab(range.get())), anchor)
-        })
-    });
+    // The visible list as ONE top-level reactive closure: it reads `data`,
+    // `range`, and `source`, so a range click re-runs it (re-reading the
+    // already-loaded payload — no refetch) and swaps the window. Kept flat
+    // (no nested reactive block) so the range subscription is unmistakable.
+    // The union anchor spans all three windows, so colors never rescale.
+    let list = {
+        let client = client.clone();
+        move || match data.get() {
+            None => view! { <p class="muted">"Loading…"</p> }.into_any(),
+            Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
+            Some(Ok((posts, _))) => {
+                let anchor = score_anchor(
+                    posts
+                        .last_24h
+                        .iter()
+                        .chain(&posts.last_48h)
+                        .chain(&posts.last_week)
+                        .map(|i| i.score),
+                );
+                let items = posts_window(&posts, range_tab(range.get()));
+                if items.is_empty() {
+                    return view! { <p class="muted">"Nothing in this window yet."</p> }.into_any();
+                }
+                let current = source.get();
+                let client = client.clone();
+                view! {
+                    <ul class="feed-list">
+                        {items
+                            .into_iter()
+                            .map(|item| post_row_view(item, anchor, current, client.clone()))
+                            .collect_view()}
+                    </ul>
+                }
+                .into_any()
+            }
+        }
+    };
 
     view! {
         <section class="news-page">
@@ -82,32 +103,7 @@ pub fn NewsPage() -> impl IntoView {
                         }
                     })}
             </div>
-            {move || match data.get() {
-                None => view! { <p class="muted">"Loading…"</p> }.into_any(),
-                Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
-                Some(Ok(_)) => {
-                    let client = client.clone();
-                    let current = source.get();
-                    view! {
-                        <ul class="feed-list">
-                            {move || {
-                                let client = client.clone();
-                                window
-                                    .get()
-                                    .map(|(items, anchor)| {
-                                        items
-                                            .into_iter()
-                                            .map(|item| {
-                                                post_row_view(item, anchor, current, client.clone())
-                                            })
-                                            .collect_view()
-                                    })
-                            }}
-                        </ul>
-                    }
-                        .into_any()
-                }
-            }}
+            {list}
         </section>
     }
 }
