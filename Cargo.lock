@@ -519,7 +519,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chaos-client"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "chaos-domain",
  "chrono",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "chaos-desktop"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "tauri",
  "tauri-build",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "chaos-domain"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "chrono",
  "serde",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "chaos-server"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "chaos-ui"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "chaos-client",
  "chaos-domain",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "chaos-web"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "chaos-ui",
  "console_error_panic_hook",
