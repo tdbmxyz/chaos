@@ -108,6 +108,12 @@ impl ChaosClient {
         self.get(&format!("api/v1/widgets/{id}")).await
     }
 
+    /// Posts (HN/lobsters) for the standalone `/news` page, independent of
+    /// any configured widget. Returns `WidgetData::Posts`.
+    pub async fn posts_list(&self, source: chaos_domain::Source) -> Result<WidgetData> {
+        self.get(&format!("api/v1/posts/{}", source.as_str())).await
+    }
+
     /// Start/stop an on-demand service's systemd unit (services configured
     /// with a `unit`); returns the service with its re-checked status.
     pub async fn service_action(
