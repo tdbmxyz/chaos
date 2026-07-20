@@ -16,6 +16,9 @@ use url::Url;
 const HN_ITEM_API: &str = "https://hn.algolia.com/api/v1/items/";
 const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
 const LOBSTERS_STORY: &str = "https://lobste.rs/s/";
+/// Cap on a fetched thread body: generous for a large discussion, but bounds
+/// what a hostile/misconfigured upstream can make us buffer.
+const THREAD_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// Allowlist-sanitize provider comment HTML down to safe inline/block markup.
 /// Only `a[href]` with `http`/`https` survives; anchors get
@@ -105,7 +108,9 @@ pub(crate) fn map_hn_item(json: &str) -> Result<PostThread, String> {
 }
 
 pub(crate) async fn fetch_hn(http: &reqwest::Client, id: &str) -> Result<PostThread, String> {
-    let body = crate::http_util::get_text(http, &format!("{HN_ITEM_API}{id}")).await?;
+    let body =
+        crate::http_util::get_text_capped(http, &format!("{HN_ITEM_API}{id}"), THREAD_MAX_BYTES)
+            .await?;
     map_hn_item(&body)
 }
 
@@ -213,7 +218,12 @@ pub(crate) fn map_lobsters_story(json: &str) -> Result<PostThread, String> {
 }
 
 pub(crate) async fn fetch_lobsters(http: &reqwest::Client, id: &str) -> Result<PostThread, String> {
-    let body = crate::http_util::get_text(http, &format!("{LOBSTERS_STORY}{id}.json")).await?;
+    let body = crate::http_util::get_text_capped(
+        http,
+        &format!("{LOBSTERS_STORY}{id}.json"),
+        THREAD_MAX_BYTES,
+    )
+    .await?;
     map_lobsters_story(&body)
 }
 
@@ -252,6 +262,61 @@ mod tests {
         assert_eq!(t.tree[0].children.len(), 1); // c2 under c1
         assert_eq!(t.tree[0].author.as_deref(), Some("u1"));
         assert_eq!(t.tree[1].author.as_deref(), Some("u3"));
+    }
+
+    /// Build a lobsters story JSON from a list of comment depths.
+    fn lobsters_json(depths: &[usize]) -> String {
+        let comments: Vec<String> = depths
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                format!(
+                    r#"{{"short_id":"c{i}","comment":"x","depth":{d},"commenting_user":"u{i}"}}"#
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"short_id":"s","title":"S","score":1,"comments":[{}]}}"#,
+            comments.join(",")
+        )
+    }
+
+    #[test]
+    fn lobsters_rebuilds_deeper_and_wider_trees() {
+        // [1,2,2,1] → c0{c1,c2}, c3 at root.
+        let t = map_lobsters_story(&lobsters_json(&[1, 2, 2, 1])).unwrap();
+        assert_eq!(t.tree.len(), 2);
+        assert_eq!(t.tree[0].children.len(), 2);
+        assert!(t.tree[1].children.is_empty());
+
+        // [1,2,3,1,2] → c0{c1{c2}}, c3{c4}.
+        let t = map_lobsters_story(&lobsters_json(&[1, 2, 3, 1, 2])).unwrap();
+        assert_eq!(t.tree.len(), 2);
+        assert_eq!(t.tree[0].children[0].children.len(), 1); // c2 under c1
+        assert_eq!(t.tree[1].children.len(), 1); // c4 under c3
+    }
+
+    #[test]
+    fn lobsters_malformed_depth_does_not_panic() {
+        // A depth that jumps past a level ([1,3]) must attach to the nearest
+        // available ancestor instead of panicking on an empty parent stack.
+        let t = map_lobsters_story(&lobsters_json(&[1, 3])).unwrap();
+        assert_eq!(t.tree.len(), 1);
+        assert_eq!(t.tree[0].children.len(), 1);
+        // A leading deep comment ([3]) becomes a root.
+        let t = map_lobsters_story(&lobsters_json(&[3])).unwrap();
+        assert_eq!(t.tree.len(), 1);
+    }
+
+    #[test]
+    fn hn_null_text_and_author_become_empty() {
+        // Dead HN comments come back with null text/author.
+        let json = r#"{"id":1,"title":"S","points":1,
+          "children":[{"id":2,"author":null,"text":null,"created_at_i":1,"children":[]}]}"#;
+        let t = map_hn_item(json).unwrap();
+        assert_eq!(t.tree.len(), 1);
+        assert_eq!(t.tree[0].author, None);
+        assert_eq!(t.tree[0].html, "");
     }
 
     #[test]
