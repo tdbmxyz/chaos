@@ -21,8 +21,11 @@ const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
 const HN_ITEM_API: &str = "https://hn.algolia.com/api/v1/items/";
 const LOBSTERS_STORY: &str = "https://lobste.rs/s/";
 const ALGOLIA_SEARCH: &str = "https://hn.algolia.com/api/v1/search";
-const LOBSTERS_NEWEST: &str = "https://lobste.rs/newest.json";
-/// newest.json covers ~1.3 days per 25-story page; 10 pages safely spans a week.
+/// Base for the paginated newest feed. The page number goes in the PATH
+/// (`/newest/page/{n}.json`) — the `?page=` query form is silently ignored by
+/// lobste.rs and returns page 1 every time.
+const LOBSTERS_NEWEST: &str = "https://lobste.rs/newest";
+/// ~25 stories per page; 10 pages safely spans a week.
 pub const LOBSTERS_PAGE_CAP: u32 = 10;
 const WEEK_HOURS: i64 = 24 * 7;
 
@@ -82,6 +85,17 @@ fn algolia_item(hit: AlgoliaHit) -> FeedItem {
 }
 
 /// Items published within the trailing `hours`, by upvotes, top `limit`.
+/// Drop later duplicates that share an `id`, keeping the first (after sorting,
+/// the highest-scored copy). Items without an id are always kept. Defends
+/// against the same story arriving on more than one fetched page.
+fn dedup_by_id(items: &mut Vec<FeedItem>) {
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|i| match &i.id {
+        Some(id) => seen.insert(id.clone()),
+        None => true,
+    });
+}
+
 fn windowed(items: &[FeedItem], now: DateTime<Utc>, hours: i64, limit: u32) -> Vec<FeedItem> {
     let cutoff = now - chrono::Duration::hours(hours);
     let mut hits: Vec<FeedItem> = items
@@ -90,6 +104,7 @@ fn windowed(items: &[FeedItem], now: DateTime<Utc>, hours: i64, limit: u32) -> V
         .cloned()
         .collect();
     sort_by_score(&mut hits);
+    dedup_by_id(&mut hits);
     hits.truncate(limit as usize);
     hits
 }
@@ -138,7 +153,7 @@ pub fn parse_lobsters_page(json: &str) -> Result<Vec<FeedItem>, String> {
 
 /// Where page `n` of the lobsters sweep lives.
 pub fn lobsters_page_url(page: u32) -> String {
-    format!("{LOBSTERS_NEWEST}?page={page}")
+    format!("{LOBSTERS_NEWEST}/page/{page}.json")
 }
 
 /// Sweep stop test: newest-first pages — stop once the oldest (last) story
@@ -471,6 +486,30 @@ mod tests {
     }
 
     #[test]
+    fn windowed_dedups_by_id_keeping_the_best() {
+        let now = Utc::now();
+        let dup = |score: u64, id: &str, title: &str| FeedItem {
+            title: title.into(),
+            published: Some(now - chrono::Duration::hours(1)),
+            score: Some(score),
+            id: Some(id.into()),
+            ..blank_item()
+        };
+        // The same story arriving on two pages, plus a distinct one.
+        let items = vec![
+            dup(10, "abc", "abc low copy"),
+            dup(42, "abc", "abc high copy"),
+            dup(30, "xyz", "other"),
+        ];
+        let titles: Vec<String> = windowed(&items, now, 24, 10)
+            .into_iter()
+            .map(|i| i.title)
+            .collect();
+        // One row per id; the higher-scored copy of `abc` is the survivor.
+        assert_eq!(titles, ["abc high copy", "other"]);
+    }
+
+    #[test]
     fn maps_a_lobsters_story() {
         let raw = r#"{"short_id":"abc123","title":"A story","url":"https://example.org/post","score":31,"comment_count":7,"comments_url":"https://lobste.rs/s/abc123/a_story","created_at":"2026-07-06T01:02:03Z","tags":["rust"]}"#;
         let item = lobsters_item(serde_json::from_str(raw).expect("parse"));
@@ -523,8 +562,8 @@ mod tests {
 
     #[test]
     fn lobsters_page_urls_are_numbered() {
-        assert_eq!(lobsters_page_url(1), "https://lobste.rs/newest.json?page=1");
-        assert_eq!(lobsters_page_url(7), "https://lobste.rs/newest.json?page=7");
+        assert_eq!(lobsters_page_url(1), "https://lobste.rs/newest/page/1.json");
+        assert_eq!(lobsters_page_url(7), "https://lobste.rs/newest/page/7.json");
     }
 
     #[test]

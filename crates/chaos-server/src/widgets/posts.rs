@@ -16,8 +16,12 @@ use crate::http_util::get_json;
 
 const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
 const ALGOLIA_SEARCH: &str = "https://hn.algolia.com/api/v1/search";
-const LOBSTERS_NEWEST: &str = "https://lobste.rs/newest.json";
-/// newest.json covers ~1.3 days per 25-story page; 10 pages safely spans a week.
+/// Base for the paginated newest feed. The page number goes in the PATH
+/// (`/newest/page/{n}.json`) — the `?page=` query form is silently ignored by
+/// lobste.rs and returns page 1 every time, which floods every window with
+/// duplicates of the newest handful of stories.
+const LOBSTERS_NEWEST: &str = "https://lobste.rs/newest";
+/// ~25 stories per page; 10 pages safely spans a week.
 const LOBSTERS_PAGE_CAP: u32 = 10;
 const WEEK_HOURS: i64 = 24 * 7;
 
@@ -76,7 +80,18 @@ fn algolia_item(hit: AlgoliaHit) -> FeedItem {
     }
 }
 
-/// Items published within the trailing `hours`, by upvotes, top `limit`.
+/// Drop later duplicates that share an `id`, keeping the first (after sorting,
+/// the highest-scored copy). Items without an id are always kept. Defends
+/// against the same story arriving on more than one fetched page.
+fn dedup_by_id(items: &mut Vec<FeedItem>) {
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|i| match &i.id {
+        Some(id) => seen.insert(id.clone()),
+        None => true,
+    });
+}
+
+/// Items published within the trailing `hours`, by upvotes, deduped, top `limit`.
 fn windowed(items: &[FeedItem], now: DateTime<Utc>, hours: i64, limit: u32) -> Vec<FeedItem> {
     let cutoff = now - chrono::Duration::hours(hours);
     let mut hits: Vec<FeedItem> = items
@@ -85,6 +100,7 @@ fn windowed(items: &[FeedItem], now: DateTime<Utc>, hours: i64, limit: u32) -> V
         .cloned()
         .collect();
     sort_by_score(&mut hits);
+    dedup_by_id(&mut hits);
     hits.truncate(limit as usize);
     hits
 }
@@ -127,9 +143,10 @@ pub async fn lobsters(
     let cutoff = now - chrono::Duration::hours(WEEK_HOURS);
     let mut items: Vec<FeedItem> = Vec::new();
     for page in 1..=LOBSTERS_PAGE_CAP {
-        let stories: Vec<LobstersStory> = get_json(http, &format!("{LOBSTERS_NEWEST}?page={page}"))
-            .await
-            .map_err(|e| format!("lobsters: {e}"))?;
+        let stories: Vec<LobstersStory> =
+            get_json(http, &format!("{LOBSTERS_NEWEST}/page/{page}.json"))
+                .await
+                .map_err(|e| format!("lobsters: {e}"))?;
         if stories.is_empty() {
             break;
         }
@@ -275,6 +292,30 @@ mod tests {
             titles(windowed(&items, now, WEEK_HOURS, 2)),
             ["yesterday", "last week"]
         );
+    }
+
+    #[test]
+    fn windowed_dedups_by_id_keeping_the_best() {
+        let now = Utc::now();
+        let dup = |score: u64, id: &str, title: &str| FeedItem {
+            title: title.into(),
+            published: Some(now - chrono::Duration::hours(1)),
+            score: Some(score),
+            id: Some(id.into()),
+            ..blank_item()
+        };
+        // The same story arriving on two pages, plus a distinct one.
+        let items = vec![
+            dup(10, "abc", "abc low copy"),
+            dup(42, "abc", "abc high copy"),
+            dup(30, "xyz", "other"),
+        ];
+        let titles: Vec<String> = windowed(&items, now, 24, 10)
+            .into_iter()
+            .map(|i| i.title)
+            .collect();
+        // One row per id; the higher-scored copy of `abc` is the survivor.
+        assert_eq!(titles, ["abc high copy", "other"]);
     }
 
     #[test]
