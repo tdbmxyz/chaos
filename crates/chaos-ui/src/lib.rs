@@ -176,6 +176,47 @@ pub(crate) fn set_weather_combined(combined: bool) {
     );
 }
 
+// ---- news page preferences (device, persisted) ----
+
+/// Which posts provider the news page opens on (HN vs lobste.rs).
+pub(crate) const NEWS_SOURCE_KEY: &str = "chaos-news-source";
+/// Which trailing window the news page opens on: "0"=24h, "1"=48h, "2"=week.
+pub(crate) const NEWS_RANGE_KEY: &str = "chaos-news-range";
+
+/// Pure mapping of a stored source string to a [`Source`]; unknown/absent
+/// falls back to the HackerNews default.
+// `allow(dead_code)`: consumers land in Task B5 (the news page); the parse
+// helper is exercised by the unit test meanwhile.
+#[allow(dead_code)]
+fn news_source_from(raw: Option<&str>) -> chaos_domain::Source {
+    raw.and_then(chaos_domain::Source::from_str)
+        .unwrap_or(chaos_domain::Source::HackerNews)
+}
+
+#[allow(dead_code)]
+pub(crate) fn news_source() -> chaos_domain::Source {
+    news_source_from(pref(NEWS_SOURCE_KEY).as_deref())
+}
+
+#[allow(dead_code)]
+pub(crate) fn set_news_source(source: chaos_domain::Source) {
+    set_pref(NEWS_SOURCE_KEY, source.as_str());
+}
+
+/// The news range index: 0=24h, 1=48h, 2=week (default 0).
+#[allow(dead_code)]
+pub(crate) fn news_range() -> u8 {
+    pref(NEWS_RANGE_KEY)
+        .and_then(|v| v.parse().ok())
+        .filter(|n| *n <= 2)
+        .unwrap_or(0)
+}
+
+#[allow(dead_code)]
+pub(crate) fn set_news_range(idx: u8) {
+    set_pref(NEWS_RANGE_KEY, &idx.to_string());
+}
+
 /// Celsius in the display unit: °F when the preference says so.
 pub(crate) fn convert_temp(celsius: f64, fahrenheit: bool) -> f64 {
     if fahrenheit {
@@ -768,6 +809,19 @@ mod tests {
             hourly: Vec::new(),
             now_index: 0,
         }
+    }
+
+    #[test]
+    fn news_source_parses() {
+        assert_eq!(
+            news_source_from(Some("lobsters")),
+            chaos_domain::Source::Lobsters
+        );
+        assert_eq!(news_source_from(None), chaos_domain::Source::HackerNews);
+        assert_eq!(
+            news_source_from(Some("garbage")),
+            chaos_domain::Source::HackerNews
+        );
     }
 
     #[test]
