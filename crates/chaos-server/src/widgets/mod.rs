@@ -13,6 +13,7 @@ mod feed;
 mod posts;
 mod releases;
 mod stats;
+mod threads;
 // pub(crate): the service monitor and the service-action API endpoint reuse
 // the unit query/act helpers for on-demand services (`ServiceDef::unit`).
 pub(crate) mod systemd;
@@ -22,7 +23,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use chaos_domain::{
-    ColumnSize, DashboardColumn, DashboardLayout, Widget, WidgetData, WidgetInstance,
+    ColumnSize, DashboardColumn, DashboardLayout, PostThread, Widget, WidgetData, WidgetInstance,
 };
 
 use crate::cache::StaleCache;
@@ -42,6 +43,10 @@ pub struct WidgetHub {
     /// Data widgets by instance id (static widgets carry no data).
     entries: HashMap<String, Widget>,
     cache: StaleCache<String, WidgetData>,
+    /// Comment threads for the reader endpoint. Separate from `cache` because
+    /// `StaleCache` is typed to its value and threads are `PostThread`, not
+    /// `WidgetData`.
+    thread_cache: StaleCache<String, PostThread>,
     /// CPU/memory sparkline samples; the sampler task only runs when the
     /// layout actually has a server_stats widget.
     stats_history: Option<stats::History>,
@@ -68,6 +73,7 @@ impl WidgetHub {
             layout,
             entries,
             cache: StaleCache::new(WIDGET_CACHE_ENTRIES),
+            thread_cache: StaleCache::new(WIDGET_CACHE_ENTRIES),
             stats_history,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -104,6 +110,40 @@ impl WidgetHub {
             }
         };
         self.cached_fetch(key, ttl, fetch).await
+    }
+
+    /// One post's comment thread for the reader endpoint, cached per
+    /// source+id (300s TTL) with the same serve-stale-on-failure rules as the
+    /// widget caches.
+    pub async fn post_thread(
+        &self,
+        source: chaos_domain::Source,
+        id: &str,
+    ) -> Result<PostThread, WidgetError> {
+        use chaos_domain::Source;
+        let key = format!("thread:{}:{id}", source.as_str());
+        let ttl = Duration::from_secs(300);
+        if let Some(thread) = self.thread_cache.get_fresh(&key, ttl).await {
+            return Ok(thread);
+        }
+        let fetched = match source {
+            Source::HackerNews => threads::fetch_hn(&self.http, id).await,
+            Source::Lobsters => threads::fetch_lobsters(&self.http, id).await,
+        };
+        match fetched {
+            Ok(thread) => {
+                self.thread_cache.insert(key, thread.clone()).await;
+                Ok(thread)
+            }
+            Err(reason) => {
+                if let Some(thread) = self.thread_cache.get_stale(&key).await {
+                    tracing::warn!(key, reason, "thread refresh failed, serving stale");
+                    return Ok(thread);
+                }
+                tracing::warn!(key, reason, "thread fetch failed");
+                Err(WidgetError::Upstream(reason))
+            }
+        }
     }
 
     /// Fetch-through-cache with the hub's staleness rules: serve a cached

@@ -19,6 +19,15 @@ pub async fn get_json<T: serde::de::DeserializeOwned>(
     resp.json().await.map_err(|e| e.to_string())
 }
 
+/// GET `url` and return the body as text. Non-2xx statuses become errors.
+pub async fn get_text(http: &reqwest::Client, url: &str) -> Result<String, String> {
+    let resp = http.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("status {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| e.to_string())
+}
+
 /// GET `url` and return the raw body, erroring as soon as it exceeds
 /// `max_bytes` — the body is streamed, never buffered past the cap.
 pub async fn get_body_capped(
