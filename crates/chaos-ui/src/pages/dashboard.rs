@@ -1159,6 +1159,19 @@ mod tests {
         assert_eq!(score_color(0, 0), "#e8d288");
     }
 
+    #[test]
+    fn log_scale_lifts_low_score_out_of_yellow() {
+        // Real clustered set: 181 against anchor 2146. Linear 181/2146 = 0.084
+        // → pos 0.34, stuck in the faint→yellow first segment (green ≈ 211).
+        // Log ln(182)/ln(2147) = 0.68 → pos 2.71, the orange→red segment
+        // (green ≈ 116). Asserting it left the yellow band FAILS under linear.
+        let green = |s: &str| u8::from_str_radix(&s[3..5], 16).unwrap();
+        assert!(
+            green(&score_color(181, 2146)) < 150,
+            "low score must reach the orange/red band under the log scale"
+        );
+    }
+
     // -- posts_window: tab selects the matching trailing window ------------
 
     #[test]
