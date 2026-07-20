@@ -840,14 +840,16 @@ fn score_anchor(scores: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
     Some(scores[rank - 1])
 }
 
-/// `#rrggbb` heat color for a score: `t = score / anchor` clamped to
-/// [0, 1], linearly interpolated in RGB between the adjacent [`HEAT_STOPS`].
+/// `#rrggbb` heat color for a score: `t = ln(1+score) / ln(1+anchor)`
+/// clamped to [0, 1], linearly interpolated in RGB between the adjacent
+/// [`HEAT_STOPS`]. The logarithmic normalization spreads the clustered
+/// mid-range scores apart instead of clumping them at the faint end.
 /// Anchor 0 (guarding the division) renders the faint end.
 fn score_color(score: u64, anchor: u64) -> String {
     let t = if anchor == 0 {
         0.0
     } else {
-        (score as f64 / anchor as f64).clamp(0.0, 1.0)
+        (((score as f64) + 1.0).ln() / ((anchor as f64) + 1.0).ln()).clamp(0.0, 1.0)
     };
     let pos = t * (HEAT_STOPS.len() - 1) as f64;
     let i = (pos as usize).min(HEAT_STOPS.len() - 2);
@@ -1078,18 +1080,20 @@ mod tests {
 
     #[test]
     fn color_hits_the_five_stops_exactly() {
-        assert_eq!(score_color(0, 100), "#e8d288");
-        assert_eq!(score_color(25, 100), "#ffd60a");
-        assert_eq!(score_color(50, 100), "#ff9500");
-        assert_eq!(score_color(75, 100), "#f4674f");
-        assert_eq!(score_color(100, 100), "#ff2200");
+        // Under the log scale, anchor 15 (ln 16 = 4·ln 2) lands scores
+        // 0/1/3/7/15 on t = 0/¼/½/¾/1 — exactly the five stops.
+        assert_eq!(score_color(0, 15), "#e8d288");
+        assert_eq!(score_color(1, 15), "#ffd60a");
+        assert_eq!(score_color(3, 15), "#ff9500");
+        assert_eq!(score_color(7, 15), "#f4674f");
+        assert_eq!(score_color(15, 15), "#ff2200");
     }
 
     #[test]
     fn color_midpoint_between_stops() {
-        // t = 0.125, halfway from #e8d288 to #ffd60a:
+        // t = ln 2 / ln 256 = 0.125, halfway from #e8d288 to #ffd60a:
         // r (232+255)/2 → 244, g (210+214)/2 → 212, b (136+10)/2 → 73.
-        assert_eq!(score_color(125, 1000), "#f4d449");
+        assert_eq!(score_color(1, 255), "#f4d449");
     }
 
     #[test]
@@ -1101,6 +1105,44 @@ mod tests {
     fn color_anchor_zero_renders_faint_end() {
         assert_eq!(score_color(0, 0), "#e8d288");
         assert_eq!(score_color(50, 0), "#e8d288");
+    }
+
+    // -- score_color: logarithmic scale -----------------------------------
+
+    #[test]
+    fn log_scale_separates_midrange_scores() {
+        // Real clustered set: anchor is the top score.
+        let anchor = 2146u64;
+        // Under linear score/anchor, 334 and 497 both sit ~0.15-0.23 → both in the
+        // first gradient segment (faint→yellow). Under log they diverge.
+        let c334 = score_color(334, anchor);
+        let c497 = score_color(497, anchor);
+        assert_ne!(c334, c497, "mid-range scores must be distinguishable");
+    }
+
+    #[test]
+    fn log_scale_is_monotonic() {
+        let anchor = 2146u64;
+        // Higher score → not-lighter color: compare the red channel (first two hex
+        // chars), which increases toward hard red.
+        let red = |s: &str| u8::from_str_radix(&s[1..3], 16).unwrap();
+        assert!(red(&score_color(865, anchor)) >= red(&score_color(193, anchor)));
+        assert!(red(&score_color(2146, anchor)) >= red(&score_color(865, anchor)));
+    }
+
+    #[test]
+    fn log_scale_anchor_hits_hard_red() {
+        assert_eq!(score_color(2146, 2146), "#ff2200");
+    }
+
+    #[test]
+    fn log_scale_overflow_clamps_to_hard_red() {
+        assert_eq!(score_color(9000, 2146), "#ff2200");
+    }
+
+    #[test]
+    fn log_scale_zero_anchor_is_faint() {
+        assert_eq!(score_color(0, 0), "#e8d288");
     }
 }
 
