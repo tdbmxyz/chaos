@@ -9,6 +9,7 @@ mod icons;
 mod links;
 mod search;
 mod services;
+mod views;
 mod widgets;
 
 use axum::Router;
@@ -45,6 +46,9 @@ pub fn router(state: AppState) -> Router {
         .route("/widgets/{id}", get(widgets::widget_data))
         .route("/widgets/{id}/systemd", post(widgets::widget_systemd))
         .route("/posts/{source}", get(widgets::posts_list))
+        .route("/posts/{source}/views", get(views::views_map))
+        .route("/posts/views", post(views::record_views))
+        .route("/analytics/events", post(views::record_events))
         .route("/posts/{source}/{id}/comments", get(widgets::post_thread))
         .route("/home/sensors", get(home::sensors))
         .route("/home/lights", get(home::lights))
@@ -87,4 +91,21 @@ pub fn router(state: AppState) -> Router {
         // revisit when auth lands (see ROADMAP).
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::db::Db;
+
+    /// Overlapping routes panic at construction (matchit), not at request
+    /// time — so building the router is itself the regression guard for the
+    /// static `/posts/views` sibling of `/posts/{source}`.
+    #[tokio::test]
+    async fn router_builds_without_route_conflicts() {
+        let db = Db::in_memory().await.unwrap();
+        let state = AppState::new(Config::default(), db).unwrap();
+        let _ = router(state);
+    }
 }

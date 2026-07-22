@@ -11,8 +11,6 @@ use crate::db::{Db, Result};
 /// timestamps (presence = signal on).
 type ViewRow = (String, Option<String>, Option<String>, Option<String>);
 
-// Wired into handlers in Task A5; unused until then.
-#[allow(dead_code)]
 impl Db {
     /// Record one engagement event, first-timestamp-wins. Every event ensures
     /// `seen_at` is set; `opened_*` set their own column only when still null.

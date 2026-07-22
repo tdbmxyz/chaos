@@ -5,8 +5,6 @@ use chrono::{DateTime, Utc};
 
 use crate::db::{Db, Result};
 
-// Wired into the posts_list handler in Task A5; unused until then.
-#[allow(dead_code)]
 impl Db {
     /// Record first-seen for each `(source, post_id)`; existing rows are left
     /// untouched so `first_seen_at` stays the earliest sighting.
