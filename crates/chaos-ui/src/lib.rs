@@ -496,6 +496,10 @@ pub fn App(config: AppConfig) -> impl IntoView {
     let session = Session(RwSignal::new(None));
     provide_context(session);
 
+    // Analytics overlay + flush context (needs AppConfig, SharedClient and the
+    // connectivity signal, all provided above).
+    analytics::provide_overlay();
+
     // Restore the session. A one-shot `me()` on mount would leave the
     // session empty forever on an offline boot (locking per-user pages like
     // the calendar behind a sign-in prompt despite cached data), so instead:
@@ -514,6 +518,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
             && let Some(user) = offline::cache_get::<User>("me")
         {
             session.0.set(Some(user));
+            analytics::maybe_record_app_open();
         }
         if !came_online {
             return;
@@ -527,6 +532,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     // dropped by logout's cache_clear.
                     offline::cache_put("me", &user);
                     session.0.set(Some(user));
+                    analytics::maybe_record_app_open();
                 }
                 // Lost the server between the probe and this call: keep (or
                 // restore) the last-known user; the next Online transition
