@@ -6,8 +6,6 @@ use uuid::Uuid;
 
 use crate::db::{Db, Result};
 
-// Wired into handlers in Tasks A5/A6; unused until then.
-#[allow(dead_code)]
 impl Db {
     /// Batch-insert analytics events. `user_id` is `None` for anonymous events.
     pub async fn record_events(&self, user_id: Option<Uuid>, items: &[EventItem]) -> Result<()> {
