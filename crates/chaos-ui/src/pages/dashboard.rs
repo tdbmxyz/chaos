@@ -1052,6 +1052,13 @@ pub(crate) fn post_row_view(
         .comments
         .map(|n| format!("{n} comment{}", if n == 1 { "" } else { "s" }));
     let age = item.published.map(rel_time);
+    // The article's domain, shown muted beside the favicon. `www.` is dropped;
+    // text posts (no external url) get no domain label.
+    let domain = item
+        .url
+        .as_ref()
+        .and_then(|u| u.host_str())
+        .map(|h| h.strip_prefix("www.").unwrap_or(h).to_string());
     let title = item.title.clone();
 
     let title_link = match reader_href {
@@ -1074,21 +1081,24 @@ pub(crate) fn post_row_view(
                     <span class="feed-age">{age}</span>
                 </span>
             </div>
-            <a class="post-favicon" href=fav_href target="_blank" rel="noreferrer">
-                <img
-                    src=fav_url
-                    alt=""
-                    loading="lazy"
-                    on:error=|ev| {
-                        use leptos::wasm_bindgen::JsCast;
-                        if let Some(target) = ev.target()
-                            && let Ok(el) = target.dyn_into::<web_sys::Element>()
-                        {
-                            el.set_class_name("hidden");
+            <div class="post-meta-right">
+                {domain.map(|d| view! { <span class="post-domain">{d}</span> })}
+                <a class="post-favicon" href=fav_href target="_blank" rel="noreferrer">
+                    <img
+                        src=fav_url
+                        alt=""
+                        loading="lazy"
+                        on:error=|ev| {
+                            use leptos::wasm_bindgen::JsCast;
+                            if let Some(target) = ev.target()
+                                && let Ok(el) = target.dyn_into::<web_sys::Element>()
+                            {
+                                el.set_class_name("hidden");
+                            }
                         }
-                    }
-                />
-            </a>
+                    />
+                </a>
+            </div>
         </li>
     }
 }
