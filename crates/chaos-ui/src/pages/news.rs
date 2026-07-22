@@ -183,7 +183,15 @@ pub fn NewsPage() -> impl IntoView {
             source.get();
             range.get();
             data.track();
-            rebind_seen_observer(&observer);
+            // Defer to the next tick: this effect fires when the data resolves,
+            // but Leptos hasn't committed the new row `<li>`s to the DOM yet, so
+            // querying for them here would observe nothing. A 0ms timeout runs
+            // after the render commits.
+            let observer = observer.clone();
+            set_timeout(
+                move || rebind_seen_observer(&observer),
+                std::time::Duration::from_millis(0),
+            );
         });
     }
 

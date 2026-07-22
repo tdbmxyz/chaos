@@ -23,8 +23,12 @@ const APPOPEN_KEY: &str = "chaos-appopen-at";
 /// Global optimistic overlay: (source-as-str, post_id) -> flags. Provided once
 /// in App context so NewsPage rows and the reader share it. Rows read their
 /// flags reactively, so an OR into the map instantly restyles the row.
+/// (source-as-str, post_id) -> flags.
+pub(crate) type OverlayMap = HashMap<(String, String), ViewFlags>;
+pub(crate) type OverlaySignal = RwSignal<OverlayMap>;
+
 #[derive(Clone, Copy)]
-pub(crate) struct Overlay(pub RwSignal<HashMap<(String, String), ViewFlags>>);
+pub(crate) struct Overlay(pub OverlaySignal);
 
 thread_local! {
     /// The client + connectivity + persist flag, captured once at `App` boot
@@ -36,19 +40,33 @@ thread_local! {
     /// Trailing-debounce guard: one pending flush timer coalesces a burst of
     /// `record_*` calls.
     static FLUSH_SCHEDULED: Cell<bool> = const { Cell::new(false) };
+    /// The overlay signal, captured at boot. `record_view` is called from the
+    /// IntersectionObserver's plain JS callback, which has no reactive owner to
+    /// `use_context` from — but an `RwSignal` handle works anywhere, and reading
+    /// it via `.with()` inside a row closure still subscribes reactively.
+    static OVERLAY: Cell<Option<OverlaySignal>> =
+        const { Cell::new(None) };
 }
 
-/// Provide the overlay context and capture the flush context. Call once in App.
+/// Provide the overlay context and capture the flush + overlay context. Call
+/// once in App.
 pub(crate) fn provide_overlay() {
-    provide_context(Overlay(RwSignal::new(HashMap::new())));
+    let sig = RwSignal::new(HashMap::new());
+    provide_context(Overlay(sig));
+    OVERLAY.with(|o| o.set(Some(sig)));
     let client = crate::use_client();
     let conn = use_connectivity();
     let persist = crate::persist_token();
     FLUSH_CTX.with(|c| *c.borrow_mut() = Some((client, conn, persist)));
 }
 
+/// The overlay signal from the boot-time thread-local (owner-free, so it works
+/// from the observer callback as well as from components).
 pub(crate) fn overlay() -> Overlay {
-    use_context::<Overlay>().expect("Overlay provided by App")
+    OVERLAY
+        .with(|o| o.get())
+        .map(Overlay)
+        .expect("Overlay provided by App")
 }
 
 /// Present in context only when viewed-state tracking is active (authed on
