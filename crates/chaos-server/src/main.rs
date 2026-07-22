@@ -7,6 +7,7 @@ mod config;
 mod db;
 mod db_auth;
 mod db_calendar;
+mod db_views;
 mod home_assistant;
 mod http_util;
 mod ics;
