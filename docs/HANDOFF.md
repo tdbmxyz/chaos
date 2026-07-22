@@ -40,6 +40,20 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   subtree. On phone the two posts widgets are dropped from the dashboard in
   favor of this page (desktop keeps them); Home moved to the More page to
   make room for News in the tab bar. Scores use a logarithmic heat scale.
+- **News viewed-state + analytics** (authed only): per-user, per-post
+  engagement — a row dims once seen in the viewport, dims more once its
+  comments are opened, and gets a `✓` (between domain and favicon, title
+  kept bright) once its article link is opened; state syncs cross-device.
+  Backed by `post_views` (first-occurrence timestamps), `posts` (system
+  `first_seen_at` ingestion, for added-vs-read analysis) and an
+  `analytics_events` log (`login`/`app_open`≤1-per-5min/`search`/
+  `reader_open`), via auth-gated `GET /posts/{source}/views`,
+  `POST /posts/views`, `POST /analytics/events`. A localStorage outbox
+  queues events offline and flushes on the probe's reconnect; "seen" comes
+  from an IntersectionObserver whose callback reaches the overlay/flush via
+  boot-time thread-locals (no reactive owner in a raw JS callback). No
+  analytics UI yet — query the SQLite tables directly. Logged-off = plain
+  rows, no tracking; desktop dashboard widget unaffected.
 - **Calendar**: static month widget, fully client-side (Monday-first,
   prev/today/next).
 - **Systemd manager**: `systemd` widget lists configured units with state
