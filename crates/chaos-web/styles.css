@@ -783,6 +783,23 @@ button.primary {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Viewed-state (authed /news + reader): dimming is the reading axis, the check
+   is the article axis. Opening the article suppresses the seen-dim (its check is
+   the signal), so only `seen`/`read` dim the title. */
+li.post-row.seen .post-title {
+  opacity: 0.72;
+}
+li.post-row.read .post-title {
+  opacity: 0.52;
+}
+/* Accent ✓ between the domain and the favicon when the article was opened. */
+.article-check {
+  color: var(--accent);
+  opacity: 0.85;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 /* `.post-row .post-favicon` (two classes) outranks the generic `.feed-list a`
    (`flex: 1`, and `flex: 1 1 100%` on phones), which would otherwise stretch
    this anchor. `white-space: normal` undoes the feed-link ellipsis reset. */

@@ -55,6 +55,14 @@ pub(crate) fn overlay() -> Overlay {
     use_context::<Overlay>().expect("Overlay provided by App")
 }
 
+/// Present in context only when viewed-state tracking is active (authed on
+/// `/news` + reader). Its absence tells `post_row_view` to render plain rows.
+/// Carries the currently shown source.
+#[derive(Clone, Copy)]
+pub(crate) struct ViewedState {
+    pub source: Source,
+}
+
 fn now_utc() -> DateTime<Utc> {
     Utc::now()
 }

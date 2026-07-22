@@ -3,8 +3,8 @@ use std::time::Duration;
 use chaos_client::{ChaosClient, ClientError};
 use chaos_domain::{
     BookmarkGroup, ColumnSize, DashboardLayout, FeedItem, HealthState, PostsData, ServerStats,
-    Source, SystemdAction, SystemdActionRequest, SystemdUnitStatus, WeatherData, Widget,
-    WidgetData, WidgetInstance,
+    Source, SystemdAction, SystemdActionRequest, SystemdUnitStatus, ViewEvent, ViewFlags,
+    WeatherData, Widget, WidgetData, WidgetInstance,
 };
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use leptos::prelude::*;
@@ -1061,9 +1061,33 @@ pub(crate) fn post_row_view(
         .map(|h| h.strip_prefix("www.").unwrap_or(h).to_string());
     let title = item.title.clone();
 
+    // Viewed-state tracking is on only when a `ViewedState` is in context
+    // (authed `/news` + reader). Absent → plain rows, byte-identical to before,
+    // so the desktop dashboard widget and logged-off web are unaffected.
+    let tracked = use_context::<crate::analytics::ViewedState>().is_some();
+    let vid = item.id.clone();
+
     let title_link = match reader_href {
         // Internal reader route: client-side SPA navigation (no full reload).
-        Some(href) => view! { <A href=href attr:class="post-title">{title}</A> }.into_any(),
+        // When tracking, tapping the title records opened-comments (the reader
+        // also records it on load; recording here restyles the row instantly).
+        Some(href) => match (tracked, vid.clone()) {
+            (true, Some(id)) => view! {
+                <A
+                    href=href
+                    attr:class="post-title"
+                    on:click=move |_| crate::analytics::record_view(
+                        source,
+                        &id,
+                        ViewEvent::OpenedComments,
+                    )
+                >
+                    {title}
+                </A>
+            }
+            .into_any(),
+            _ => view! { <A href=href attr:class="post-title">{title}</A> }.into_any(),
+        },
         // No reader id: link the article, opening out of the app.
         None => view! {
             <a class="post-title" href=external_href target="_blank" rel="noreferrer">{title}</a>
@@ -1071,8 +1095,73 @@ pub(crate) fn post_row_view(
         .into_any(),
     };
 
+    // The favicon `<img>` hides itself when broken; CSS then shows a glyph.
+    let favicon_img = view! {
+        <img
+            src=fav_url
+            alt=""
+            loading="lazy"
+            on:error=|ev| {
+                use leptos::wasm_bindgen::JsCast;
+                if let Some(target) = ev.target()
+                    && let Ok(el) = target.dyn_into::<web_sys::Element>()
+                {
+                    el.set_class_name("hidden");
+                }
+            }
+        />
+    };
+
+    if !tracked {
+        // Byte-identical to the pre-analytics rendering.
+        return view! {
+            <li class="post-row">
+                <div class="post-main">
+                    {title_link}
+                    <span class="muted feed-meta">
+                        <span class="feed-score" style:color=score_style>{score}</span>
+                        <span class="feed-comments">{comments}</span>
+                        <span class="feed-age">{age}</span>
+                    </span>
+                </div>
+                <div class="post-meta-right">
+                    {domain.map(|d| view! { <span class="post-domain">{d}</span> })}
+                    <a class="post-favicon" href=fav_href target="_blank" rel="noreferrer">
+                        {favicon_img}
+                    </a>
+                </div>
+            </li>
+        }
+        .into_any();
+    }
+
+    // Tracked: reactive flags from the shared overlay for this (source, id).
+    let flags = {
+        let id = vid.clone();
+        move || match &id {
+            Some(id) => crate::analytics::overlay().0.with(|m| {
+                m.get(&(source.as_str().to_string(), id.clone()))
+                    .copied()
+                    .unwrap_or_default()
+            }),
+            None => ViewFlags::default(),
+        }
+    };
+    let flags_read = flags.clone();
+    let flags_check = flags.clone();
+    // `data-view-id` is the IntersectionObserver's handle; only rows with an id
+    // are observable.
+    let view_id = vid.as_ref().map(|id| format!("{}:{}", source.as_str(), id));
+    // Tapping the favicon opens the article externally → record opened-article.
+    let article_id = vid.clone();
+
     view! {
-        <li class="post-row">
+        <li
+            class="post-row"
+            class:seen=move || crate::analytics::row_state_class(flags()) == "seen"
+            class:read=move || crate::analytics::row_state_class(flags_read()) == "read"
+            data-view-id=view_id
+        >
             <div class="post-main">
                 {title_link}
                 <span class="muted feed-meta">
@@ -1083,24 +1172,26 @@ pub(crate) fn post_row_view(
             </div>
             <div class="post-meta-right">
                 {domain.map(|d| view! { <span class="post-domain">{d}</span> })}
-                <a class="post-favicon" href=fav_href target="_blank" rel="noreferrer">
-                    <img
-                        src=fav_url
-                        alt=""
-                        loading="lazy"
-                        on:error=|ev| {
-                            use leptos::wasm_bindgen::JsCast;
-                            if let Some(target) = ev.target()
-                                && let Ok(el) = target.dyn_into::<web_sys::Element>()
-                            {
-                                el.set_class_name("hidden");
-                            }
+                {move || {
+                    flags_check().article.then(|| view! { <span class="article-check">"✓"</span> })
+                }}
+                <a
+                    class="post-favicon"
+                    href=fav_href
+                    target="_blank"
+                    rel="noreferrer"
+                    on:click=move |_| {
+                        if let Some(id) = &article_id {
+                            crate::analytics::record_view(source, id, ViewEvent::OpenedArticle);
                         }
-                    />
+                    }
+                >
+                    {favicon_img}
                 </a>
             </div>
         </li>
     }
+    .into_any()
 }
 
 /// Tiny history graph (values normalized to 0..=1, oldest first). Drawn as
