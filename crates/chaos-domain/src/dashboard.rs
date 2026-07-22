@@ -309,6 +309,66 @@ impl Source {
     }
 }
 
+/// A per-post interaction event the client records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewEvent {
+    Seen,
+    OpenedComments,
+    OpenedArticle,
+}
+
+/// The three booleans rendered per row (derived from the `*_at` columns).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewFlags {
+    pub seen: bool,
+    pub comments: bool,
+    pub article: bool,
+}
+
+impl ViewFlags {
+    /// Build flags straight from column presence. `from_times` reflects the
+    /// columns verbatim; the render layer applies the "opening implies seen"
+    /// visual rule.
+    pub fn from_times(seen: bool, comments: bool, article: bool) -> Self {
+        Self {
+            seen,
+            comments,
+            article,
+        }
+    }
+}
+
+/// Server → client: the current user's flags for a source, keyed by post_id.
+pub type ViewedMap = std::collections::HashMap<String, ViewFlags>;
+
+/// One queued post-view event (carries the client timestamp for offline).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewEventItem {
+    pub source: Source,
+    pub post_id: String,
+    pub event: ViewEvent,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RecordViewsRequest {
+    pub events: Vec<ViewEventItem>,
+}
+
+/// One queued generic analytics event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventItem {
+    pub kind: String,
+    pub detail: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RecordEventsRequest {
+    pub events: Vec<EventItem>,
+}
+
 /// A post's discussion: the story header plus its comment tree, served by
 /// `GET /api/v1/posts/{source}/{id}/comments`. Comment bodies are
 /// server-sanitized HTML online, or plain text on the offline direct path.
@@ -397,6 +457,36 @@ pub struct DiskUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_event_serde_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&ViewEvent::OpenedComments).unwrap(),
+            "\"opened_comments\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ViewEvent>("\"seen\"").unwrap(),
+            ViewEvent::Seen
+        );
+    }
+
+    #[test]
+    fn view_flags_from_times() {
+        assert_eq!(
+            ViewFlags::from_times(true, false, false),
+            ViewFlags {
+                seen: true,
+                comments: false,
+                article: false
+            }
+        );
+        // opening implies seen at the render layer, but from_times reflects
+        // the columns verbatim.
+        assert_eq!(
+            ViewFlags::from_times(false, false, false),
+            ViewFlags::default()
+        );
+    }
 
     #[test]
     fn source_round_trips() {
