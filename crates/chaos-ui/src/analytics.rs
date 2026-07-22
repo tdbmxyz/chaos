@@ -3,10 +3,6 @@
 //! throttle. The PURE helpers (throttle predicate, flag merge, row class) are
 //! unit-tested here; the localStorage/timer/observer glue is browser-only.
 
-// Consumers land across B2-B6 (outbox glue, App boot, rows, reader). Until the
-// last of those is wired, some items are defined ahead of their first use.
-#![allow(dead_code)]
-
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
@@ -60,6 +56,10 @@ pub(crate) fn overlay() -> Overlay {
 /// Carries the currently shown source.
 #[derive(Clone, Copy)]
 pub(crate) struct ViewedState {
+    // Carried as the declared context shape (and a seam for a future
+    // desktop-widget adoption); rows key off `ViewedState`'s *presence* and
+    // already receive the active source as a render argument.
+    #[allow(dead_code)]
     pub source: Source,
 }
 
