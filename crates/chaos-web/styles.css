@@ -763,13 +763,31 @@ button.primary {
   gap: 0.15rem;
 }
 
-/* `.post-row .post-favicon` (two classes) outranks the generic `.feed-list a`
-   (`flex: 1`, and `flex: 1 1 100%` on phones), which would otherwise stretch
-   this anchor and float the icon toward the middle. `margin-left: auto` pins it
-   hard right; `white-space: normal` undoes the feed-link ellipsis reset. */
-.post-row .post-favicon {
+/* Domain label + favicon, pinned hard right as one cluster. */
+.post-row .post-meta-right {
   flex: 0 0 auto;
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+/* The article domain: readable but recessive — muted and slightly faded,
+   truncated so a long host can't crowd the title. */
+.post-domain {
+  color: var(--muted);
+  opacity: 0.7;
+  font-size: 0.75rem;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* `.post-row .post-favicon` (two classes) outranks the generic `.feed-list a`
+   (`flex: 1`, and `flex: 1 1 100%` on phones), which would otherwise stretch
+   this anchor. `white-space: normal` undoes the feed-link ellipsis reset. */
+.post-row .post-favicon {
+  flex: 0 0 auto;
   width: 20px;
   height: 20px;
   display: inline-flex;
