@@ -2,6 +2,7 @@
 //! (trunk) and rendered inside the Tauri webview. Anything platform-specific
 //! (like where the API lives) is injected from the outside via [`AppConfig`].
 
+mod analytics;
 mod components;
 mod date_util;
 mod echarts;
