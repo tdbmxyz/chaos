@@ -126,6 +126,31 @@ impl ChaosClient {
             .await
     }
 
+    /// The signed-in user's viewed-state for a source, keyed by post id.
+    pub async fn viewed_map(
+        &self,
+        source: chaos_domain::Source,
+    ) -> Result<chaos_domain::ViewedMap> {
+        self.get(&format!("api/v1/posts/{}/views", source.as_str()))
+            .await
+    }
+
+    /// Record a batch of per-post engagement events for the signed-in user.
+    pub async fn record_views(&self, req: &chaos_domain::RecordViewsRequest) -> Result<()> {
+        let req = self.http.post(self.url("api/v1/posts/views")?).json(req);
+        self.send_no_content(req).await
+    }
+
+    /// Record a batch of generic analytics events for the signed-in user.
+    /// (`/analytics/events`, since the calendar owns `/events`.)
+    pub async fn record_events(&self, req: &chaos_domain::RecordEventsRequest) -> Result<()> {
+        let req = self
+            .http
+            .post(self.url("api/v1/analytics/events")?)
+            .json(req);
+        self.send_no_content(req).await
+    }
+
     /// Start/stop an on-demand service's systemd unit (services configured
     /// with a `unit`); returns the service with its re-checked status.
     pub async fn service_action(
@@ -444,6 +469,25 @@ mod tests {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             Some(&self.0)
         }
+    }
+
+    #[test]
+    fn viewed_map_targets_the_source_views_path() {
+        let client = super::ChaosClient::new("http://zeus:4600".parse().unwrap());
+        let url = client
+            .url(&format!(
+                "api/v1/posts/{}/views",
+                chaos_domain::Source::HackerNews.as_str()
+            ))
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://zeus:4600/api/v1/posts/hackernews/views"
+        );
+        assert_eq!(
+            client.url("api/v1/analytics/events").unwrap().as_str(),
+            "http://zeus:4600/api/v1/analytics/events"
+        );
     }
 
     #[test]

@@ -33,6 +33,11 @@ pub async fn search(
         return Ok(Json(SearchResults::default()));
     }
     let user_id = crate::auth::optional_user_id(&state, &headers).await;
+    // Best-effort analytics: record the query (attributed when signed in).
+    let _ = state
+        .db
+        .record_event(user_id, "search", Utc::now(), Some(q))
+        .await;
     Ok(Json(aggregate(&state, user_id, q).await?))
 }
 

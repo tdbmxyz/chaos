@@ -25,12 +25,23 @@ pub async fn posts_list(
     Path(source): Path<String>,
 ) -> Result<Json<WidgetData>, ApiError> {
     let source = chaos_domain::Source::from_str(&source).ok_or(ApiError::NotFound)?;
-    state
-        .widgets
-        .posts_list(source)
-        .await
-        .map(Json)
-        .map_err(Into::into)
+    let data = state.widgets.posts_list(source).await?;
+    // Record post-ingestion timestamps (first_seen_at) for analytics.
+    // Best-effort: never fail the response over this.
+    if let WidgetData::Posts(posts) = &data {
+        let items: Vec<(String, String, String)> = posts
+            .last_24h
+            .iter()
+            .chain(&posts.last_48h)
+            .chain(&posts.last_week)
+            .filter_map(|i| {
+                i.id.clone()
+                    .map(|id| (source.as_str().to_string(), id, i.title.clone()))
+            })
+            .collect();
+        let _ = state.db.upsert_posts(&items, chrono::Utc::now()).await;
+    }
+    Ok(Json(data))
 }
 
 /// Comment thread for one post (`source` + provider id), served by the

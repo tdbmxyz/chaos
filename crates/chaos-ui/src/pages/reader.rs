@@ -15,7 +15,7 @@
 //! a plain-text body marked sanitized. Titles and authors are always text nodes.
 
 use chaos_client::ChaosClient;
-use chaos_domain::{Comment, PostThread, Source};
+use chaos_domain::{Comment, PostThread, Source, ViewEvent};
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
@@ -141,6 +141,29 @@ pub fn PostReader() -> impl IntoView {
         }
     });
 
+    // Record opened-comments + a `reader_open` analytics event once per visit
+    // (authed only). Deep-links / direct navigation are covered too, since this
+    // fires whenever a thread resolves — keyed on (source, id) so a stale→fresh
+    // re-fetch of the same thread doesn't double-log.
+    let recorded = StoredValue::new(None::<(Source, String)>);
+    Effect::new(move |_| {
+        if !matches!(thread.get(), Some(Ok(_))) {
+            return;
+        }
+        let Some(src) = source() else { return };
+        if crate::use_session().0.get_untracked().is_none() {
+            return;
+        }
+        let id = id();
+        let key = (src, id.clone());
+        if recorded.get_value().as_ref() == Some(&key) {
+            return;
+        }
+        recorded.set_value(Some(key));
+        crate::analytics::record_view(src, &id, ViewEvent::OpenedComments);
+        crate::analytics::record_event("reader_open", Some(format!("{}:{}", src.as_str(), id)));
+    });
+
     view! {
         <section class="reader">
             <A href="/news" attr:class="reader-back">"‹ News"</A>
@@ -177,11 +200,35 @@ fn reader_body(
     let age = thread.published.map(rel_time);
     // Title is ALWAYS a text node (never inner_html).
     let title = thread.title.clone();
+    // Authed: tapping the article title records opened-article.
+    let authed = crate::use_session().0.get_untracked().is_some();
+    let article_id = thread.id.clone();
     let title_view = match thread.url.as_ref().map(|u| u.to_string()) {
-        Some(href) => view! {
-            <a class="reader-title" href=href target="_blank" rel="noreferrer">{title}</a>
+        Some(href) => {
+            if authed {
+                view! {
+                    <a
+                        class="reader-title"
+                        href=href
+                        target="_blank"
+                        rel="noreferrer"
+                        on:click=move |_| crate::analytics::record_view(
+                            source,
+                            &article_id,
+                            ViewEvent::OpenedArticle,
+                        )
+                    >
+                        {title}
+                    </a>
+                }
+                .into_any()
+            } else {
+                view! {
+                    <a class="reader-title" href=href target="_blank" rel="noreferrer">{title}</a>
+                }
+                .into_any()
+            }
         }
-        .into_any(),
         None => view! { <span class="reader-title">{title}</span> }.into_any(),
     };
     // Self-text body: inner_html only for server-sanitized HTML; text otherwise.

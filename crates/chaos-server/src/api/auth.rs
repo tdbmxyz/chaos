@@ -49,6 +49,16 @@ pub async fn login(
         .await?;
     tracing::info!(username = user.username, "login");
 
+    // Best-effort analytics: record the login with the client's user-agent.
+    // Never fail the login over a logging error.
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok());
+    let _ = state
+        .db
+        .record_event(Some(user.id), "login", Utc::now(), ua)
+        .await;
+
     Ok((
         session_cookie_headers(
             &token,
@@ -100,6 +110,36 @@ mod tests {
             .expect("set-cookie present")
             .to_str()
             .expect("ascii cookie")
+    }
+
+    #[tokio::test]
+    async fn successful_login_records_a_login_event() {
+        use crate::auth::hash_password;
+        use crate::config::Config;
+        use crate::db::Db;
+        use chaos_domain::LoginRequest;
+
+        let db = Db::in_memory().await.unwrap();
+        db.create_user("tibo", "Tibo", &hash_password("hunter2").unwrap())
+            .await
+            .unwrap();
+        let state = AppState::new(Config::default(), db).unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::USER_AGENT, "test-agent/1.0".parse().unwrap());
+
+        login(
+            State(state.clone()),
+            headers,
+            Json(LoginRequest {
+                username: "tibo".into(),
+                password: "hunter2".into(),
+            }),
+        )
+        .await
+        .expect("login succeeds");
+
+        assert_eq!(state.db.count_events("login").await.unwrap(), 1);
     }
 
     #[test]

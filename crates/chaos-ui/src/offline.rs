@@ -147,6 +147,7 @@ pub(crate) fn mark_server_seen(base: &str) {
 /// Returns whether the server answered healthy (an Api-error health
 /// response also counts as offline).
 pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) -> bool {
+    let was_online = conn.get_untracked() == Connectivity::Online;
     match client.health().await {
         Ok(health) => {
             crate::set_server_fahrenheit(health.fahrenheit);
@@ -156,6 +157,11 @@ pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) ->
             cache_put("server-fahrenheit", &health.fahrenheit);
             mark_server_seen(client.base().as_str());
             conn.set(Connectivity::Online);
+            // Reaching Online from a non-Online state (boot or reconnect) is
+            // the moment to drain any queued analytics — best-effort.
+            if !was_online {
+                crate::analytics::flush_now();
+            }
             true
         }
         Err(_) => {

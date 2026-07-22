@@ -179,6 +179,16 @@ cross-origin (bearer instead of the cookie).
 - [x] Logarithmic score heat scale: `ln(1+score)/ln(1+p99)` instead of
       linear, so clustered mid-range scores stop collapsing into
       indistinguishable yellows
+- [x] Per-user news viewed-state + engagement analytics (authed web +
+      Android): rows on `/news` show seen (viewport → dimmed title) /
+      opened-comments (dimmer) / opened-article (`✓` between domain and
+      favicon, title kept bright) states, synced cross-device via three
+      tables (`post_views` per-user first-timestamps, `posts` ingestion
+      `first_seen_at`, `analytics_events` log) and auth-gated endpoints
+      (`/posts/{source}/views`, `/posts/views`, `/analytics/events`). An
+      offline outbox queues events and flushes on reconnect. Analytics
+      events: `login`, `app_open` (≤1/5min/device), `search`, `reader_open`.
+      Logged-off = plain rows, no tracking
 
 ## Deferred / explicitly out of scope
 
