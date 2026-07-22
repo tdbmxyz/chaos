@@ -29,4 +29,9 @@ web-sys = { workspace = true, features = [
     "Element",
     "HtmlElement",
     "CssStyleDeclaration",
+    "IntersectionObserver",
+    "IntersectionObserverEntry",
+    "IntersectionObserverInit",
+    "NodeList",
+    "Node",
 ] }
