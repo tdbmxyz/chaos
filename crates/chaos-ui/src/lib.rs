@@ -329,6 +329,40 @@ pub(crate) fn set_pref(key: &str, value: &str) {
     }
 }
 
+// ---- authentik app credentials (per-device, reverse-proxy Basic-auth) ----
+
+/// authentik username for the app's Basic-auth (when the server sits behind
+/// an authenticating proxy).
+pub(crate) const AUTHENTIK_USER_KEY: &str = "chaos-authentik-user";
+/// authentik app-password for the app's Basic-auth. Stored like the session
+/// token; never rendered back into the password input.
+pub(crate) const AUTHENTIK_TOKEN_KEY: &str = "chaos-authentik-token";
+
+/// Pure gate: both username and app-password must be non-empty for the
+/// credentials to be usable.
+fn authentik_creds_from(user: Option<String>, token: Option<String>) -> Option<(String, String)> {
+    let (u, t) = (user?, token?);
+    (!u.trim().is_empty() && !t.trim().is_empty()).then_some((u, t))
+}
+
+pub(crate) fn authentik_creds() -> Option<(String, String)> {
+    authentik_creds_from(pref(AUTHENTIK_USER_KEY), pref(AUTHENTIK_TOKEN_KEY))
+}
+
+// Wired into the settings page in a later task; keep them from tripping the
+// dead-code lint until then.
+#[allow(dead_code)]
+pub(crate) fn set_authentik_creds(user: &str, token: &str) {
+    set_pref(AUTHENTIK_USER_KEY, user);
+    set_pref(AUTHENTIK_TOKEN_KEY, token);
+}
+
+#[allow(dead_code)]
+pub(crate) fn clear_authentik_creds() {
+    set_pref(AUTHENTIK_USER_KEY, "");
+    set_pref(AUTHENTIK_TOKEN_KEY, "");
+}
+
 /// The per-device server override (settings page / connect screen). `None`
 /// means the platform default: the page origin on web, the bundled default
 /// in the shells — see chaos-web's `resolve()`.
@@ -431,13 +465,15 @@ pub fn use_client() -> ChaosClient {
     // behavior, where the whole client was rebuilt per call).
     let token = config.persist_token.then(stored_token).flatten();
     match use_context::<SharedClient>() {
-        Some(SharedClient(client)) => client.with_token(token),
+        Some(SharedClient(client)) => client.with_token(token).with_basic_auth(authentik_creds()),
         // Components rendered outside App (tests, shells) fall back to a
         // one-off client. Logged so a refactor that loses the context shows
         // up instead of silently rebuilding a client per call.
         None => {
             leptos::logging::debug_warn!("use_client: no SharedClient in context");
-            ChaosClient::new(config.api_base).with_token(token)
+            ChaosClient::new(config.api_base)
+                .with_token(token)
+                .with_basic_auth(authentik_creds())
         }
     }
 }
@@ -814,6 +850,25 @@ mod tests {
             hourly: Vec::new(),
             now_index: 0,
         }
+    }
+
+    #[test]
+    fn authentik_creds_needs_both() {
+        assert_eq!(authentik_creds_from(None, None), None);
+        assert_eq!(authentik_creds_from(Some("u".into()), None), None);
+        assert_eq!(authentik_creds_from(None, Some("t".into())), None);
+        assert_eq!(
+            authentik_creds_from(Some("u".into()), Some("".into())),
+            None
+        );
+        assert_eq!(
+            authentik_creds_from(Some("  ".into()), Some("t".into())),
+            None
+        );
+        assert_eq!(
+            authentik_creds_from(Some("u".into()), Some("t".into())),
+            Some(("u".into(), "t".into()))
+        );
     }
 
     #[test]
