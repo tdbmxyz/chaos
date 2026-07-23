@@ -349,15 +349,11 @@ pub(crate) fn authentik_creds() -> Option<(String, String)> {
     authentik_creds_from(pref(AUTHENTIK_USER_KEY), pref(AUTHENTIK_TOKEN_KEY))
 }
 
-// Wired into the settings page in a later task; keep them from tripping the
-// dead-code lint until then.
-#[allow(dead_code)]
 pub(crate) fn set_authentik_creds(user: &str, token: &str) {
     set_pref(AUTHENTIK_USER_KEY, user);
     set_pref(AUTHENTIK_TOKEN_KEY, token);
 }
 
-#[allow(dead_code)]
 pub(crate) fn clear_authentik_creds() {
     set_pref(AUTHENTIK_USER_KEY, "");
     set_pref(AUTHENTIK_TOKEN_KEY, "");
