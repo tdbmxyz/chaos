@@ -1,7 +1,9 @@
 use leptos::prelude::*;
 use url::Url;
 
-use crate::{THEMES, WEATHER_LOCATION_KEY, WEATHER_UNITS_KEY, pref, set_pref, use_theme};
+use crate::{
+    AUTHENTIK_USER_KEY, THEMES, WEATHER_LOCATION_KEY, WEATHER_UNITS_KEY, pref, set_pref, use_theme,
+};
 
 /// Device-local preferences: server address, theme, weather location/units.
 #[component]
@@ -29,6 +31,29 @@ pub fn Settings() -> impl IntoView {
             return;
         }
         crate::set_api_base_override(Some(&value));
+    };
+
+    // Authentik app credentials (for a server behind an authenticating proxy).
+    // The username is prefilled from storage; the app-password is NEVER
+    // prefilled. Saving reloads so the session/`me()` re-probes with the new
+    // Basic-auth and the greeting updates — the same idiom the connect form
+    // above uses for the server override.
+    let ak_user = RwSignal::new(pref(AUTHENTIK_USER_KEY).unwrap_or_default());
+    let ak_token = RwSignal::new(String::new());
+    let reload = || {
+        if let Some(window) = web_sys::window() {
+            let _ = window.location().reload();
+        }
+    };
+    let ak_save = move |_| {
+        crate::set_authentik_creds(&ak_user.get_untracked(), &ak_token.get_untracked());
+        reload();
+    };
+    let ak_forget = move |_| {
+        crate::clear_authentik_creds();
+        ak_user.set(String::new());
+        ak_token.set(String::new());
+        reload();
     };
 
     view! {
@@ -73,6 +98,31 @@ pub fn Settings() -> impl IntoView {
                 }}
                 <p class="muted settings-hint">
                     "Connecting reloads the app against the chosen server."
+                </p>
+            </div>
+
+            <h3>"Authentik"</h3>
+            <div class="settings-authentik">
+                <input
+                    type="text"
+                    placeholder="authentik username"
+                    prop:value=ak_user
+                    on:input=move |ev| ak_user.set(event_target_value(&ev))
+                />
+                <input
+                    type="password"
+                    placeholder="app password"
+                    prop:value=ak_token
+                    on:input=move |ev| ak_token.set(event_target_value(&ev))
+                />
+                <button class="primary" on:click=ak_save>
+                    "Save"
+                </button>
+                <button on:click=ak_forget>
+                    "Forget"
+                </button>
+                <p class="muted settings-hint">
+                    "For a server behind authentik: create an app password in authentik and enter it here."
                 </p>
             </div>
 

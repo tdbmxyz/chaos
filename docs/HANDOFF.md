@@ -76,9 +76,25 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
   imported link via `links.created_by`, attribution only).
 - **Auth**: users (`chaos-server add-user <name>`, argon2id) + sessions
   (opaque token, sha256 at rest, 90d; HttpOnly cookie for web, bearer for
-  native). Logged-off works everywhere except calendars. authentik/OIDC is
-  the planned next identity source — see docs/adr/0004-auth-and-calendar.md
-  for the exact seam.
+  native). Logged-off works everywhere except calendars.
+  - **Forward-auth (authentik):** when `[forward_auth]` has a `secret`, the
+    `AuthUser` extractor gains a second path (after the session token, which
+    still wins): a request carrying `X-Chaos-Proxy-Secret` matching the secret
+    plus `X-authentik-username` resolves that user, auto-provisioning a `users`
+    row (display from `X-authentik-name`, empty password_hash) on first
+    contact. The secret is the anti-spoofing guard — without it a direct/
+    tailnet client can't forge an identity. Deploy notes in docs/deployment.md
+    (traefik forwards the identity headers and stamps+strips the secret).
+    ADR 0004's OIDC-redirect seam is still open; this is the simpler
+    proxy-header model the deployment actually uses.
+  - **App authentication:** the Tauri/Android app can send
+    `Authorization: Basic base64(user:app-password)` (Settings → Authentik,
+    stored per-device in localStorage) so authentik's outpost lets it through;
+    chaos then reads the forwarded identity. `ChaosClient.basic_auth` beats the
+    Bearer token in `check_status`. Blank creds → normal chaos login.
+  - **Greeting:** the topbar / More page shows "Hello {display_name}" when
+    `me()` resolves (chaos login OR forward-auth) and "Hello stranger"
+    otherwise — a quick "am I really logged in through SSO?" check.
 - **Calendar section**: `/calendar` tab (also via the dashboard calendar
   widget title). Per-user calendars: `local` (event CRUD in SQLite) and
   `ics` feed subscriptions (Google secret address / Proton share link),

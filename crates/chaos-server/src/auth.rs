@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use axum::extract::FromRequestParts;
+use axum::http::HeaderMap;
 use axum::http::header;
 use axum::http::request::Parts;
 use chaos_domain::User;
@@ -21,6 +22,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::api::ApiError;
+use crate::config::ForwardAuthConfig;
+use crate::db::Db;
 use crate::state::AppState;
 
 pub const SESSION_COOKIE: &str = "chaos_session";
@@ -188,16 +191,66 @@ pub fn request_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|(_, value)| value.to_string())
 }
 
+/// Resolve the user from a trusted reverse-proxy header set, or `None` when
+/// forward-auth is disabled, the shared secret doesn't match, or no username
+/// header is present. Auto-provisions on first contact (empty password hash).
+///
+/// Header lookups are case-insensitive (axum `HeaderMap`), and the configured
+/// header names are stored lowercase; a request that lacks the secret header
+/// (or carries the wrong value) is never trusted, so a direct/tailnet client
+/// cannot forge an identity.
+pub async fn forward_auth_user(
+    headers: &HeaderMap,
+    cfg: &ForwardAuthConfig,
+    db: &Db,
+) -> Result<Option<User>, ApiError> {
+    // Disabled when no secret is set, or the secret is empty (a blank secret
+    // would let a proxy stamping an empty header value pass).
+    let Some(secret) = cfg.secret.as_deref().filter(|s| !s.is_empty()) else {
+        return Ok(None); // feature disabled
+    };
+    let sent = headers
+        .get(cfg.secret_header.as_str())
+        .and_then(|v| v.to_str().ok());
+    if sent != Some(secret) {
+        return Ok(None); // wrong / absent secret — untrusted
+    }
+    let Some(username) = headers
+        .get(cfg.username_header.as_str())
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None); // trusted proxy but no identity
+    };
+    let display = headers
+        .get(cfg.name_header.as_str())
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(username);
+    let user = db
+        .user_by_username_or_create(username, display)
+        .await
+        .map_err(|_| ApiError::Unauthorized)?;
+    Ok(Some(user))
+}
+
 /// Best-effort session lookup for handlers that attribute rather than
 /// gate — link creation doesn't require auth yet (see ROADMAP), so a
 /// missing/invalid session just means "unattributed", not a rejection.
-pub async fn optional_user_id(state: &AppState, headers: &axum::http::HeaderMap) -> Option<Uuid> {
-    let token = request_token(headers)?;
-    state
-        .db
-        .user_by_session(&token_hash(&token))
+/// Falls back to a trusted forward-auth identity so events attribute
+/// correctly behind authentik.
+pub async fn optional_user_id(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
+    if let Some(token) = request_token(headers)
+        && let Ok(user) = state.db.user_by_session(&token_hash(&token)).await
+    {
+        return Some(user.id);
+    }
+    forward_auth_user(headers, &state.config.forward_auth, &state.db)
         .await
         .ok()
+        .flatten()
         .map(|user| user.id)
 }
 
@@ -208,13 +261,19 @@ impl FromRequestParts<AppState> for AuthUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let token = request_token(&parts.headers).ok_or(ApiError::Unauthorized)?;
-        let user = state
-            .db
-            .user_by_session(&token_hash(&token))
-            .await
-            .map_err(|_| ApiError::Unauthorized)?;
-        Ok(AuthUser(user))
+        // 1. chaos session (Bearer/cookie) — unchanged, wins when present.
+        if let Some(token) = request_token(&parts.headers)
+            && let Ok(user) = state.db.user_by_session(&token_hash(&token)).await
+        {
+            return Ok(AuthUser(user));
+        }
+        // 2. trusted forward-auth header (only when configured + secret matches).
+        if let Some(user) =
+            forward_auth_user(&parts.headers, &state.config.forward_auth, &state.db).await?
+        {
+            return Ok(AuthUser(user));
+        }
+        Err(ApiError::Unauthorized)
     }
 }
 
@@ -253,6 +312,163 @@ mod tests {
         assert!(verify_login(Some(&hash), "hunter2"));
         assert!(!verify_login(Some(&hash), "wrong"));
     }
+
+    #[tokio::test]
+    async fn forward_auth_disabled_returns_none() {
+        let db = Db::in_memory().await.unwrap();
+        let cfg = ForwardAuthConfig::default(); // secret None → off
+        let mut h = HeaderMap::new();
+        h.insert("x-authentik-username", "so".parse().unwrap());
+        assert!(forward_auth_user(&h, &cfg, &db).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn forward_auth_requires_matching_secret_then_provisions() {
+        let db = Db::in_memory().await.unwrap();
+        let cfg = ForwardAuthConfig {
+            secret: Some("s3cret".into()),
+            ..Default::default()
+        };
+
+        // Wrong secret → untrusted → None (no provisioning).
+        let mut bad = HeaderMap::new();
+        bad.insert("x-chaos-proxy-secret", "nope".parse().unwrap());
+        bad.insert("x-authentik-username", "so".parse().unwrap());
+        assert!(forward_auth_user(&bad, &cfg, &db).await.unwrap().is_none());
+
+        // Absent secret → None too.
+        let mut nosecret = HeaderMap::new();
+        nosecret.insert("x-authentik-username", "so".parse().unwrap());
+        assert!(
+            forward_auth_user(&nosecret, &cfg, &db)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Right secret + username + name → provisions.
+        let mut ok = HeaderMap::new();
+        ok.insert("x-chaos-proxy-secret", "s3cret".parse().unwrap());
+        ok.insert("x-authentik-username", "so".parse().unwrap());
+        ok.insert("x-authentik-name", "So Balem".parse().unwrap());
+        let user = forward_auth_user(&ok, &cfg, &db)
+            .await
+            .unwrap()
+            .expect("provisioned");
+        assert_eq!(user.username, "so");
+        assert_eq!(user.display_name, "So Balem");
+
+        // Missing name header → display falls back to username.
+        let mut noname = HeaderMap::new();
+        noname.insert("x-chaos-proxy-secret", "s3cret".parse().unwrap());
+        noname.insert("x-authentik-username", "ann".parse().unwrap());
+        let u2 = forward_auth_user(&noname, &cfg, &db)
+            .await
+            .unwrap()
+            .expect("provisioned");
+        assert_eq!(u2.display_name, "ann");
+
+        // Secret matches but no username header → None.
+        let mut nouser = HeaderMap::new();
+        nouser.insert("x-chaos-proxy-secret", "s3cret".parse().unwrap());
+        assert!(
+            forward_auth_user(&nouser, &cfg, &db)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The extractor tries the session token before forward-auth, so a valid
+    /// chaos session wins even when forward-auth headers are also present.
+    #[tokio::test]
+    async fn extractor_prefers_session_token_over_forward_auth() {
+        let db = Db::in_memory().await.unwrap();
+        // A real chaos-login user with a live session.
+        let token_user = db.create_user("tibo", "Tibo", "phc-string").await.unwrap();
+        let token = new_token();
+        db.create_session(
+            &token_hash(&token),
+            token_user.id,
+            Utc::now() + chrono::Duration::days(1),
+        )
+        .await
+        .unwrap();
+
+        let cfg = ForwardAuthConfig {
+            secret: Some("s3cret".into()),
+            ..Default::default()
+        };
+        // Request carries BOTH a valid token AND forward-auth headers for a
+        // *different* identity.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        headers.insert("x-chaos-proxy-secret", "s3cret".parse().unwrap());
+        headers.insert("x-authentik-username", "someoneelse".parse().unwrap());
+
+        // Drive the REAL extractor (not a reimplementation) so a future reorder
+        // of the two branches would break this test.
+        let config = crate::config::Config {
+            forward_auth: cfg,
+            ..crate::config::Config::default()
+        };
+        let state = crate::state::AppState::new(config, db).unwrap();
+        let request = axum::http::Request::builder()
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header("x-chaos-proxy-secret", "s3cret")
+            .header("x-authentik-username", "someoneelse")
+            .body(())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+        let AuthUser(resolved) = AuthUser::from_request_parts(&mut parts, &state)
+            .await
+            .expect("resolves");
+        assert_eq!(resolved.id, token_user.id, "session token wins");
+        assert_eq!(resolved.username, "tibo");
+    }
+
+    #[tokio::test]
+    async fn extractor_resolves_forward_auth_when_no_token() {
+        let db = Db::in_memory().await.unwrap();
+        let config = crate::config::Config {
+            forward_auth: ForwardAuthConfig {
+                secret: Some("s3cret".into()),
+                ..Default::default()
+            },
+            ..crate::config::Config::default()
+        };
+        let state = crate::state::AppState::new(config, db).unwrap();
+        // No token; a trusted proxy header set → provisions + resolves.
+        let request = axum::http::Request::builder()
+            .header("x-chaos-proxy-secret", "s3cret")
+            .header("x-authentik-username", "so")
+            .header("x-authentik-name", "So Balem")
+            .body(())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+        let AuthUser(user) = AuthUser::from_request_parts(&mut parts, &state)
+            .await
+            .expect("forward-auth resolves");
+        assert_eq!(user.username, "so");
+        assert_eq!(user.display_name, "So Balem");
+
+        // Same request but WITHOUT the secret header → rejected.
+        let bad = axum::http::Request::builder()
+            .header("x-authentik-username", "so")
+            .body(())
+            .unwrap();
+        let (mut bad_parts, _) = bad.into_parts();
+        assert!(
+            AuthUser::from_request_parts(&mut bad_parts, &state)
+                .await
+                .is_err()
+        );
+    }
+
+    use chrono::Utc;
 
     #[test]
     fn throttle_delay_backs_off_after_free_failures() {
