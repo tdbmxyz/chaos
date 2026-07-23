@@ -191,6 +191,13 @@ pub fn request_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|(_, value)| value.to_string())
 }
 
+/// Constant-time-ish secret check: compare SHA-256 digests instead of the
+/// strings so the comparison cannot leak a byte-by-byte timing oracle on
+/// the unauthenticated route (digest timing reveals nothing usable).
+fn secret_matches(sent: Option<&str>, secret: &str) -> bool {
+    sent.is_some_and(|s| Sha256::digest(s.as_bytes()) == Sha256::digest(secret.as_bytes()))
+}
+
 /// Resolve the user from a trusted reverse-proxy header set, or `None` when
 /// forward-auth is disabled, the shared secret doesn't match, or no username
 /// header is present. Auto-provisions on first contact (empty password hash).
@@ -212,7 +219,7 @@ pub async fn forward_auth_user(
     let sent = headers
         .get(cfg.secret_header.as_str())
         .and_then(|v| v.to_str().ok());
-    if sent != Some(secret) {
+    if !secret_matches(sent, secret) {
         return Ok(None); // wrong / absent secret — untrusted
     }
     let Some(username) = headers
@@ -311,6 +318,14 @@ mod tests {
         let hash = hash_password("hunter2").expect("hash");
         assert!(verify_login(Some(&hash), "hunter2"));
         assert!(!verify_login(Some(&hash), "wrong"));
+    }
+
+    #[test]
+    fn secret_matches_compares_exactly() {
+        assert!(secret_matches(Some("s3cret"), "s3cret"));
+        assert!(!secret_matches(Some("nope"), "s3cret"));
+        assert!(!secret_matches(None, "s3cret"));
+        assert!(!secret_matches(Some(""), "s3cret"));
     }
 
     #[tokio::test]
