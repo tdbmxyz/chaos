@@ -70,6 +70,17 @@ impl Db {
         }
     }
 
+    /// Overwrite a user's display name (forward-auth keeps it in sync with
+    /// the IdP's name header; see `auth::forward_auth_user`).
+    pub async fn update_user_display_name(&self, id: Uuid, display_name: &str) -> Result<()> {
+        sqlx::query("UPDATE users SET display_name = ? WHERE id = ?")
+            .bind(display_name.trim())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn user_by_username(&self, username: &str) -> Result<User> {
         // Case folding happens in Rust: SQLite's NOCASE is ASCII-only and
         // create_user stores Unicode-lowercased names. The collation stays
@@ -239,6 +250,8 @@ mod tests {
             .await
             .expect("resolve existing");
         assert_eq!(a.id, b.id);
+        // The helper itself never overwrites the name; syncing it with the
+        // IdP is `auth::forward_auth_user`'s job.
         assert_eq!(
             b.display_name, "So Balem",
             "display name is not overwritten"

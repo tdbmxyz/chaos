@@ -230,16 +230,28 @@ pub async fn forward_auth_user(
     else {
         return Ok(None); // trusted proxy but no identity
     };
-    let display = headers
+    // `name` is the header as sent; `display` falls back to the username for
+    // provisioning. Only an explicit header may later overwrite a stored name
+    // — the fallback must not clobber a real one.
+    let name = headers
         .get(cfg.name_header.as_str())
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(username);
-    let user = db
+        .filter(|s| !s.is_empty());
+    let display = name.unwrap_or(username);
+    let mut user = db
         .user_by_username_or_create(username, display)
         .await
         .map_err(|_| ApiError::Unauthorized)?;
+    // Keep the stored name in sync with the IdP (first-write-wins otherwise
+    // pins a stale greeting forever). A failed rename must not block auth,
+    // so the error is dropped; the in-memory name is fresh either way.
+    if let Some(name) = name
+        && name != user.display_name
+    {
+        let _ = db.update_user_display_name(user.id, name).await;
+        user.display_name = name.to_string();
+    }
     Ok(Some(user))
 }
 
@@ -392,6 +404,50 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn forward_auth_syncs_display_name_from_the_name_header() {
+        let db = Db::in_memory().await.unwrap();
+        let cfg = ForwardAuthConfig {
+            secret: Some("s3cret".into()),
+            ..Default::default()
+        };
+
+        let mut first = HeaderMap::new();
+        first.insert("x-chaos-proxy-secret", "s3cret".parse().unwrap());
+        first.insert("x-authentik-username", "so".parse().unwrap());
+        first.insert("x-authentik-name", "So Balem".parse().unwrap());
+        let user = forward_auth_user(&first, &cfg, &db)
+            .await
+            .unwrap()
+            .expect("provisioned");
+        assert_eq!(user.display_name, "So Balem");
+
+        // A rename in authentik shows up on the next request — and persists.
+        let mut renamed = HeaderMap::new();
+        renamed.insert("x-chaos-proxy-secret", "s3cret".parse().unwrap());
+        renamed.insert("x-authentik-username", "so".parse().unwrap());
+        renamed.insert("x-authentik-name", "So B.".parse().unwrap());
+        let user = forward_auth_user(&renamed, &cfg, &db)
+            .await
+            .unwrap()
+            .expect("resolved");
+        assert_eq!(user.display_name, "So B.");
+        let stored = db.user_by_username("so").await.unwrap();
+        assert_eq!(stored.display_name, "So B.", "rename is persisted");
+
+        // No name header → the username fallback must not clobber the name.
+        let mut noname = HeaderMap::new();
+        noname.insert("x-chaos-proxy-secret", "s3cret".parse().unwrap());
+        noname.insert("x-authentik-username", "so".parse().unwrap());
+        let user = forward_auth_user(&noname, &cfg, &db)
+            .await
+            .unwrap()
+            .expect("resolved");
+        assert_eq!(user.display_name, "So B.");
+        let stored = db.user_by_username("so").await.unwrap();
+        assert_eq!(stored.display_name, "So B.");
     }
 
     /// The extractor tries the session token before forward-auth, so a valid
