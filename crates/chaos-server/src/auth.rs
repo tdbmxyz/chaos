@@ -461,7 +461,11 @@ mod tests {
             .body(())
             .unwrap();
         let (mut bad_parts, _) = bad.into_parts();
-        assert!(AuthUser::from_request_parts(&mut bad_parts, &state).await.is_err());
+        assert!(
+            AuthUser::from_request_parts(&mut bad_parts, &state)
+                .await
+                .is_err()
+        );
     }
 
     use chrono::Utc;
