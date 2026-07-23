@@ -204,13 +204,15 @@ pub async fn forward_auth_user(
     cfg: &ForwardAuthConfig,
     db: &Db,
 ) -> Result<Option<User>, ApiError> {
-    let Some(secret) = &cfg.secret else {
+    // Disabled when no secret is set, or the secret is empty (a blank secret
+    // would let a proxy stamping an empty header value pass).
+    let Some(secret) = cfg.secret.as_deref().filter(|s| !s.is_empty()) else {
         return Ok(None); // feature disabled
     };
     let sent = headers
         .get(cfg.secret_header.as_str())
         .and_then(|v| v.to_str().ok());
-    if sent != Some(secret.as_str()) {
+    if sent != Some(secret) {
         return Ok(None); // wrong / absent secret — untrusted
     }
     let Some(username) = headers
@@ -407,19 +409,59 @@ mod tests {
         headers.insert("x-chaos-proxy-secret", "s3cret".parse().unwrap());
         headers.insert("x-authentik-username", "someoneelse".parse().unwrap());
 
-        // The extractor logic: token path first.
-        let resolved = if let Some(t) = request_token(&headers)
-            && let Ok(u) = db.user_by_session(&token_hash(&t)).await
-        {
-            u
-        } else {
-            forward_auth_user(&headers, &cfg, &db)
-                .await
-                .unwrap()
-                .expect("would fall back")
+        // Drive the REAL extractor (not a reimplementation) so a future reorder
+        // of the two branches would break this test.
+        let config = crate::config::Config {
+            forward_auth: cfg,
+            ..crate::config::Config::default()
         };
+        let state = crate::state::AppState::new(config, db).unwrap();
+        let request = axum::http::Request::builder()
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header("x-chaos-proxy-secret", "s3cret")
+            .header("x-authentik-username", "someoneelse")
+            .body(())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+        let AuthUser(resolved) = AuthUser::from_request_parts(&mut parts, &state)
+            .await
+            .expect("resolves");
         assert_eq!(resolved.id, token_user.id, "session token wins");
         assert_eq!(resolved.username, "tibo");
+    }
+
+    #[tokio::test]
+    async fn extractor_resolves_forward_auth_when_no_token() {
+        let db = Db::in_memory().await.unwrap();
+        let config = crate::config::Config {
+            forward_auth: ForwardAuthConfig {
+                secret: Some("s3cret".into()),
+                ..Default::default()
+            },
+            ..crate::config::Config::default()
+        };
+        let state = crate::state::AppState::new(config, db).unwrap();
+        // No token; a trusted proxy header set → provisions + resolves.
+        let request = axum::http::Request::builder()
+            .header("x-chaos-proxy-secret", "s3cret")
+            .header("x-authentik-username", "so")
+            .header("x-authentik-name", "So Balem")
+            .body(())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+        let AuthUser(user) = AuthUser::from_request_parts(&mut parts, &state)
+            .await
+            .expect("forward-auth resolves");
+        assert_eq!(user.username, "so");
+        assert_eq!(user.display_name, "So Balem");
+
+        // Same request but WITHOUT the secret header → rejected.
+        let bad = axum::http::Request::builder()
+            .header("x-authentik-username", "so")
+            .body(())
+            .unwrap();
+        let (mut bad_parts, _) = bad.into_parts();
+        assert!(AuthUser::from_request_parts(&mut bad_parts, &state).await.is_err());
     }
 
     use chrono::Utc;

@@ -61,7 +61,11 @@ impl Db {
     ) -> Result<User> {
         match self.user_by_username(username).await {
             Ok(user) => Ok(user),
-            Err(DbError::NotFound) => self.create_user(username, display_name, "").await,
+            Err(DbError::NotFound) => match self.create_user(username, display_name, "").await {
+                Ok(user) => Ok(user),
+                // Lost a concurrent first-contact race: the row now exists.
+                Err(create_err) => self.user_by_username(username).await.or(Err(create_err)),
+            },
             Err(err) => Err(err),
         }
     }

@@ -91,7 +91,9 @@ impl ForwardAuthConfig {
     // Consumed by callers (extractor) and tests; keep as public API surface.
     #[allow(dead_code)]
     pub fn enabled(&self) -> bool {
-        self.secret.is_some()
+        // An empty secret is treated as disabled — never trust a proxy that
+        // stamps a blank secret.
+        self.secret.as_deref().is_some_and(|s| !s.is_empty())
     }
 }
 
