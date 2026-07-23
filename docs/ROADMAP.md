@@ -190,6 +190,16 @@ cross-origin (bearer instead of the cookie).
       events: `login`, `app_open` (≤1/5min/device), `search`, `reader_open`.
       Logged-off = plain rows, no tracking
 
+- [x] Forward-auth (authentik) + app authentication + greeting: with
+      `[forward_auth].secret` set, chaos trusts a reverse proxy that stamps
+      `X-Chaos-Proxy-Secret` (anti-spoof guard) and forwards
+      `X-authentik-username`/`-name`, resolving/auto-provisioning that user in
+      the `AuthUser` extractor (session token still wins). The Tauri/Android app
+      can authenticate to authentik with a per-device app-password
+      (`Authorization: Basic`, Settings → Authentik) so it reaches the server
+      behind SSO. A "Hello {name}" / "Hello stranger" greeting confirms it.
+      Verified end-to-end (headless browser + curl-simulated proxy)
+
 ## Deferred / explicitly out of scope
 
 - **Manga/webtoon reader** — separate application: [yomu](../../yomu).
