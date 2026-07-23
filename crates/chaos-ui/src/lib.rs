@@ -660,10 +660,14 @@ pub fn App(config: AppConfig) -> impl IntoView {
                     <A href="/settings"><span class="nav-icon">"⚙"</span>"Settings"</A>
                     <A href="/about"><span class="nav-icon">"ⓘ"</span>"About"</A>
                     <span class="topbar-account">
+                        // Behind authentik, "Sign out" clears the local chaos
+                        // token but the greeting persists: `me()` still resolves
+                        // via the forwarded proxy header (the authentik session
+                        // is separate). That's expected.
                         {move || match session.0.get() {
                             Some(user) => {
                                 view! {
-                                    <span class="topbar-user">{user.display_name}</span>
+                                    <span class="topbar-user">"Hello " {user.display_name}</span>
                                     <button
                                         class="topbar-logout"
                                         title="Sign out"
@@ -674,7 +678,13 @@ pub fn App(config: AppConfig) -> impl IntoView {
                                 }
                                     .into_any()
                             }
-                            None => view! { <A href="/login">"Sign in"</A> }.into_any(),
+                            None => {
+                                view! {
+                                    <span class="topbar-user topbar-stranger">"Hello stranger"</span>
+                                    <A href="/login">"Sign in"</A>
+                                }
+                                    .into_any()
+                            }
                         }}
                     </span>
                 </span>
