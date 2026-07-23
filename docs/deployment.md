@@ -210,16 +210,42 @@ first contact). This makes `/auth/me` return the SSO identity so the app shows
 "Hello {name}", without chaos itself running the login. **Off by default** —
 nothing happens unless you set a shared secret.
 
-Enable it by setting `forward_auth.secret`:
+Enable it by setting `forward_auth.secret`. Don't put the real value in
+`services.chaos.settings` — the generated TOML lands in the world-readable nix
+store. Instead put a placeholder in settings and substitute it at start-up from
+a secret file (agenix/sops-nix) via `EnvironmentFile` + `envsubst`:
 
 ```nix
 services.chaos.settings.forward_auth = {
-  secret = "a-long-random-string";   # matches what traefik stamps below
+  secret = "$CHAOS_PROXY_SECRET";    # substituted at start, see below
   # username_header = "X-authentik-username";  # defaults shown
   # name_header     = "X-authentik-name";
   # secret_header   = "X-Chaos-Proxy-Secret";
 };
+
+systemd.services.chaos = {
+  environment.CHAOS_CONFIG = lib.mkForce "/run/chaos/config.toml";
+  serviceConfig = {
+    RuntimeDirectory = "chaos";
+    # The rendered config holds the real secret: keep the runtime dir
+    # (0755 by default) and the written file out of other users' reach.
+    RuntimeDirectoryMode = "0700";
+    UMask = "0077";
+    # File with CHAOS_PROXY_SECRET=…, e.g. from agenix/sops-nix.
+    EnvironmentFile = config.age.secrets.chaos-proxy.path;
+    ExecStartPre = "${lib.getExe pkgs.envsubst} -i ${
+      (pkgs.formats.toml {}).generate "chaos.toml" config.services.chaos.settings
+    } -o /run/chaos/config.toml";
+  };
+};
 ```
+
+Beware that envsubst rewrites **every** `$VAR` in the whole file and replaces
+unset variables with an empty string — if any other settings value contains a
+literal `$` (a password, a widget URL), it gets silently mangled. In that case
+prefer the simpler alternative: skip `forward_auth.secret` in settings entirely
+and set `CHAOS_FORWARD_AUTH__SECRET` in the `EnvironmentFile` — the `CHAOS_*`
+env layer overlays the TOML, no envsubst needed.
 
 The traefik middleware in front of chaos must:
 
@@ -230,6 +256,11 @@ The traefik middleware in front of chaos must:
    `X-Chaos-Proxy-Secret: <secret>` (the same value as `forward_auth.secret`),
    and **strip any client-supplied copy** of that header first so a client can
    never send it themselves.
+3. **Let `Authorization` reach the authentik outpost**: traefik's forwardAuth
+   forwards all request headers by default, but if you set
+   `authRequestHeaders`, include `Authorization` — and the authentik proxy
+   provider needs **"Intercept header authentication"** enabled, or
+   app-passwords over Basic (native apps, below) won't work.
 
 The secret is what makes this safe: chaos trusts the forwarded username **only**
 when the secret header matches. A request that lacks it (or carries the wrong
@@ -242,6 +273,9 @@ they authenticate to authentik with an **app-password over HTTP Basic** (create
 an app password in authentik; see the app's Settings → Authentik section). That
 keeps the `Authorization` header for authentik and leaves chaos's own session
 untouched. Direct chaos login (no forward-auth) keeps working exactly as before.
+Note the app-password **replaces the chaos session** on that app's connections:
+a device that reaches the server directly (tailnet/LAN, no authentik in the
+path) should leave Settings → Authentik empty, or the app will look signed out.
 
 ## Breaking change: weather proxy removed
 

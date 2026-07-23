@@ -30,6 +30,8 @@ pub struct AppState {
     pub home: Option<Arc<HomeAssistantClient>>,
     /// Failed-login backoff tracker (in-memory, per username+IP).
     pub login_throttle: Arc<crate::auth::LoginThrottle>,
+    /// Throttles `login` analytics events for forward-auth users.
+    pub sso_logins: Arc<crate::auth::SsoLoginTracker>,
     /// ntfy publisher, when `[notifications]` is configured.
     pub notifier: Option<Arc<Notifier>>,
 }
@@ -49,6 +51,7 @@ impl AppState {
             ics: Arc::new(FeedCache::default()),
             home,
             login_throttle: Arc::new(crate::auth::LoginThrottle::default()),
+            sso_logins: Arc::new(crate::auth::SsoLoginTracker::default()),
             notifier,
         })
     }
