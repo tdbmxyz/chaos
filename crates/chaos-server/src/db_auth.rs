@@ -54,8 +54,6 @@ impl Db {
     /// Resolve a user by username, creating one (empty `password_hash` →
     /// external identity only, no password login) if absent. `display_name`
     /// is used only on creation; an existing user's name is left untouched.
-    // Consumed by the forward-auth extractor and tests.
-    #[allow(dead_code)]
     pub async fn user_by_username_or_create(
         &self,
         username: &str,
