@@ -201,6 +201,48 @@ newest. Restoring = stopping the service and copying a snapshot over
 `db_path`. Page archives (`[archive] dir`) and icons are plain files —
 include `/var/lib/chaos` in the host's regular backup for those.
 
+## Behind authentik (forward-auth)
+
+chaos can trust an authenticating reverse proxy (authentik via traefik) for
+identity: authentik logs the user in and forwards their username/display name,
+and chaos treats that as the signed-in user (auto-provisioning a `users` row on
+first contact). This makes `/auth/me` return the SSO identity so the app shows
+"Hello {name}", without chaos itself running the login. **Off by default** —
+nothing happens unless you set a shared secret.
+
+Enable it by setting `forward_auth.secret`:
+
+```nix
+services.chaos.settings.forward_auth = {
+  secret = "a-long-random-string";   # matches what traefik stamps below
+  # username_header = "X-authentik-username";  # defaults shown
+  # name_header     = "X-authentik-name";
+  # secret_header   = "X-Chaos-Proxy-Secret";
+};
+```
+
+The traefik middleware in front of chaos must:
+
+1. **Forward the identity headers** from the authentik forward-auth outpost:
+   `X-authentik-username` (the identity key) and `X-authentik-name` (display
+   name for auto-provisioned users).
+2. **Stamp the shared secret** on every request it proxies to chaos:
+   `X-Chaos-Proxy-Secret: <secret>` (the same value as `forward_auth.secret`),
+   and **strip any client-supplied copy** of that header first so a client can
+   never send it themselves.
+
+The secret is what makes this safe: chaos trusts the forwarded username **only**
+when the secret header matches. A request that lacks it (or carries the wrong
+value) is never trusted — so a **direct/tailnet route** that bypasses traefik
+stays safe: without the secret header chaos falls back to its own
+cookie/Bearer login, and a direct client cannot forge an identity.
+
+Native apps (Android/desktop) can't follow authentik's HTML login redirect, so
+they authenticate to authentik with an **app-password over HTTP Basic** (create
+an app password in authentik; see the app's Settings → Authentik section). That
+keeps the `Authorization` header for authentik and leaves chaos's own session
+untouched. Direct chaos login (no forward-auth) keeps working exactly as before.
+
 ## Breaking change: weather proxy removed
 
 `GET /api/v1/weather` is gone in this release — every client (web, desktop,
