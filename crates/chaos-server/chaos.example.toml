@@ -173,3 +173,15 @@ type = "server_stats"
 # service_alerts = true
 # calendar_reminders = true
 # reminder_lead_minutes = 15
+
+# Trust an authenticating reverse proxy (e.g. authentik via traefik). OFF
+# unless `secret` is set. The proxy MUST send `secret_header` with this exact
+# value on every request; a request without it is never trusted (so a
+# direct/tailnet client cannot forge an identity). The proxy also forwards
+# `username_header` (identity) and `name_header` (display name for
+# auto-provisioned users). See docs/deployment.md.
+# [forward_auth]
+# secret = "a-long-random-string"
+# username_header = "X-authentik-username"
+# name_header = "X-authentik-name"
+# secret_header = "X-Chaos-Proxy-Secret"

@@ -51,6 +51,48 @@ pub struct Config {
     /// Push notifications via ntfy (service alerts + calendar reminders).
     /// Feature is off when `ntfy_url` is `None`.
     pub notifications: NotificationsConfig,
+    /// Trust an authenticating reverse proxy (authentik via traefik). Feature
+    /// is off unless `secret` is set.
+    pub forward_auth: ForwardAuthConfig,
+}
+
+/// Trust an authenticating reverse proxy that forwards the user's identity in
+/// headers. The whole feature is OFF when `secret` is `None` (the default):
+/// no request header is ever trusted, so a direct/tailnet client cannot forge
+/// an identity. When enabled, chaos trusts `username_header`/`name_header`
+/// only on requests that also carry `secret_header` matching `secret`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ForwardAuthConfig {
+    /// Shared secret the reverse proxy sends in `secret_header`. When `None`,
+    /// forward-auth is DISABLED and no request header is ever trusted.
+    pub secret: Option<String>,
+    /// Header carrying the authenticated username (identity key).
+    pub username_header: String,
+    /// Header carrying the display name (used for auto-provisioned users).
+    pub name_header: String,
+    /// Header carrying the shared secret.
+    pub secret_header: String,
+}
+
+impl Default for ForwardAuthConfig {
+    fn default() -> Self {
+        Self {
+            secret: None,
+            username_header: "x-authentik-username".into(),
+            name_header: "x-authentik-name".into(),
+            secret_header: "x-chaos-proxy-secret".into(),
+        }
+    }
+}
+
+impl ForwardAuthConfig {
+    /// Whether forward-auth is enabled (a shared secret is configured).
+    // Consumed by callers (extractor) and tests; keep as public API surface.
+    #[allow(dead_code)]
+    pub fn enabled(&self) -> bool {
+        self.secret.is_some()
+    }
 }
 
 /// Push notifications via ntfy. The whole feature is off when `ntfy_url`
@@ -207,6 +249,7 @@ impl Default for Config {
             home_assistant: HomeAssistantConfig::default(),
             secure_cookies: false,
             notifications: NotificationsConfig::default(),
+            forward_auth: ForwardAuthConfig::default(),
         }
     }
 }
@@ -305,6 +348,30 @@ mod tests {
         let default = super::Config::default();
         assert!(default.notifications.ntfy_url.is_none());
         assert_eq!(default.notifications.reminder_lead_minutes, 15);
+    }
+
+    #[test]
+    fn forward_auth_defaults_off_with_authentik_headers() {
+        let c = super::ForwardAuthConfig::default();
+        assert!(c.secret.is_none());
+        assert!(!c.enabled());
+        assert_eq!(c.username_header, "x-authentik-username");
+        assert_eq!(c.name_header, "x-authentik-name");
+        assert_eq!(c.secret_header, "x-chaos-proxy-secret");
+
+        // Setting a secret via TOML enables the feature.
+        let config: super::Config = figment::Figment::from(
+            figment::providers::Serialized::defaults(super::Config::default()),
+        )
+        .merge(figment::providers::Toml::string(
+            "[forward_auth]\nsecret = \"s3cret\"",
+        ))
+        .extract()
+        .expect("forward_auth section must parse");
+        assert!(config.forward_auth.enabled());
+        assert_eq!(config.forward_auth.secret.as_deref(), Some("s3cret"));
+        // Untouched fields keep their defaults.
+        assert_eq!(config.forward_auth.username_header, "x-authentik-username");
     }
 
     #[test]
