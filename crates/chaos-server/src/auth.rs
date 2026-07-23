@@ -191,6 +191,54 @@ pub fn request_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|(_, value)| value.to_string())
 }
 
+// ---- sso login analytics ----
+
+/// At most one `login` analytics event per user per this interval.
+const SSO_LOGIN_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// Remembers when each forward-auth user last got a `login` analytics event
+/// so per-request extractor traffic doesn't flood the table. In-memory:
+/// a restart just logs one extra event per user. Unbounded is fine here —
+/// keys are real provisioned user ids, not attacker-controlled input.
+#[derive(Default)]
+pub struct SsoLoginTracker {
+    seen: Mutex<HashMap<Uuid, Instant>>,
+}
+
+impl SsoLoginTracker {
+    /// True at most once per [`SSO_LOGIN_INTERVAL`] per user.
+    pub fn should_record(&self, user: Uuid) -> bool {
+        let mut seen = self.seen.lock().expect("sso tracker lock");
+        match seen.get(&user) {
+            Some(last) if last.elapsed() < SSO_LOGIN_INTERVAL => false,
+            _ => {
+                seen.insert(user, Instant::now());
+                true
+            }
+        }
+    }
+}
+
+/// Best-effort analytics for a forward-auth resolution: at most one `login`
+/// event per user per hour, detail-prefixed `sso ` to distinguish it from
+/// password logins. Never fails the request over a logging error.
+pub async fn note_sso_login(state: &AppState, user: &User, headers: &HeaderMap) {
+    if !state.sso_logins.should_record(user.id) {
+        return;
+    }
+    let detail = match headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(ua) => format!("sso {ua}"),
+        None => "sso".to_string(),
+    };
+    let _ = state
+        .db
+        .record_event(Some(user.id), "login", chrono::Utc::now(), Some(&detail))
+        .await;
+}
+
 /// Constant-time-ish secret check: compare SHA-256 digests instead of the
 /// strings so the comparison cannot leak a byte-by-byte timing oracle on
 /// the unauthenticated route (digest timing reveals nothing usable).
@@ -266,11 +314,12 @@ pub async fn optional_user_id(state: &AppState, headers: &HeaderMap) -> Option<U
     {
         return Some(user.id);
     }
-    forward_auth_user(headers, &state.config.forward_auth, &state.db)
+    let user = forward_auth_user(headers, &state.config.forward_auth, &state.db)
         .await
         .ok()
-        .flatten()
-        .map(|user| user.id)
+        .flatten()?;
+    note_sso_login(state, &user, headers).await;
+    Some(user.id)
 }
 
 /// Extractor for handlers that require a signed-in user.
@@ -290,6 +339,7 @@ impl FromRequestParts<AppState> for AuthUser {
         if let Some(user) =
             forward_auth_user(&parts.headers, &state.config.forward_auth, &state.db).await?
         {
+            note_sso_login(state, &user, &parts.headers).await;
             return Ok(AuthUser(user));
         }
         Err(ApiError::Unauthorized)
@@ -404,6 +454,45 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn sso_login_tracker_records_once_per_interval_per_user() {
+        let tracker = SsoLoginTracker::default();
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+        assert!(tracker.should_record(a));
+        assert!(!tracker.should_record(a), "throttled on the second call");
+        // Another user is tracked independently.
+        assert!(tracker.should_record(b));
+        assert!(!tracker.should_record(b));
+    }
+
+    /// Two forward-auth extractor hits within the interval log exactly one
+    /// `login` analytics event.
+    #[tokio::test]
+    async fn forward_auth_resolution_logs_one_throttled_login_event() {
+        let db = Db::in_memory().await.unwrap();
+        let config = crate::config::Config {
+            forward_auth: ForwardAuthConfig {
+                secret: Some("s3cret".into()),
+                ..Default::default()
+            },
+            ..crate::config::Config::default()
+        };
+        let state = crate::state::AppState::new(config, db).unwrap();
+        for _ in 0..2 {
+            let request = axum::http::Request::builder()
+                .header("x-chaos-proxy-secret", "s3cret")
+                .header("x-authentik-username", "so")
+                .header(header::USER_AGENT, "test-agent/1.0")
+                .body(())
+                .unwrap();
+            let (mut parts, _) = request.into_parts();
+            AuthUser::from_request_parts(&mut parts, &state)
+                .await
+                .expect("resolves");
+        }
+        assert_eq!(state.db.count_events("login").await.unwrap(), 1);
     }
 
     #[tokio::test]
