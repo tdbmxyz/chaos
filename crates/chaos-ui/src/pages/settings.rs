@@ -122,7 +122,7 @@ pub fn Settings() -> impl IntoView {
                     "Forget"
                 </button>
                 <p class="muted settings-hint">
-                    "For a server behind authentik: create an app password in authentik and enter it here."
+                    "For a server behind authentik: create an app password in authentik and enter it here. Only for connections that go through authentik — if this device reaches the server directly, leave this empty (Forget), or the app will look signed out."
                 </p>
             </div>
 

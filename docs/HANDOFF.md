@@ -86,7 +86,10 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
     tailnet client can't forge an identity. Deploy notes in docs/deployment.md
     (traefik forwards the identity headers and stamps+strips the secret).
     ADR 0004's OIDC-redirect seam is still open; this is the simpler
-    proxy-header model the deployment actually uses.
+    proxy-header model the deployment actually uses. v1.11.1 hardening:
+    digest-based secret compare (no timing oracle), the name header now
+    syncs `display_name` on rename, resolutions log throttled `sso` login
+    analytics events, and deployment.md keeps the secret out of the nix store.
   - **App authentication:** the Tauri/Android app can send
     `Authorization: Basic base64(user:app-password)` (Settings → Authentik,
     stored per-device in localStorage) so authentik's outpost lets it through;
