@@ -51,6 +51,23 @@ impl Db {
         row.try_into()
     }
 
+    /// Resolve a user by username, creating one (empty `password_hash` →
+    /// external identity only, no password login) if absent. `display_name`
+    /// is used only on creation; an existing user's name is left untouched.
+    // Consumed by the forward-auth extractor and tests.
+    #[allow(dead_code)]
+    pub async fn user_by_username_or_create(
+        &self,
+        username: &str,
+        display_name: &str,
+    ) -> Result<User> {
+        match self.user_by_username(username).await {
+            Ok(user) => Ok(user),
+            Err(DbError::NotFound) => self.create_user(username, display_name, "").await,
+            Err(err) => Err(err),
+        }
+    }
+
     pub async fn user_by_username(&self, username: &str) -> Result<User> {
         // Case folding happens in Rust: SQLite's NOCASE is ASCII-only and
         // create_user stores Unicode-lowercased names. The collation stays
@@ -204,6 +221,33 @@ mod tests {
             db.user_by_session("hash1").await,
             Err(DbError::NotFound)
         ));
+    }
+
+    #[tokio::test]
+    async fn user_by_username_or_create_is_idempotent() {
+        let db = Db::in_memory().await.expect("db");
+        let a = db
+            .user_by_username_or_create("so", "So Balem")
+            .await
+            .expect("provision");
+        assert_eq!(a.username, "so");
+        assert_eq!(a.display_name, "So Balem");
+        let b = db
+            .user_by_username_or_create("so", "ignored on second call")
+            .await
+            .expect("resolve existing");
+        assert_eq!(a.id, b.id);
+        assert_eq!(
+            b.display_name, "So Balem",
+            "display name is not overwritten"
+        );
+    }
+
+    /// An auto-provisioned user has an empty stored hash; that must make
+    /// password login impossible (and must not panic argon2's PHC parser).
+    #[test]
+    fn verify_login_rejects_empty_hash() {
+        assert!(!crate::auth::verify_login(Some(""), "anything"));
     }
 
     /// SQLite's COLLATE NOCASE only folds ASCII, but create_user
