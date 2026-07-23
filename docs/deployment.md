@@ -227,6 +227,10 @@ systemd.services.chaos = {
   environment.CHAOS_CONFIG = lib.mkForce "/run/chaos/config.toml";
   serviceConfig = {
     RuntimeDirectory = "chaos";
+    # The rendered config holds the real secret: keep the runtime dir
+    # (0755 by default) and the written file out of other users' reach.
+    RuntimeDirectoryMode = "0700";
+    UMask = "0077";
     # File with CHAOS_PROXY_SECRET=…, e.g. from agenix/sops-nix.
     EnvironmentFile = config.age.secrets.chaos-proxy.path;
     ExecStartPre = "${lib.getExe pkgs.envsubst} -i ${
@@ -236,9 +240,12 @@ systemd.services.chaos = {
 };
 ```
 
-Simpler alternative: skip `forward_auth.secret` in settings entirely and set
-`CHAOS_FORWARD_AUTH__SECRET` in the `EnvironmentFile` — the `CHAOS_*` env layer
-overlays the TOML, no envsubst needed.
+Beware that envsubst rewrites **every** `$VAR` in the whole file and replaces
+unset variables with an empty string — if any other settings value contains a
+literal `$` (a password, a widget URL), it gets silently mangled. In that case
+prefer the simpler alternative: skip `forward_auth.secret` in settings entirely
+and set `CHAOS_FORWARD_AUTH__SECRET` in the `EnvironmentFile` — the `CHAOS_*`
+env layer overlays the TOML, no envsubst needed.
 
 The traefik middleware in front of chaos must:
 
