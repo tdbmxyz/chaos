@@ -57,6 +57,9 @@ pub struct ChaosClient {
     /// unset and rely on the same-origin session cookie instead; native
     /// clients (desktop/mobile) store the token from `login`.
     token: Option<String>,
+    /// Optional HTTP Basic credentials for an authenticating reverse proxy
+    /// (e.g. authentik). When set, Basic replaces Bearer on every request.
+    basic_auth: Option<(String, String)>,
 }
 
 impl ChaosClient {
@@ -67,12 +70,25 @@ impl ChaosClient {
             base,
             http: reqwest::Client::new(),
             token: None,
+            basic_auth: None,
         }
     }
 
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
+    }
+
+    /// Attach HTTP Basic auth (for an authenticating reverse proxy such as
+    /// authentik). When set, it replaces the Bearer token on every request.
+    pub fn with_basic_auth(mut self, creds: Option<(String, String)>) -> Self {
+        self.basic_auth = creds;
+        self
+    }
+
+    #[cfg(test)]
+    fn has_basic_auth(&self) -> bool {
+        self.basic_auth.is_some()
     }
 
     pub fn base(&self) -> &Url {
@@ -396,9 +412,10 @@ impl ChaosClient {
     }
 
     async fn check_status(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
-        let req = match &self.token {
-            Some(token) => req.bearer_auth(token),
-            None => req,
+        let req = match (&self.basic_auth, &self.token) {
+            (Some((u, p)), _) => req.basic_auth(u, Some(p)),
+            (None, Some(token)) => req.bearer_auth(token),
+            (None, None) => req,
         };
         let mut request = req
             .build()
@@ -488,6 +505,15 @@ mod tests {
             client.url("api/v1/analytics/events").unwrap().as_str(),
             "http://zeus:4600/api/v1/analytics/events"
         );
+    }
+
+    #[test]
+    fn basic_auth_builder_sets_creds() {
+        let client = super::ChaosClient::new("http://zeus:4600".parse().unwrap());
+        assert!(!client.has_basic_auth());
+        let client = client.with_basic_auth(Some(("u".into(), "p".into())));
+        assert!(client.has_basic_auth());
+        assert!(!client.with_basic_auth(None).has_basic_auth());
     }
 
     #[test]
