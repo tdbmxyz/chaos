@@ -35,9 +35,13 @@ in {
 
     webPackage = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.chaos-web;
-      defaultText = lib.literalExpression "chaos.packages.\${system}.chaos-web";
-      description = "Built web frontend served by the server (null to disable).";
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.chaos-web-static;
+      defaultText = lib.literalExpression "chaos.packages.\${system}.chaos-web-static";
+      description = ''
+        Built web frontend served by the server (null to disable). Defaults to
+        the variant carrying .br/.gz siblings, which the server prefers over
+        recompressing on every request.
+      '';
     };
 
     monolithPackage = lib.mkOption {
