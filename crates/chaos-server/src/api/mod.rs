@@ -9,6 +9,7 @@ mod icons;
 mod links;
 mod search;
 mod services;
+mod static_assets;
 mod views;
 mod widgets;
 
