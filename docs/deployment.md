@@ -351,3 +351,31 @@ The export file comes from Linkwarden → Settings → Data → Export. Links ar
 queued for archiving automatically when `[archive] auto` is on. The optional
 `owner-username` attributes every imported link to that user (`created_by`);
 attribution only — every user can still see and edit any link.
+
+## App authentication (OIDC)
+
+The mobile and desktop apps authenticate with an authentik-issued OIDC access
+token rather than the browser's forward-auth session. They have to: the
+outpost's session cookie is `SameSite=Lax` and the apps' origin is
+`tauri://localhost`, so a session established in a browser never rides along on
+the apps' cross-origin API calls. Worse, an unauthenticated call can't even
+report the problem — the WebView follows the outpost's 302 to `auth.<domain>`,
+which sends no CORS header for the app's origin, so the call fails as a network
+error and the app can only say "cannot reach the server".
+
+Server side, `[oidc]` (issuer + client_id) turns on bearer verification. Tokens
+are verified locally against the issuer's JWKS, so the authentik provider
+**must** use an RSA signing key: proxy providers sign HS256 and publish an empty
+`jwks/` (verified on this deployment — `/application/o/chaos/jwks/` returns
+`{}`), which would verify nothing.
+
+Because the apps' requests bypass the forward-auth middleware in traefik, every
+API route requires authentication in chaos itself. `/health` and `/auth/login`
+are the only exceptions — `/health` because the apps read the auth
+advertisement from it before they hold any token — and a route-coverage test
+(`every_route_requires_auth_except_the_allowlist`) fails CI if a new route is
+added without an identity check.
+
+Deploy the server before the traefik change: chaos requiring auth on its own is
+inert for existing clients, whereas letting bearer requests past forward-auth
+before the API authenticates them would briefly expose it.
