@@ -3,17 +3,44 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use chaos_domain::{
-    HealthResponse, ServiceActionRequest, ServiceDef, ServiceStatus, ServiceWithStatus,
+    AuthAdvertisement, HealthResponse, OidcAdvertisement, ServiceActionRequest, ServiceDef,
+    ServiceStatus, ServiceWithStatus,
 };
 
 use crate::api::ApiError;
+use crate::config::Config;
 use crate::state::AppState;
 
-pub async fn health() -> Json<HealthResponse> {
+pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         fahrenheit: Some(locale_fahrenheit()),
+        auth: auth_advertisement(&state.config),
+    })
+}
+
+/// authentik serves `/application/o/authorize/` for every provider, so the
+/// authorize URL is the issuer's origin plus that fixed path.
+fn auth_advertisement(config: &Config) -> Option<AuthAdvertisement> {
+    if !config.oidc.enabled() {
+        return None;
+    }
+    let issuer = config.oidc.issuer.as_ref()?.trim().to_string();
+    let client_id = config.oidc.client_id.as_ref()?.trim().to_string();
+    // `join` keeps the issuer's scheme, host *and* port, so a self-hosted
+    // authentik on a non-default port still gets a reachable URL.
+    let authorize_url = url::Url::parse(&issuer)
+        .ok()?
+        .join("/application/o/authorize/")
+        .ok()?
+        .to_string();
+    Some(AuthAdvertisement {
+        oidc: Some(OidcAdvertisement {
+            issuer,
+            client_id,
+            authorize_url,
+        }),
     })
 }
 
@@ -103,6 +130,38 @@ fn on_demand_service<'a>(services: &'a [ServiceDef], id: &str) -> Result<&'a Ser
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OidcConfig;
+    use crate::db::Db;
+
+    async fn state_with(config: Config) -> AppState {
+        let db = Db::in_memory().await.unwrap();
+        AppState::new(config, db).unwrap()
+    }
+
+    #[tokio::test]
+    async fn health_advertises_oidc_when_configured() {
+        let config = Config {
+            oidc: OidcConfig {
+                issuer: Some("https://auth.example/application/o/chaos-app/".into()),
+                client_id: Some("client-123".into()),
+            },
+            ..Config::default()
+        };
+        let Json(body) = health(State(state_with(config).await)).await;
+        let oidc = body.auth.expect("auth block").oidc.expect("oidc block");
+        assert_eq!(oidc.issuer, "https://auth.example/application/o/chaos-app/");
+        assert_eq!(oidc.client_id, "client-123");
+        assert_eq!(
+            oidc.authorize_url,
+            "https://auth.example/application/o/authorize/"
+        );
+    }
+
+    #[tokio::test]
+    async fn health_omits_the_auth_block_without_oidc() {
+        let Json(body) = health(State(state_with(Config::default()).await)).await;
+        assert!(body.auth.is_none());
+    }
 
     #[test]
     fn service_actions_require_a_configured_unit() {

@@ -17,6 +17,30 @@ pub struct HealthResponse {
     /// and the server host usually shares the household's conventions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fahrenheit: Option<bool>,
+    /// How to authenticate against this server, when it wants more than a
+    /// LAN connection. Absent means "no OIDC configured" — the apps then skip
+    /// the sign-in step entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthAdvertisement>,
+}
+
+/// The authentication methods a server offers. One optional member per
+/// method, so adding one later doesn't break older clients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthAdvertisement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<OidcAdvertisement>,
+}
+
+/// Everything an app needs to start an authorization-code + PKCE flow. The
+/// apps hardcode nothing about the identity provider: they learn it here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OidcAdvertisement {
+    pub issuer: String,
+    pub client_id: String,
+    /// Derived from the issuer host rather than a second config knob —
+    /// authentik serves one authorize endpoint for every provider.
+    pub authorize_url: String,
 }
 
 /// Uniform error body returned by the API for non-2xx responses.
