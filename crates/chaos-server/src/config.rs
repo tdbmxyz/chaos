@@ -116,9 +116,6 @@ pub struct OidcConfig {
 
 impl OidcConfig {
     /// Whether OIDC bearer-token auth is enabled (issuer and client id set).
-    // Consumed by the oidc module added in a later task, and by tests; keep
-    // as public API surface.
-    #[allow(dead_code)]
     pub fn enabled(&self) -> bool {
         self.issuer.as_ref().is_some_and(|s| !s.trim().is_empty())
             && self
@@ -128,8 +125,6 @@ impl OidcConfig {
     }
 
     /// The OIDC discovery document URL for this issuer.
-    // Consumed by the oidc module added in a later task; keep as public API surface.
-    #[allow(dead_code)]
     pub fn discovery_url(&self) -> Option<String> {
         let issuer = self.issuer.as_ref()?.trim_end_matches('/');
         Some(format!("{issuer}/.well-known/openid-configuration"))
