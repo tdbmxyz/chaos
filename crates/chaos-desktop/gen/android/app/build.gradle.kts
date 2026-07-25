@@ -23,10 +23,10 @@ val keyProperties = Properties().apply {
 
 android {
     compileSdk = 36
-    namespace = "dev.tibo.chaos"
+    namespace = "xyz.tdbm.chaos"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "dev.tibo.chaos"
+        applicationId = "xyz.tdbm.chaos"
         minSdk = 24
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
