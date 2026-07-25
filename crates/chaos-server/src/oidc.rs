@@ -4,11 +4,6 @@
 //! discovery document: no per-request round trip to authentik, and a brief
 //! authentik outage doesn't lock out clients that already hold a token.
 
-// Nothing outside this module calls the verifier yet — `auth.rs` becomes its
-// consumer in the next step. Until then only the tests exercise it, so the
-// whole module would read as dead code.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
