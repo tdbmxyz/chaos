@@ -12,9 +12,25 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon-180.png" />
     <link rel="manifest" href="/assets/manifest.json" />
-    <!-- Self-hosted ECharts (Home tab chart); pinned, no CDN. -->
-    <script src="/vendor/echarts.min.js"></script>
     <script>
+      // Self-hosted ECharts (Home and Weather charts); pinned, no CDN. It is
+      // ~1 MB, so it loads on demand instead of blocking every page — the
+      // dashboard never pays for it. The promise is memoized, so N charts
+      // mounting together share one request. A rejection is sticky: a failed
+      // load stays failed for the session and ChartCanvas shows its
+      // "Chart failed to load" message.
+      window.chaosLoadECharts = function () {
+        if (!window.chaosEChartsPromise) {
+          window.chaosEChartsPromise = new Promise(function (resolve, reject) {
+            var script = document.createElement("script");
+            script.src = "/vendor/echarts.min.js";
+            script.onload = function () { resolve(true); };
+            script.onerror = function () { reject(new Error("echarts bundle failed to load")); };
+            document.head.appendChild(script);
+          });
+        }
+        return window.chaosEChartsPromise;
+      };
       // Shared tooltip header for time-axis charts: viewer-local weekday,
       // date, and hour:minute of the hovered instant (epoch ms). The default
       // ECharts header hides the date at hour granularity.
