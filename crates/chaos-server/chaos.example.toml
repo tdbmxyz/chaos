@@ -185,3 +185,11 @@ type = "server_stats"
 # username_header = "X-authentik-username"
 # name_header = "X-authentik-name"
 # secret_header = "X-Chaos-Proxy-Secret"
+
+# OIDC access tokens from the mobile/desktop apps (authentik). Both values
+# must be set for it to take effect. The issuer is what appears in the token's
+# `iss` claim — authentik uses a trailing slash. Requires a provider whose
+# signing key is an RSA certificate, so the JWKS is non-empty.
+# [oidc]
+# issuer = "https://auth.example.com/application/o/chaos-app/"
+# client_id = "your-public-client-id"
