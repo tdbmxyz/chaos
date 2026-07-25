@@ -63,6 +63,19 @@ The split into crates enforces the boundaries that make this possible:
   keeps the server deployable without a wasm toolchain.
 - API base resolution: same-origin in the browser (trunk proxies `/api` in dev);
   inside Tauri (origin `tauri://localhost`) it falls back to a configured server URL.
+- Delivery: the dist is precompressed at build time (`packages.chaos-web-static`
+  adds `.br`/`.gz` siblings) and served by `ServeDir::precompressed_br`, with
+  `Cache-Control: immutable` on trunk's fingerprinted filenames and `no-cache`
+  on everything else (`chaos-server/src/api/static_assets.rs`). Compressing per
+  request instead would mean re-brotli-ing megabytes of wasm on every cold load;
+  `chaos-desktop` keeps consuming the uncompressed `chaos-web` because it bakes
+  that dist into its binary.
+- The wasm is built with `[profile.wasm-release]` and a stripped `wasm-opt -Oz`
+  pass, both wired through `data-*` attributes on the `rel="rust"` link in
+  `index.html` — trunk computes the SRI integrity hash after wasm-opt, so a
+  post-build hook would break booting.
+- ECharts (~1 MB) loads on demand via `chaosLoadECharts` rather than blocking
+  every page; only the Home and Weather tabs pay for it.
 
 ## Deployment target (Phase 5)
 
