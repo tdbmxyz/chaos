@@ -7,6 +7,10 @@
 //! the UI's own resolution takes over (localStorage override set through
 //! the in-app connect screen, which is the path on Android).
 
+// `pub` so the OIDC entry points count as reachable API of this lib target;
+// `run()` wires them up (deep-link handler and invoke handler).
+pub mod auth;
+
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 fn configured_server() -> Option<String> {
