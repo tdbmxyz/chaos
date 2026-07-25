@@ -834,8 +834,8 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
         let has_token = !auth::shell_available() || auth::sync_access_token().await;
         // `probe` handles set_server_fahrenheit, mark_server_seen and the
         // auth advertisement.
-        let healthy = offline::probe(&client, conn).await;
-        if !healthy && seen {
+        let health = offline::probe(&client, conn).await;
+        if health.is_none() && seen {
             // Known server, just offline right now: the probe couldn't
             // deliver the server's °F/°C default, so restore the one it
             // reported last time. `cache_get` wraps the stored value in its
@@ -846,14 +846,6 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
                 offline::cache_get::<Option<bool>>("server-fahrenheit").flatten(),
             );
         }
-        // Only the advertisement matters to the decision; the probe has
-        // already applied everything else the response carried.
-        let health = healthy.then(|| chaos_domain::api::HealthResponse {
-            status: "ok".into(),
-            version: String::new(),
-            fahrenheit: None,
-            auth: advertisement.get_untracked(),
-        });
         gate.set(auth::gate_state(health.as_ref(), has_token, seen));
     });
 
