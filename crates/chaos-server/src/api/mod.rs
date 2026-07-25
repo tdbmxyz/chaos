@@ -16,7 +16,6 @@ mod widgets;
 use axum::Router;
 use axum::routing::{get, post, put};
 use tower_http::cors::CorsLayer;
-use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 pub use error::ApiError;
@@ -82,8 +81,7 @@ pub fn router(state: AppState) -> Router {
     // Serve the built web frontend when configured (production mode). During
     // development trunk serves it instead and proxies /api here.
     if let Some(dir) = &state.config.static_dir {
-        let index = dir.join("index.html");
-        app = app.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)));
+        app = app.merge(static_assets::router(dir));
     }
 
     app
