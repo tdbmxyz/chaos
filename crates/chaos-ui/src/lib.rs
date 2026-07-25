@@ -3,6 +3,7 @@
 //! (like where the API lives) is injected from the outside via [`AppConfig`].
 
 mod analytics;
+pub(crate) mod auth;
 mod components;
 mod date_util;
 mod echarts;
@@ -459,7 +460,10 @@ pub fn use_client() -> ChaosClient {
     // The token is read per call, not per app: it changes on login/logout
     // and callers must always see the current one (matches the previous
     // behavior, where the whole client was rebuilt per call).
-    let token = config.persist_token.then(stored_token).flatten();
+    // An OIDC access token (shells, signed in through authentik) wins over
+    // chaos's own session token; the server accepts either.
+    let token =
+        crate::auth::access_token().or_else(|| config.persist_token.then(stored_token).flatten());
     match use_context::<SharedClient>() {
         Some(SharedClient(client)) => client.with_token(token).with_basic_auth(authentik_creds()),
         // Components rendered outside App (tests, shells) fall back to a
@@ -487,6 +491,7 @@ pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
         let client = client.clone();
         spawn_local(async move {
             let _ = client.logout().await;
+            crate::auth::sign_out().await;
             store_token(None);
             offline::cache_clear();
             session.0.set(None);
@@ -516,6 +521,14 @@ pub fn App(config: AppConfig) -> impl IntoView {
     // reachable", so it triggers a probe rather than trusting it).
     let conn = RwSignal::new(offline::Connectivity::Checking);
     provide_context(conn);
+
+    // The server's advertised auth methods. Seeded from the last successful
+    // probe so an offline boot still remembers that this server wants OIDC.
+    let advertisement = RwSignal::new(
+        offline::cache_get::<Option<chaos_domain::api::AuthAdvertisement>>("server-auth").flatten(),
+    );
+    provide_context(advertisement);
+
     let client_for_online = use_client();
     let online_probe = window_event_listener(leptos::ev::online, move |_| {
         let client = client_for_online.clone();
@@ -574,12 +587,29 @@ pub fn App(config: AppConfig) -> impl IntoView {
                         session.0.set(Some(user));
                     }
                 }
-                // The server answered "no session" (expired/revoked): the
-                // cached user is stale — drop it and stay signed out.
-                Err(chaos_client::ClientError::Api { .. }) => {
+                // The server answered "no session" (expired/revoked): try one
+                // token refresh before concluding the user is signed out — an
+                // access token that expired while the app slept is normal.
+                Err(chaos_client::ClientError::Api { status: 401, .. }) => {
+                    // Rebuilt rather than `use_client()`: this runs detached
+                    // from the reactive owner, and the point is to carry the
+                    // token the refresh just mirrored.
+                    if crate::auth::sync_access_token().await
+                        && let Ok(user) = client
+                            .clone()
+                            .with_token(crate::auth::access_token())
+                            .me()
+                            .await
+                    {
+                        offline::cache_put("me", &user);
+                        session.0.set(Some(user));
+                        return;
+                    }
                     offline::cache_remove("me");
                     session.0.set(None);
                 }
+                // Any other API error says nothing about the session.
+                Err(chaos_client::ClientError::Api { .. }) => {}
                 // Decode noise says nothing about the session; change nothing.
                 Err(_) => {}
             }
@@ -757,11 +787,28 @@ fn ShareRedirect() -> impl IntoView {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum GateState {
-    Checking,
-    Ready,
-    Unreachable,
+/// One step of the post-sign-in poll: the shell completes the code exchange
+/// when authentik redirects back, so the UI waits for a token to appear.
+/// Written as a `set_timeout` chain rather than an async sleep because the
+/// crate has no timer future (see `offline.rs`, `analytics.rs`).
+fn poll_for_token(left: u32, waiting: RwSignal<bool>, gate: RwSignal<auth::GateState>) {
+    if left == 0 {
+        waiting.set(false);
+        return;
+    }
+    set_timeout(
+        move || {
+            spawn_local(async move {
+                if auth::sync_access_token().await {
+                    waiting.set(false);
+                    gate.set(auth::GateState::Ready);
+                } else {
+                    poll_for_token(left - 1, waiting, gate);
+                }
+            });
+        },
+        std::time::Duration::from_millis(1_500),
+    );
 }
 
 /// Blocks the app behind a health check so a shell pointing at the wrong
@@ -770,17 +817,25 @@ enum GateState {
 /// that the web entrypoint's API-base resolution already honors.
 #[component]
 fn ServerGate(children: ChildrenFn) -> impl IntoView {
-    let gate = RwSignal::new(GateState::Checking);
+    let gate = RwSignal::new(auth::GateState::Checking);
     let client = use_client();
     let conn = offline::use_connectivity();
     let seen = offline::server_seen(use_client().base().as_str());
+    let advertisement = auth::advertisement();
+    // "Waiting for the browser to come back" — drives the polling UI.
+    let waiting = RwSignal::new(false);
+
     spawn_local(async move {
-        // `probe` handles set_server_fahrenheit and mark_server_seen. A
-        // server we've reached before is just offline right now: boot into
-        // the cached UI with the badge instead of the connect form.
-        if offline::probe(&client, conn).await {
-            gate.set(GateState::Ready);
-        } else if seen {
+        // A shell may already hold a token from a previous run; mirror it
+        // before the first gate decision so a signed-in app never flashes the
+        // sign-in screen. Outside a shell (plain browser) there is nothing to
+        // sign into from here — the page rides the browser's own authentik
+        // session — so the gate must not demand a token it can't obtain.
+        let has_token = !auth::shell_available() || auth::sync_access_token().await;
+        // `probe` handles set_server_fahrenheit, mark_server_seen and the
+        // auth advertisement.
+        let healthy = offline::probe(&client, conn).await;
+        if !healthy && seen {
             // Known server, just offline right now: the probe couldn't
             // deliver the server's °F/°C default, so restore the one it
             // reported last time. `cache_get` wraps the stored value in its
@@ -790,11 +845,37 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
             set_server_fahrenheit(
                 offline::cache_get::<Option<bool>>("server-fahrenheit").flatten(),
             );
-            gate.set(GateState::Ready);
-        } else {
-            gate.set(GateState::Unreachable);
         }
+        // Only the advertisement matters to the decision; the probe has
+        // already applied everything else the response carried.
+        let health = healthy.then(|| chaos_domain::api::HealthResponse {
+            status: "ok".into(),
+            version: String::new(),
+            fahrenheit: None,
+            auth: advertisement.get_untracked(),
+        });
+        gate.set(auth::gate_state(health.as_ref(), has_token, seen));
     });
+
+    let sign_in = move |_| {
+        let Some(oidc) = advertisement.get_untracked().and_then(|a| a.oidc) else {
+            return;
+        };
+        waiting.set(true);
+        spawn_local(async move {
+            if auth::start_sign_in(&oidc.issuer, &oidc.client_id)
+                .await
+                .is_err()
+            {
+                waiting.set(false);
+                return;
+            }
+            // The shell completes the exchange when authentik redirects back;
+            // poll until a token appears. Two minutes is long enough for a
+            // password + 2FA and short enough not to poll forever.
+            poll_for_token(80, waiting, gate);
+        });
+    };
 
     let current = use_client().base().to_string();
     let input = RwSignal::new(current);
@@ -808,9 +889,33 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
 
     view! {
         {move || match gate.get() {
-            GateState::Checking => view! { <p class="muted gate-msg">"Connecting…"</p> }.into_any(),
-            GateState::Ready => children().into_any(),
-            GateState::Unreachable => {
+            auth::GateState::Checking => {
+                view! { <p class="muted gate-msg">"Connecting…"</p> }.into_any()
+            }
+            auth::GateState::Ready => children().into_any(),
+            auth::GateState::NeedsSignIn => {
+                view! {
+                    <section class="server-gate">
+                        <h2>"Sign in"</h2>
+                        <p class="muted">
+                            "This server is protected by authentik. Signing in opens it in your browser."
+                        </p>
+                        <div class="gate-form">
+                            <button class="primary" on:click=sign_in disabled=move || waiting.get()>
+                                {move || {
+                                    if waiting.get() {
+                                        "Waiting for authentik…"
+                                    } else {
+                                        "Sign in with authentik"
+                                    }
+                                }}
+                            </button>
+                        </div>
+                    </section>
+                }
+                    .into_any()
+            }
+            auth::GateState::Unreachable => {
                 view! {
                     <section class="server-gate">
                         <h2>"Cannot reach the chaos server"</h2>
@@ -827,7 +932,7 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
                             <button class="primary" on:click=connect>
                                 "Connect"
                             </button>
-                            <button on:click=move |_| gate.set(GateState::Ready)>
+                            <button on:click=move |_| gate.set(auth::GateState::Ready)>
                                 "Continue anyway"
                             </button>
                         </div>

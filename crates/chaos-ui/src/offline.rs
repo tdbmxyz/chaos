@@ -155,6 +155,10 @@ pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) ->
             // (where no health response exists) can restore it — see the
             // seen-server branch in ServerGate.
             cache_put("server-fahrenheit", &health.fahrenheit);
+            // The gate needs the auth advertisement, and an offline boot needs
+            // the last-known one so it doesn't forget the server wants OIDC.
+            cache_put("server-auth", &health.auth);
+            crate::auth::set_advertisement(health.auth.clone());
             mark_server_seen(client.base().as_str());
             conn.set(Connectivity::Online);
             // Reaching Online from a non-Online state (boot or reconnect) is
