@@ -23,9 +23,22 @@ bundle:
 
 # Build the signed Android APK. Enters the .#android dev shell itself
 # (Android SDK/NDK + JDK come from nix, not ~/Android).
+#
+# The version is injected from Cargo.toml rather than pinned in
+# tauri.conf.json, which would drift. It has to be injected somewhere:
+# tauri's Android generator only writes gen/android/app/tauri.properties
+# when the config carries a version, and unlike the desktop bundler it has
+# no Cargo.toml fallback — without this the APK ships as 1.0 / versionCode 1.
+# tauri.properties is also stale-prone (it keeps whatever version last
+# resolved), so it's removed first.
 apk:
-    cd crates/chaos-web && trunk build --release
-    nix develop .#android --command sh -c 'cd crates/chaos-desktop && cargo tauri android build --apk --target aarch64'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+    rm -f crates/chaos-desktop/gen/android/app/tauri.properties
+    (cd crates/chaos-web && trunk build --release)
+    nix develop .#android --command bash -c \
+      "cd crates/chaos-desktop && cargo tauri android build --apk --target aarch64 --config '{\"version\":\"$version\"}'"
 
 # Build the signed APK and attach it to the GitHub release of the
 # current workspace version. Runs locally because the release keystore
