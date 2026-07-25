@@ -56,4 +56,12 @@ fn main() {
         persist_token: cross_origin,
     };
     mount_to_body(move || view! { <App config=config.clone()/> });
+    // The boot skeleton (index.html) paints while the wasm loads; mount_to_body
+    // appends the app beside it rather than replacing it, so drop it now.
+    if let Some(node) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("chaos-boot"))
+    {
+        node.remove();
+    }
 }
