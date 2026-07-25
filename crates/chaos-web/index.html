@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>chaos</title>
     <link data-trunk rel="css" href="styles.css" />
+    <!-- Explicit rust link so release builds get the size-tuned profile
+         (opt-level "z" + panic=abort, see [profile.wasm-release] in
+         Cargo.toml) and a stripped wasm-opt pass. It has to run through
+         trunk rather than a post-build hook: trunk computes the SRI
+         integrity hash after wasm-opt, and a hook rewriting the file
+         afterwards would make the browser refuse to boot it. -->
+    <link data-trunk rel="rust" data-cargo-profile-release="wasm-release"
+          data-wasm-opt="z" data-wasm-opt-params="--strip-debug --strip-producers" />
     <link data-trunk rel="copy-dir" href="vendor" />
     <link data-trunk rel="copy-dir" href="assets" />
     <!-- SVG favicon for current browsers; PNG fallback for the rest. -->
