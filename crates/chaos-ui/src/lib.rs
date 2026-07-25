@@ -330,36 +330,6 @@ pub(crate) fn set_pref(key: &str, value: &str) {
     }
 }
 
-// ---- authentik app credentials (per-device, reverse-proxy Basic-auth) ----
-
-/// authentik username for the app's Basic-auth (when the server sits behind
-/// an authenticating proxy).
-pub(crate) const AUTHENTIK_USER_KEY: &str = "chaos-authentik-user";
-/// authentik app-password for the app's Basic-auth. Stored like the session
-/// token; never rendered back into the password input.
-pub(crate) const AUTHENTIK_TOKEN_KEY: &str = "chaos-authentik-token";
-
-/// Pure gate: both username and app-password must be non-empty for the
-/// credentials to be usable.
-fn authentik_creds_from(user: Option<String>, token: Option<String>) -> Option<(String, String)> {
-    let (u, t) = (user?, token?);
-    (!u.trim().is_empty() && !t.trim().is_empty()).then_some((u, t))
-}
-
-pub(crate) fn authentik_creds() -> Option<(String, String)> {
-    authentik_creds_from(pref(AUTHENTIK_USER_KEY), pref(AUTHENTIK_TOKEN_KEY))
-}
-
-pub(crate) fn set_authentik_creds(user: &str, token: &str) {
-    set_pref(AUTHENTIK_USER_KEY, user);
-    set_pref(AUTHENTIK_TOKEN_KEY, token);
-}
-
-pub(crate) fn clear_authentik_creds() {
-    set_pref(AUTHENTIK_USER_KEY, "");
-    set_pref(AUTHENTIK_TOKEN_KEY, "");
-}
-
 /// The per-device server override (settings page / connect screen). `None`
 /// means the platform default: the page origin on web, the bundled default
 /// in the shells — see chaos-web's `resolve()`.
@@ -465,15 +435,13 @@ pub fn use_client() -> ChaosClient {
     let token =
         crate::auth::access_token().or_else(|| config.persist_token.then(stored_token).flatten());
     match use_context::<SharedClient>() {
-        Some(SharedClient(client)) => client.with_token(token).with_basic_auth(authentik_creds()),
+        Some(SharedClient(client)) => client.with_token(token),
         // Components rendered outside App (tests, shells) fall back to a
         // one-off client. Logged so a refactor that loses the context shows
         // up instead of silently rebuilding a client per call.
         None => {
             leptos::logging::debug_warn!("use_client: no SharedClient in context");
-            ChaosClient::new(config.api_base)
-                .with_token(token)
-                .with_basic_auth(authentik_creds())
+            ChaosClient::new(config.api_base).with_token(token)
         }
     }
 }
@@ -511,6 +479,12 @@ const NAV_PRIMARY: [(&str, &str, &str); 5] = [
 
 #[component]
 pub fn App(config: AppConfig) -> impl IntoView {
+    // Migration: the app-password path was replaced by OIDC sign-in. Drop the
+    // stored credentials rather than leaving a password in localStorage.
+    for stale in ["chaos-authentik-user", "chaos-authentik-token"] {
+        set_pref(stale, "");
+    }
+
     let api_base = config.api_base.clone();
     provide_context(config);
     provide_context(SharedClient(ChaosClient::new(api_base)));
@@ -953,25 +927,6 @@ mod tests {
             hourly: Vec::new(),
             now_index: 0,
         }
-    }
-
-    #[test]
-    fn authentik_creds_needs_both() {
-        assert_eq!(authentik_creds_from(None, None), None);
-        assert_eq!(authentik_creds_from(Some("u".into()), None), None);
-        assert_eq!(authentik_creds_from(None, Some("t".into())), None);
-        assert_eq!(
-            authentik_creds_from(Some("u".into()), Some("".into())),
-            None
-        );
-        assert_eq!(
-            authentik_creds_from(Some("  ".into()), Some("t".into())),
-            None
-        );
-        assert_eq!(
-            authentik_creds_from(Some("u".into()), Some("t".into())),
-            Some(("u".into(), "t".into()))
-        );
     }
 
     #[test]
