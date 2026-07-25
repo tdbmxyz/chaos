@@ -8,6 +8,7 @@ use chaos_domain::{
 };
 
 use crate::api::ApiError;
+use crate::auth::AuthUser;
 use crate::config::Config;
 use crate::state::AppState;
 
@@ -65,7 +66,10 @@ fn locale_fahrenheit() -> bool {
         .is_some_and(|region| FAHRENHEIT_REGIONS.contains(&region.as_str()))
 }
 
-pub async fn services(State(state): State<AppState>) -> Json<Vec<ServiceWithStatus>> {
+pub async fn services(
+    AuthUser(_user): AuthUser,
+    State(state): State<AppState>,
+) -> Json<Vec<ServiceWithStatus>> {
     let statuses = state.statuses.read().await;
     let list = state
         .config
@@ -87,6 +91,7 @@ pub async fn services(State(state): State<AppState>) -> Json<Vec<ServiceWithStat
 /// the unit name never comes from the client, and polkit further restricts
 /// what the chaos user may touch (`systemdControl.units`).
 pub async fn service_systemd(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<ServiceActionRequest>,

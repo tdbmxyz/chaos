@@ -8,6 +8,7 @@ use chaos_domain::{
 use uuid::Uuid;
 
 use super::ApiError;
+use crate::auth::AuthUser;
 use crate::state::AppState;
 use crate::{archiver, metadata};
 
@@ -16,6 +17,7 @@ fn is_blank(value: &Option<String>) -> bool {
 }
 
 pub async fn list(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Query(query): Query<LinkQuery>,
 ) -> Result<Json<LinkPage>, ApiError> {
@@ -23,6 +25,7 @@ pub async fn list(
 }
 
 pub async fn get_one(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Link>, ApiError> {
@@ -30,6 +33,7 @@ pub async fn get_one(
 }
 
 pub async fn create(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(mut req): Json<CreateLinkRequest>,
@@ -56,6 +60,7 @@ pub async fn create(
 }
 
 pub async fn update(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateLinkRequest>,
@@ -64,6 +69,7 @@ pub async fn update(
 }
 
 pub async fn delete(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
@@ -75,6 +81,7 @@ pub async fn delete(
 
 /// Queue (or re-queue) a snapshot of the page.
 pub async fn rearchive(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<Link>), ApiError> {
@@ -88,6 +95,7 @@ pub async fn rearchive(
 
 /// Serve the stored single-file snapshot.
 pub async fn serve_archive(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
@@ -119,6 +127,9 @@ pub async fn serve_archive(
         .into_response())
 }
 
-pub async fn tags(State(state): State<AppState>) -> Result<Json<Vec<TagWithCount>>, ApiError> {
+pub async fn tags(
+    AuthUser(_user): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<TagWithCount>>, ApiError> {
     Ok(Json(state.db.list_tags().await?))
 }

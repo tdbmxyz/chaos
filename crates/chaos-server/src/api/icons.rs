@@ -10,6 +10,7 @@ use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 
 use super::ApiError;
+use crate::auth::AuthUser;
 use crate::state::AppState;
 
 /// Icons never change for a given name; a month of client caching is safe.
@@ -17,6 +18,7 @@ const CACHE_CONTROL: &str = "public, max-age=2592000, immutable";
 const MAX_ICON_BYTES: usize = 1024 * 1024;
 
 pub async fn icon(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(spec): Path<String>,
 ) -> Result<Response, ApiError> {
