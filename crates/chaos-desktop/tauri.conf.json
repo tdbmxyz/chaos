@@ -23,5 +23,12 @@
       "icons/128x128@2x.png",
       "icons/icon.png"
     ]
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["xyz.tdbm.chaos"]
+      }
+    }
   }
 }

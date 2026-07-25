@@ -72,6 +72,21 @@ fn open_with_system(_url: &str) -> std::io::Result<()> {
     Err(std::io::Error::other("no system opener on this platform"))
 }
 
+/// Complete a sign-in from a callback URL, wherever it arrived from (a deep
+/// link on Android, argv on the desktop). Errors are logged rather than
+/// surfaced: the UI is polling `auth_token` and shows its own timeout.
+fn handle_callback<R: tauri::Runtime>(app: &tauri::AppHandle<R>, url: &str) {
+    let Some((code, state)) = auth::parse_callback(url) else {
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = auth::finish(&app, &code, &state).await {
+            eprintln!("chaos: sign-in callback failed: {err}");
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK's DMABUF renderer draws a blank window on the NVIDIA
@@ -83,12 +98,31 @@ pub fn run() {
         unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Desktop only (the plugin has no mobile implementation): a second launch
+    // carries the callback URL in argv, so hand it to the running instance
+    // rather than opening another window.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        for arg in argv {
+            handle_callback(app, &arg);
+        }
+    }));
+
+    builder
         // Native HTTP for the UI (`window.__TAURI__.http.fetch`): lets it
         // reach hosts that send no CORS headers (lobste.rs). Scoped to an
         // explicit URL allowlist in capabilities/default.json.
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![open_external])
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_deep_link::init())
+        .invoke_handler(tauri::generate_handler![
+            open_external,
+            auth::auth_start,
+            auth::auth_token,
+            auth::auth_sign_out
+        ])
         .setup(|app| {
             let platform = if cfg!(target_os = "android") {
                 "android"
@@ -107,6 +141,18 @@ pub fn run() {
                     window.initialization_script(format!("window.CHAOS_API_BASE = '{escaped}';"));
             }
             window.build()?;
+
+            // authentik sends the browser back to xyz.tdbm.chaos://auth/callback;
+            // finish the exchange in the shell wherever the URL lands.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        handle_callback(&handle, url.as_str());
+                    }
+                });
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

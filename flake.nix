@@ -193,6 +193,7 @@
         Icon=chaos
         Type=Application
         Categories=Utility;
+        MimeType=x-scheme-handler/xyz.tdbm.chaos;
         INI
       '';
 
