@@ -137,6 +137,26 @@
 
       meta.description = "chaos web frontend (static trunk dist)";
     };
+
+    # The dist as chaos-server serves it: brotli/gzip siblings generated once
+    # here so ServeDir answers compressed requests without re-compressing
+    # megabytes of wasm per request (see api/static_assets.rs). Separate from
+    # chaos-web because chaos-desktop bakes that dist into its binary and the
+    # APK, where these files would be dead weight.
+    chaos-web-static = pkgs.runCommand "chaos-web-static-${version}" {
+      nativeBuildInputs = [pkgs.brotli pkgs.gzip];
+      meta.description = "chaos web frontend, with precompressed assets";
+    } ''
+      cp -r ${chaos-web} $out
+      chmod -R u+w $out
+      find $out -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' \
+        -o -name '*.html' -o -name '*.json' -o -name '*.svg' -o -name '*.map' \) \
+        -print0 | while IFS= read -r -d "" f; do
+        brotli -q 11 -f -o "$f.br" "$f"
+        gzip -9 -c "$f" > "$f.gz"
+      done
+    '';
+
     # Desktop shell. generate_context! bakes the web dist into the binary at
     # compile time, so the chaos-web output is copied in place before cargo
     # runs. wrapGAppsHook3 wires GSettings schemas + TLS (glib-networking),
@@ -183,7 +203,7 @@
     };
   in {
     packages.${system} = {
-      inherit chaos-server chaos-web chaos-desktop;
+      inherit chaos-server chaos-web chaos-web-static chaos-desktop;
       default = chaos-server;
     };
 
