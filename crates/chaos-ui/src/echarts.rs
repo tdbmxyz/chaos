@@ -1,13 +1,20 @@
-//! Minimal bindings to the vendored Apache ECharts bundle (loaded globally
-//! from index.html). Provides reusable chart bindings plus a `ChartCanvas`
-//! component used by both the Home and Weather tabs — options are passed as
-//! JSON built with serde_json and parsed on the JS side.
+//! Minimal bindings to the vendored Apache ECharts bundle (loaded on demand by
+//! `chaosLoadECharts` in index.html). Provides reusable chart bindings plus a
+//! `ChartCanvas` component used by both the Home and Weather tabs — options are
+//! passed as JSON built with serde_json and parsed on the JS side.
 
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 extern "C" {
+    /// `window.chaosLoadECharts()` — fetch the vendored bundle, memoized in JS
+    /// so concurrent charts share one request. `catch` also covers the function
+    /// being absent (a shell serving a stale index.html), which surfaces as a
+    /// load failure rather than a panic.
+    #[wasm_bindgen(js_name = chaosLoadECharts, catch)]
+    async fn load_echarts() -> Result<JsValue, JsValue>;
+
     pub type EChart;
 
     /// `echarts.init(el)` — one chart instance bound to a DOM element.
@@ -181,7 +188,21 @@ pub fn ChartCanvas(
     let zoomed = StoredValue::new_local(false);
     let failed = RwSignal::new(false);
 
+    // The bundle arrives on demand; until it does there is nothing to init
+    // against. One await per chart, one request per session (memoized in JS).
+    let ready = RwSignal::new(false);
+    leptos::task::spawn_local(async move {
+        match load_echarts().await {
+            Ok(_) => ready.set(true),
+            Err(_) => failed.set(true),
+        }
+    });
+
     Effect::new(move |_| {
+        // Tracked: the effect re-runs once the bundle has loaded.
+        if !ready.get() {
+            return;
+        }
         let Some(el) = node.get() else {
             return;
         };

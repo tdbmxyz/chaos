@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>chaos</title>
     <link data-trunk rel="css" href="styles.css" />
+    <!-- Explicit rust link so release builds get the size-tuned profile
+         (opt-level "z" + panic=abort, see [profile.wasm-release] in
+         Cargo.toml) and a stripped wasm-opt pass. It has to run through
+         trunk rather than a post-build hook: trunk computes the SRI
+         integrity hash after wasm-opt, and a hook rewriting the file
+         afterwards would make the browser refuse to boot it. -->
+    <link data-trunk rel="rust" data-cargo-profile-release="wasm-release"
+          data-wasm-opt="z" data-wasm-opt-params="--strip-debug --strip-producers" />
     <link data-trunk rel="copy-dir" href="vendor" />
     <link data-trunk rel="copy-dir" href="assets" />
     <!-- SVG favicon for current browsers; PNG fallback for the rest. -->
@@ -12,9 +20,25 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon-180.png" />
     <link rel="manifest" href="/assets/manifest.json" />
-    <!-- Self-hosted ECharts (Home tab chart); pinned, no CDN. -->
-    <script src="/vendor/echarts.min.js"></script>
     <script>
+      // Self-hosted ECharts (Home and Weather charts); pinned, no CDN. It is
+      // ~1 MB, so it loads on demand instead of blocking every page — the
+      // dashboard never pays for it. The promise is memoized, so N charts
+      // mounting together share one request. A rejection is sticky: a failed
+      // load stays failed for the session and ChartCanvas shows its
+      // "Chart failed to load" message.
+      window.chaosLoadECharts = function () {
+        if (!window.chaosEChartsPromise) {
+          window.chaosEChartsPromise = new Promise(function (resolve, reject) {
+            var script = document.createElement("script");
+            script.src = "/vendor/echarts.min.js";
+            script.onload = function () { resolve(true); };
+            script.onerror = function () { reject(new Error("echarts bundle failed to load")); };
+            document.head.appendChild(script);
+          });
+        }
+        return window.chaosEChartsPromise;
+      };
       // Shared tooltip header for time-axis charts: viewer-local weekday,
       // date, and hour:minute of the hovered instant (epoch ms). The default
       // ECharts header hides the date at hour granularity.
@@ -55,6 +79,50 @@
         return "<div>" + header + "</div>" + lines.join("<br/>");
       };
     </script>
+    <!-- Painted before the wasm boots; main.rs drops it after mount. The
+         colors are inlined from styles.css (--bg, --border, --muted,
+         --accent) because that sheet may not have arrived yet. -->
+    <style>
+      #chaos-boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1.25rem;
+        background: #14161c;
+        color: #8a90a0;
+        font-family: system-ui, sans-serif;
+      }
+      #chaos-boot-bar {
+        width: 9rem;
+        height: 3px;
+        border-radius: 3px;
+        background: #2a2e39;
+        overflow: hidden;
+      }
+      #chaos-boot-bar span {
+        display: block;
+        width: 40%;
+        height: 100%;
+        border-radius: 3px;
+        background: #7c9aff;
+        animation: chaos-boot-slide 1.1s ease-in-out infinite;
+      }
+      @keyframes chaos-boot-slide {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(250%); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #chaos-boot-bar span { animation: none; width: 100%; }
+      }
+    </style>
   </head>
-  <body></body>
+  <body>
+    <div id="chaos-boot">
+      <img src="/assets/logo.svg" alt="" width="64" height="64" />
+      <div id="chaos-boot-bar"><span></span></div>
+    </div>
+  </body>
 </html>
