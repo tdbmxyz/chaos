@@ -717,6 +717,54 @@ button.primary {
   border-color: var(--accent);
 }
 
+/* Pull-to-refresh indicator: height is driven inline by the gesture, so it
+   grows with the finger and then settles into a fixed spinner. Only ever has
+   height on a touch device. */
+.pull-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  height: 0;
+}
+
+.pull-refresh .pull-spinner {
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  opacity: 0.6;
+}
+
+/* Past the threshold: letting go will refresh. */
+.pull-refresh.armed .pull-spinner {
+  border-top-color: var(--accent);
+  opacity: 1;
+}
+
+.pull-refresh.spinning {
+  transition: height 0.2s ease;
+}
+
+.pull-refresh.spinning .pull-spinner {
+  border-top-color: var(--accent);
+  opacity: 1;
+  animation: pull-spin 0.7s linear infinite;
+}
+
+@keyframes pull-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pull-refresh.spinning .pull-spinner {
+    animation-duration: 2s;
+  }
+}
+
 .posts-tabs {
   display: flex;
   gap: 0.3rem;

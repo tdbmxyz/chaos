@@ -34,4 +34,7 @@ web-sys = { workspace = true, features = [
     "IntersectionObserverInit",
     "NodeList",
     "Node",
+    "Touch",
+    "TouchEvent",
+    "TouchList",
 ] }

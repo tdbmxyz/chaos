@@ -98,13 +98,81 @@ pub fn NewsPage() -> impl IntoView {
     Effect::new(move |_| crate::set_news_source(source.get()));
     Effect::new(move |_| crate::set_news_range(range.get()));
 
-    let data = LocalResource::new({
+    // Kept in `NewsCache` (app-level context) rather than a per-mount
+    // resource, so coming back to this tab renders the list already loaded
+    // instead of re-fetching and flashing "Loading…".
+    let cache = crate::use_news_cache();
+    let error = RwSignal::new(None::<String>);
+
+    // One fetch, replacing whatever the cache holds. Used on first load, on a
+    // source switch, on reconnect, and by the pull gesture.
+    let reload = {
         let client = client.clone();
         move || {
             let client = client.clone();
-            let source = source.get();
-            conn.track(); // recovery re-fetches
-            async move { load_posts(source, conn, &client).await }
+            let wanted = source.get_untracked();
+            async move {
+                match load_posts(wanted, conn, &client).await {
+                    Ok((posts, more)) => {
+                        error.set(None);
+                        cache.loaded.set(Some((wanted, posts, more)));
+                    }
+                    // Keep showing what we have: a failed refresh should not
+                    // empty a list the user is reading.
+                    Err(err) => error.set(Some(err)),
+                }
+            }
+        }
+    };
+
+    // Fetch only when the cache can't answer — nothing loaded yet, or it holds
+    // a different source — or when connectivity just came back mid-visit.
+    // Being *currently* online is deliberately not a reason: that would fetch
+    // on every mount, which is the behaviour this cache exists to remove.
+    let was_online = StoredValue::new(false);
+    Effect::new({
+        let reload = reload.clone();
+        move |prev: Option<()>| {
+            let wanted = source.get();
+            let online = conn.get() == crate::offline::Connectivity::Online;
+            // Not on the first run: `was_online` starts false on every mount,
+            // so every visit would otherwise look like a reconnection.
+            let came_online = online && !was_online.get_value() && prev.is_some();
+            was_online.set_value(online);
+            let stale =
+                !matches!(cache.loaded.get_untracked(), Some((cached, _, _)) if cached == wanted);
+            if stale || came_online {
+                let reload = reload.clone();
+                spawn_local(async move { reload().await });
+            }
+        }
+    });
+
+    let pull = crate::hooks::use_pull_to_refresh(move || {
+        let reload = reload.clone();
+        async move { reload().await }
+    });
+
+    // Restore where the user was, and keep it current as they scroll.
+    let scroll_listener = window_event_listener(leptos::ev::scroll, move |_| {
+        if let Some(y) = web_sys::window().and_then(|w| w.scroll_y().ok()) {
+            cache.scroll.set(y);
+        }
+    });
+    on_cleanup(move || scroll_listener.remove());
+    Effect::new(move |prev: Option<()>| {
+        if prev.is_some() {
+            return;
+        }
+        let y = cache.scroll.get_untracked();
+        if y > 0.0
+            && let Some(window) = web_sys::window()
+        {
+            // After the rows commit, or there is nothing to scroll through yet.
+            set_timeout(
+                move || window.scroll_to_with_x_and_y(0.0, y),
+                std::time::Duration::from_millis(0),
+            );
         }
     });
 
@@ -115,10 +183,11 @@ pub fn NewsPage() -> impl IntoView {
     // The union anchor spans all three windows, so colors never rescale.
     let list = {
         let client = client.clone();
-        move || match data.get() {
-            None => view! { <p class="muted">"Loading…"</p> }.into_any(),
-            Some(Err(err)) => view! { <p class="error">{err}</p> }.into_any(),
-            Some(Ok((posts, _))) => {
+        move || match (cache.loaded.get(), error.get()) {
+            // Nothing cached and the fetch failed: the error is all we have.
+            (None, Some(err)) => view! { <p class="error">{err}</p> }.into_any(),
+            (None, None) => view! { <p class="muted">"Loading…"</p> }.into_any(),
+            (Some((_, posts, _)), _) => {
                 let anchor = score_anchor(
                     posts
                         .last_24h
@@ -182,7 +251,7 @@ pub fn NewsPage() -> impl IntoView {
             // Track what rebuilds the row list so the observer re-binds.
             source.get();
             range.get();
-            data.track();
+            cache.loaded.track();
             // Defer to the next tick: this effect fires when the data resolves,
             // but Leptos hasn't committed the new row `<li>`s to the DOM yet, so
             // querying for them here would observe nothing. A 0ms timeout runs
@@ -197,6 +266,22 @@ pub fn NewsPage() -> impl IntoView {
 
     view! {
         <section class="news-page">
+            // Follows the finger while pulling, then spins until the refresh
+            // resolves. Touch-only, so it never appears on a desktop browser.
+            <div
+                class="pull-refresh"
+                class:spinning=move || pull.refreshing.get()
+                class:armed=move || pull.armed()
+                style:height=move || {
+                    if pull.refreshing.get() {
+                        "36px".to_string()
+                    } else {
+                        format!("{}px", pull.distance.get().min(72.0))
+                    }
+                }
+            >
+                <span class="pull-spinner"></span>
+            </div>
             <div class="news-sources">
                 {[(Source::HackerNews, "Hacker News"), (Source::Lobsters, "lobste.rs")]
                     .map(|(s, label)| {

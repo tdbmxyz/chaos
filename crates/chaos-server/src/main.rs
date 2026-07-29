@@ -17,6 +17,7 @@ mod import;
 mod metadata;
 mod monitor;
 mod notify;
+mod oidc;
 mod state;
 mod widgets;
 

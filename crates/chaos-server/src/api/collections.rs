@@ -5,13 +5,18 @@ use chaos_domain::{Collection, CollectionRequest};
 use uuid::Uuid;
 
 use super::ApiError;
+use crate::auth::AuthUser;
 use crate::state::AppState;
 
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Collection>>, ApiError> {
+pub async fn list(
+    AuthUser(_user): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Collection>>, ApiError> {
     Ok(Json(state.db.list_collections().await?))
 }
 
 pub async fn create(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Json(req): Json<CollectionRequest>,
 ) -> Result<(StatusCode, Json<Collection>), ApiError> {
@@ -20,6 +25,7 @@ pub async fn create(
 }
 
 pub async fn update(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<CollectionRequest>,
@@ -28,6 +34,7 @@ pub async fn update(
 }
 
 pub async fn delete(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {

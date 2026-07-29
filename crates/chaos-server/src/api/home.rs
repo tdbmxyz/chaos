@@ -1,12 +1,12 @@
 //! `/api/v1/home/*`: the Home tab — temperature history and light control,
-//! proxied through Home Assistant. Unauthenticated for now, like the
-//! services/systemd routes (see `api/mod.rs`).
+//! proxied through Home Assistant. Every route requires a signed-in user.
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use chaos_domain::{HomeSensorInfo, LightCommand, LightState, TemperatureQuery, TemperatureSeries};
 
 use crate::api::ApiError;
+use crate::auth::AuthUser;
 use crate::home_assistant::HomeAssistantClient;
 use crate::state::AppState;
 
@@ -14,7 +14,10 @@ fn require_home(state: &AppState) -> Result<&HomeAssistantClient, ApiError> {
     state.home.as_deref().ok_or(ApiError::NotFound)
 }
 
-pub async fn sensors(State(state): State<AppState>) -> Json<Vec<HomeSensorInfo>> {
+pub async fn sensors(
+    AuthUser(_user): AuthUser,
+    State(state): State<AppState>,
+) -> Json<Vec<HomeSensorInfo>> {
     let Some(home) = state.home.as_ref() else {
         return Json(Vec::new());
     };
@@ -32,6 +35,7 @@ pub async fn sensors(State(state): State<AppState>) -> Json<Vec<HomeSensorInfo>>
 }
 
 pub async fn temperature(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Query(query): Query<TemperatureQuery>,
 ) -> Result<Json<Vec<TemperatureSeries>>, ApiError> {
@@ -42,7 +46,10 @@ pub async fn temperature(
         .map_err(ApiError::BadGateway)
 }
 
-pub async fn lights(State(state): State<AppState>) -> Result<Json<Vec<LightState>>, ApiError> {
+pub async fn lights(
+    AuthUser(_user): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<LightState>>, ApiError> {
     let home = require_home(&state)?;
     let mut states = Vec::with_capacity(home.lights.len());
     for def in &home.lights {
@@ -52,6 +59,7 @@ pub async fn lights(State(state): State<AppState>) -> Result<Json<Vec<LightState
 }
 
 pub async fn set_light(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(cmd): Json<LightCommand>,

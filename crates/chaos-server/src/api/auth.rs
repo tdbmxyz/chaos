@@ -70,7 +70,11 @@ pub async fn login(
         .into_response())
 }
 
-pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn logout(
+    AuthUser(_user): AuthUser,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     if let Some(token) = request_token(&headers) {
         let _ = state.db.delete_session(&token_hash(&token)).await;
     }

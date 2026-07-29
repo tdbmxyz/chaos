@@ -191,6 +191,15 @@ pub fn request_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|(_, value)| value.to_string())
 }
 
+/// The bearer value, but only when it looks like a JWT (three dot-separated
+/// segments) — chaos's own session tokens travel the same header and must
+/// still reach the session branch.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let token = value.strip_prefix("Bearer ")?.trim();
+    (token.split('.').count() == 3).then_some(token)
+}
+
 // ---- sso login analytics ----
 
 /// At most one `login` analytics event per user per this interval.
@@ -286,21 +295,53 @@ pub async fn forward_auth_user(
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let display = name.unwrap_or(username);
-    let mut user = db
-        .user_by_username_or_create(username, display)
+    let user = provision_proxy_user(username, name, db)
         .await
         .map_err(|_| ApiError::Unauthorized)?;
-    // Keep the stored name in sync with the IdP (first-write-wins otherwise
-    // pins a stale greeting forever). A failed rename must not block auth,
-    // so the error is dropped; the in-memory name is fresh either way.
+    Ok(Some(user))
+}
+
+/// Look up — or provision on first contact — the chaos user an external IdP
+/// identity maps onto, and keep its display name in sync.
+///
+/// `name` is the display name the IdP explicitly supplied; `None` means "not
+/// supplied", in which case the username seeds a new account but never
+/// overwrites a stored name (first-write-wins would otherwise pin a stale
+/// greeting forever, and the fallback would clobber a real one).
+///
+/// Shared by every proxy identity path so an authentik account maps onto one
+/// chaos account whether it arrives through forward-auth headers or a bearer
+/// token — the two must not drift.
+async fn provision_proxy_user(username: &str, name: Option<&str>, db: &Db) -> anyhow::Result<User> {
+    let mut user = db
+        .user_by_username_or_create(username, name.unwrap_or(username))
+        .await?;
+    // A failed rename must not block auth, so the error is dropped; the
+    // in-memory name is fresh either way.
     if let Some(name) = name
         && name != user.display_name
     {
         let _ = db.update_user_display_name(user.id, name).await;
         user.display_name = name.to_string();
     }
-    Ok(Some(user))
+    Ok(user)
+}
+
+/// Resolve (or provision) the chaos user an OIDC token identifies. Same rules
+/// as [`forward_auth_user`], so an authentik account maps onto one chaos
+/// account whether it arrives through the browser's forward-auth headers or
+/// the app's bearer token.
+pub async fn oidc_user(claims: &crate::oidc::Claims, db: &Db) -> anyhow::Result<User> {
+    let username = claims.preferred_username.trim();
+    if username.is_empty() {
+        anyhow::bail!("token has no preferred_username");
+    }
+    let name = claims
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    provision_proxy_user(username, name, db).await
 }
 
 /// Best-effort session lookup for handlers that attribute rather than
@@ -329,13 +370,30 @@ impl FromRequestParts<AppState> for AuthUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        // 1. chaos session (Bearer/cookie) — unchanged, wins when present.
+        // 1. An OIDC access token from the apps. A token that is present but
+        //    invalid is a 401 — never a fallthrough to a weaker source, which
+        //    would let a junk bearer inherit the browser's proxy identity.
+        if let Some(bearer) = bearer_token(&parts.headers)
+            && state.config.oidc.enabled()
+        {
+            return match state.jwks.verify(bearer, &state.config.oidc).await {
+                Ok(claims) => {
+                    let user = oidc_user(&claims, &state.db)
+                        .await
+                        .map_err(|_| ApiError::Unauthorized)?;
+                    note_sso_login(state, &user, &parts.headers).await;
+                    Ok(AuthUser(user))
+                }
+                Err(_) => Err(ApiError::Unauthorized),
+            };
+        }
+        // 2. chaos session (Bearer/cookie) — unchanged, wins when present.
         if let Some(token) = request_token(&parts.headers)
             && let Ok(user) = state.db.user_by_session(&token_hash(&token)).await
         {
             return Ok(AuthUser(user));
         }
-        // 2. trusted forward-auth header (only when configured + secret matches).
+        // 3. trusted forward-auth header (only when configured + secret matches).
         if let Some(user) =
             forward_auth_user(&parts.headers, &state.config.forward_auth, &state.db).await?
         {
@@ -629,6 +687,126 @@ mod tests {
     }
 
     use chrono::Utc;
+
+    #[test]
+    fn only_jwt_shaped_bearers_are_treated_as_oidc_tokens() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer header.payload.signature".parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&headers), Some("header.payload.signature"));
+
+        // A chaos session token is opaque, not a JWT: it must fall through to
+        // the session branch instead of being rejected as a bad OIDC token.
+        let mut session = HeaderMap::new();
+        session.insert(
+            header::AUTHORIZATION,
+            "Bearer 0123456789abcdef".parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&session), None);
+
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
+    }
+
+    /// The security rule: a JWT-shaped bearer that does not verify is a 401,
+    /// never a fallthrough — otherwise a junk token would inherit the
+    /// browser's forward-auth identity. The issuer here is unreachable, so
+    /// verification fails without leaving the machine.
+    #[tokio::test]
+    async fn an_invalid_bearer_jwt_never_falls_through_to_forward_auth() {
+        let db = Db::in_memory().await.unwrap();
+        let config = crate::config::Config {
+            oidc: crate::config::OidcConfig {
+                issuer: Some("http://127.0.0.1:1/application/o/chaos/".into()),
+                client_id: Some("chaos".into()),
+            },
+            forward_auth: ForwardAuthConfig {
+                secret: Some("s3cret".into()),
+                ..Default::default()
+            },
+            ..crate::config::Config::default()
+        };
+        let state = crate::state::AppState::new(config, db).unwrap();
+        let request = axum::http::Request::builder()
+            .header(header::AUTHORIZATION, "Bearer not.a.jwt")
+            .header("x-chaos-proxy-secret", "s3cret")
+            .header("x-authentik-username", "so")
+            .body(())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+        assert!(
+            AuthUser::from_request_parts(&mut parts, &state)
+                .await
+                .is_err(),
+            "an unverifiable JWT must reject, not inherit the proxy identity"
+        );
+        assert!(
+            state.db.user_by_username("so").await.is_err(),
+            "and it must not provision anyone either"
+        );
+    }
+
+    #[tokio::test]
+    async fn oidc_claims_provision_then_reuse_one_account() {
+        let db = crate::db::Db::in_memory().await.unwrap();
+        let claims = crate::oidc::Claims {
+            preferred_username: "tibo".into(),
+            name: Some("Tibo".into()),
+        };
+
+        let first = oidc_user(&claims, &db).await.expect("provision");
+        assert_eq!(first.username, "tibo");
+        assert_eq!(first.display_name, "Tibo");
+
+        let second = oidc_user(&claims, &db).await.expect("reuse");
+        assert_eq!(
+            second.id, first.id,
+            "the same authentik user is one account"
+        );
+    }
+
+    #[tokio::test]
+    async fn oidc_claims_update_a_changed_display_name() {
+        let db = crate::db::Db::in_memory().await.unwrap();
+        let _ = oidc_user(
+            &crate::oidc::Claims {
+                preferred_username: "tibo".into(),
+                name: Some("Tibo".into()),
+            },
+            &db,
+        )
+        .await
+        .expect("provision");
+
+        let renamed = oidc_user(
+            &crate::oidc::Claims {
+                preferred_username: "tibo".into(),
+                name: Some("Thibaud".into()),
+            },
+            &db,
+        )
+        .await
+        .expect("reuse");
+        assert_eq!(renamed.display_name, "Thibaud");
+    }
+
+    /// No `name` claim: fall back to the username rather than storing an
+    /// empty display name.
+    #[tokio::test]
+    async fn oidc_claims_without_a_name_fall_back_to_the_username() {
+        let db = crate::db::Db::in_memory().await.unwrap();
+        let user = oidc_user(
+            &crate::oidc::Claims {
+                preferred_username: "akadmin".into(),
+                name: None,
+            },
+            &db,
+        )
+        .await
+        .expect("provision");
+        assert_eq!(user.display_name, "akadmin");
+    }
 
     #[test]
     fn throttle_delay_backs_off_after_free_failures() {

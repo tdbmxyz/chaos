@@ -34,6 +34,8 @@ pub struct AppState {
     pub sso_logins: Arc<crate::auth::SsoLoginTracker>,
     /// ntfy publisher, when `[notifications]` is configured.
     pub notifier: Option<Arc<Notifier>>,
+    /// Cached OIDC signing keys, shared by every request (see oidc.rs).
+    pub jwks: Arc<crate::oidc::Jwks>,
 }
 
 impl AppState {
@@ -53,6 +55,7 @@ impl AppState {
             login_throttle: Arc::new(crate::auth::LoginThrottle::default()),
             sso_logins: Arc::new(crate::auth::SsoLoginTracker::default()),
             notifier,
+            jwks: crate::oidc::Jwks::new(reqwest::Client::new()),
         })
     }
 }

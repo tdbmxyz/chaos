@@ -5,13 +5,18 @@ use axum::extract::{Path, State};
 use chaos_domain::{DashboardLayout, PostThread, SystemdActionRequest, WidgetData};
 
 use crate::api::ApiError;
+use crate::auth::AuthUser;
 use crate::state::AppState;
 
-pub async fn dashboard(State(state): State<AppState>) -> Json<DashboardLayout> {
+pub async fn dashboard(
+    AuthUser(_user): AuthUser,
+    State(state): State<AppState>,
+) -> Json<DashboardLayout> {
     Json(state.widgets.layout.clone())
 }
 
 pub async fn widget_data(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<WidgetData>, ApiError> {
@@ -21,6 +26,7 @@ pub async fn widget_data(
 /// Standalone posts feed for the `/news` page, keyed by source
 /// (`hackernews`/`lobsters`). Unknown sources 404.
 pub async fn posts_list(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(source): Path<String>,
 ) -> Result<Json<WidgetData>, ApiError> {
@@ -47,6 +53,7 @@ pub async fn posts_list(
 /// Comment thread for one post (`source` + provider id), served by the
 /// reader. Unknown sources 404.
 pub async fn post_thread(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path((source, id)): Path<(String, String)>,
 ) -> Result<Json<PostThread>, ApiError> {
@@ -60,6 +67,7 @@ pub async fn post_thread(
 }
 
 pub async fn widget_systemd(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<SystemdActionRequest>,
@@ -79,11 +87,17 @@ mod tests {
     use crate::config::Config;
     use crate::db::Db;
 
+    async fn state_with_user() -> (AppState, chaos_domain::User) {
+        let db = Db::in_memory().await.unwrap();
+        let user = db.create_user("tibo", "Tibo", "x").await.unwrap();
+        let state = AppState::new(Config::default(), db).unwrap();
+        (state, user)
+    }
+
     #[tokio::test]
     async fn posts_list_unknown_source_is_404() {
-        let db = Db::in_memory().await.unwrap();
-        let state = AppState::new(Config::default(), db).unwrap();
-        let err = posts_list(State(state), Path("nope".into()))
+        let (state, user) = state_with_user().await;
+        let err = posts_list(AuthUser(user), State(state), Path("nope".into()))
             .await
             .expect_err("unknown source must be rejected");
         assert!(matches!(err, ApiError::NotFound));
@@ -91,11 +105,14 @@ mod tests {
 
     #[tokio::test]
     async fn thread_unknown_source_is_404() {
-        let db = Db::in_memory().await.unwrap();
-        let state = AppState::new(Config::default(), db).unwrap();
-        let err = post_thread(State(state), Path(("nope".into(), "1".into())))
-            .await
-            .expect_err("unknown source must be rejected");
+        let (state, user) = state_with_user().await;
+        let err = post_thread(
+            AuthUser(user),
+            State(state),
+            Path(("nope".into(), "1".into())),
+        )
+        .await
+        .expect_err("unknown source must be rejected");
         assert!(matches!(err, ApiError::NotFound));
     }
 }
