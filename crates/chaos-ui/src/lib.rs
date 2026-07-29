@@ -356,6 +356,26 @@ pub(crate) fn set_api_base_override(value: Option<&str>) {
 #[derive(Clone, Copy)]
 pub struct Session(pub RwSignal<Option<User>>);
 
+/// The News tab's loaded payload and scroll offset, held here rather than in
+/// the page so it survives navigation: the router drops and rebuilds
+/// `NewsPage` on every visit, which is what made going back re-fetch from cold
+/// and flash a loading state. Refreshing is then an explicit act — the
+/// pull-to-refresh gesture, or a page reload in a desktop browser.
+///
+/// In memory only: a cold start still fetches.
+#[derive(Clone, Copy, Default)]
+pub struct NewsCache {
+    /// `(source, posts, has_more)` exactly as `load_posts` returned it.
+    #[allow(clippy::type_complexity)]
+    pub loaded: RwSignal<Option<(chaos_domain::Source, chaos_domain::PostsData, bool)>>,
+    /// Vertical scroll offset to restore, in px.
+    pub scroll: RwSignal<f64>,
+}
+
+pub(crate) fn use_news_cache() -> NewsCache {
+    use_context::<NewsCache>().expect("NewsCache provided by App")
+}
+
 /// One HTTP client for the whole app, provided as context at `App`.
 /// `use_client()` clones it per call (reqwest clients are `Arc`s inside),
 /// so components share the connection pool instead of building a new
@@ -514,6 +534,8 @@ pub fn App(config: AppConfig) -> impl IntoView {
 
     let session = Session(RwSignal::new(None));
     provide_context(session);
+    // Outlives route changes on purpose — see NewsCache.
+    provide_context(NewsCache::default());
 
     // Analytics overlay + flush context (needs AppConfig, SharedClient and the
     // connectivity signal, all provided above).

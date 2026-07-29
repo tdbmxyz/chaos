@@ -1,5 +1,6 @@
 //! Reusable reactive scaffolding for the dashboard widgets: interval-driven
-//! polling and busy/error bookkeeping around fire-and-forget actions.
+//! polling, busy/error bookkeeping around fire-and-forget actions, and the
+//! pull-to-refresh gesture.
 
 use std::time::Duration;
 
@@ -166,4 +167,99 @@ where
         });
     });
     (state, callback)
+}
+
+// ---- pull to refresh ----
+
+/// How far the finger must travel below the top of a scrolled-to-top list
+/// before letting go triggers a refresh.
+const PULL_THRESHOLD_PX: f64 = 72.0;
+/// Resistance: the indicator follows the finger at this fraction of the real
+/// distance, so the gesture feels weighted rather than sticking to the thumb.
+const PULL_DAMPING: f64 = 0.45;
+
+/// State of an in-progress pull, for rendering the indicator.
+#[derive(Clone, Copy)]
+pub(crate) struct PullToRefresh {
+    /// Damped distance in px the indicator should be offset by. 0 when idle.
+    pub(crate) distance: RwSignal<f64>,
+    /// True from release until the refresh future resolves.
+    pub(crate) refreshing: RwSignal<bool>,
+}
+
+impl PullToRefresh {
+    /// Whether releasing now would trigger a refresh — drives the "let go to
+    /// refresh" affordance.
+    pub(crate) fn armed(&self) -> bool {
+        self.distance.get() * (1.0 / PULL_DAMPING) >= PULL_THRESHOLD_PX
+    }
+}
+
+/// Swipe down from the top of the page to re-run `on_refresh`, the way a
+/// native list behaves. Touch only: a mouse never produces these events, so
+/// desktop browsers are unaffected and keep using a normal page reload.
+///
+/// Listens on `window` rather than a specific element so it works regardless
+/// of which container actually scrolls, and only arms when the document is
+/// already at the top — otherwise swiping down mid-list would refresh.
+pub(crate) fn use_pull_to_refresh<F, Fut>(on_refresh: F) -> PullToRefresh
+where
+    F: Fn() -> Fut + Clone + 'static,
+    Fut: std::future::Future<Output = ()> + 'static,
+{
+    let state = PullToRefresh {
+        distance: RwSignal::new(0.0),
+        refreshing: RwSignal::new(false),
+    };
+
+    // Where the finger went down, or None when this gesture can't refresh
+    // (didn't start at the top, or a refresh is already running).
+    let origin = StoredValue::new(None::<f64>);
+
+    let start = window_event_listener(leptos::ev::touchstart, move |ev| {
+        let at_top = web_sys::window().and_then(|w| w.scroll_y().ok()) <= Some(0.5);
+        let from = (!state.refreshing.get_untracked() && at_top)
+            .then(|| ev.touches().get(0).map(|t| t.client_y() as f64))
+            .flatten();
+        origin.set_value(from);
+    });
+
+    let mv = window_event_listener(leptos::ev::touchmove, move |ev| {
+        let Some(from) = origin.get_value() else {
+            return;
+        };
+        let Some(y) = ev.touches().get(0).map(|t| t.client_y() as f64) else {
+            return;
+        };
+        // Pulled back up past the start: cancel rather than leave the
+        // indicator stuck part-way open.
+        state.distance.set((y - from).max(0.0) * PULL_DAMPING);
+    });
+
+    let finish = move |_ev: leptos::ev::TouchEvent| {
+        let pulling = origin.get_value().is_some();
+        origin.set_value(None);
+        let fire = pulling && state.armed();
+        state.distance.set(0.0);
+        if !fire {
+            return;
+        }
+        state.refreshing.set(true);
+        let on_refresh = on_refresh.clone();
+        spawn_local(async move {
+            on_refresh().await;
+            state.refreshing.set(false);
+        });
+    };
+    let end = window_event_listener(leptos::ev::touchend, finish.clone());
+    let cancel = window_event_listener(leptos::ev::touchcancel, finish);
+
+    on_cleanup(move || {
+        start.remove();
+        mv.remove();
+        end.remove();
+        cancel.remove();
+    });
+
+    state
 }
