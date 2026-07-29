@@ -10,15 +10,23 @@ use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 
 use super::ApiError;
-use crate::auth::AuthUser;
 use crate::state::AppState;
 
 /// Icons never change for a given name; a month of client caching is safe.
 const CACHE_CONTROL: &str = "public, max-age=2592000, immutable";
 const MAX_ICON_BYTES: usize = 1024 * 1024;
 
+/// Deliberately unauthenticated, unlike every other route here. These are
+/// referenced from `<img src>`, and an img tag cannot send an Authorization
+/// header, so app clients (which authenticate with a bearer token rather than
+/// a proxy session) could never load them otherwise.
+///
+/// What this exposes: the icon *names* the dashboard asks for, which hint at
+/// which services are configured. They are generic vendor logos and the tile
+/// list is only as private as the domain itself. Nothing user-specific, no
+/// account data, and the spec charset below keeps the upstream URL on a fixed
+/// host.
 pub async fn icon(
-    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     Path(spec): Path<String>,
 ) -> Result<Response, ApiError> {

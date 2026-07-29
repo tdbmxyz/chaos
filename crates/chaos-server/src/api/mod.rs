@@ -109,9 +109,11 @@ mod tests {
         let _ = router(state);
     }
 
-    /// Every route must require a signed-in user except the two that cannot:
+    /// Every route must require a signed-in user except the three that cannot:
     /// `/health` (liveness + the auth advertisement the apps read before they
-    /// have a token) and `/auth/login` (how you get one).
+    /// have a token), `/auth/login` (how you get one), and `/icons/{spec}`
+    /// (referenced from `<img src>`, which cannot carry an Authorization
+    /// header — see the note on the handler).
     ///
     /// Hitting each route unauthenticated and asserting 401 is what makes this
     /// a real guard: a handler that forgets `AuthUser` fails here instead of
@@ -122,9 +124,10 @@ mod tests {
         use axum::http::{Method, Request, StatusCode};
         use tower::ServiceExt;
 
-        const ALLOWLISTED: [(&str, Method); 2] = [
+        const ALLOWLISTED: [(&str, Method); 3] = [
             ("/api/v1/health", Method::GET),
             ("/api/v1/auth/login", Method::POST),
+            ("/api/v1/icons/si:github", Method::GET),
         ];
 
         // (path, method) for every route in the router. Keep in sync with
