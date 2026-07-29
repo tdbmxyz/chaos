@@ -37,6 +37,29 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <!-- authentik sends the browser back here after sign-in. The
+                 filter below is generated from plugins.deep-link.mobile in
+                 tauri.conf.json - that config is not optional decoration: the
+                 plugin's isDeepLink() rejects every URL when `mobile` is
+                 empty, so a hand-written filter would route the intent to the
+                 activity and the callback would still be dropped. Scheme and
+                 host must match REDIRECT_URI in chaos-desktop/src/auth.rs and
+                 the provider's redirect URI in authentik. -->
+            <!-- DEEP LINK PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
+            <intent-filter >
+                <action android:name="android.intent.action.VIEW" />
+                <!-- ChromeOS ARC++ uses a different action for deep links -->
+                <action android:name="org.chromium.arc.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="xyz.tdbm.chaos" />
+                <data android:host="auth" />
+                
+                
+                
+                
+            </intent-filter>
+            <!-- DEEP LINK PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
 
         <provider

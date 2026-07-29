@@ -86,8 +86,9 @@ pub fn router(state: AppState) -> Router {
 
     app
         // The desktop app runs on a tauri:// origin, and LAN clients hit the
-        // server cross-origin. The API is read-mostly and LAN-only for now;
-        // revisit when auth lands (see ROADMAP).
+        // server cross-origin. Every route but /health and /auth/login now
+        // requires a signed-in user, so a permissive CORS policy only exposes
+        // what the caller could already reach with its own credentials.
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
@@ -106,5 +107,136 @@ mod tests {
         let db = Db::in_memory().await.unwrap();
         let state = AppState::new(Config::default(), db).unwrap();
         let _ = router(state);
+    }
+
+    /// Every route must require a signed-in user except the three that cannot:
+    /// `/health` (liveness + the auth advertisement the apps read before they
+    /// have a token), `/auth/login` (how you get one), and `/icons/{spec}`
+    /// (referenced from `<img src>`, which cannot carry an Authorization
+    /// header — see the note on the handler).
+    ///
+    /// Hitting each route unauthenticated and asserting 401 is what makes this
+    /// a real guard: a handler that forgets `AuthUser` fails here instead of
+    /// silently serving data on the public domain.
+    #[tokio::test]
+    async fn every_route_requires_auth_except_the_allowlist() {
+        use axum::body::Body;
+        use axum::http::{Method, Request, StatusCode};
+        use tower::ServiceExt;
+
+        const ALLOWLISTED: [(&str, Method); 3] = [
+            ("/api/v1/health", Method::GET),
+            ("/api/v1/auth/login", Method::POST),
+            ("/api/v1/icons/si:github", Method::GET),
+        ];
+
+        // (path, method) for every route in the router. Keep in sync with
+        // `router()` — a new route without an entry here is a review miss.
+        let routes: Vec<(&str, Method)> = vec![
+            ("/api/v1/health", Method::GET),
+            ("/api/v1/auth/login", Method::POST),
+            ("/api/v1/auth/logout", Method::POST),
+            ("/api/v1/auth/me", Method::GET),
+            ("/api/v1/calendars", Method::GET),
+            ("/api/v1/calendars", Method::POST),
+            (
+                "/api/v1/calendars/00000000-0000-0000-0000-000000000000",
+                Method::PUT,
+            ),
+            (
+                "/api/v1/calendars/00000000-0000-0000-0000-000000000000",
+                Method::DELETE,
+            ),
+            ("/api/v1/calendar/events", Method::GET),
+            ("/api/v1/calendar/refresh", Method::POST),
+            ("/api/v1/events", Method::POST),
+            (
+                "/api/v1/events/00000000-0000-0000-0000-000000000000",
+                Method::PUT,
+            ),
+            (
+                "/api/v1/events/00000000-0000-0000-0000-000000000000",
+                Method::DELETE,
+            ),
+            ("/api/v1/services", Method::GET),
+            ("/api/v1/services/x/systemd", Method::POST),
+            ("/api/v1/dashboard", Method::GET),
+            ("/api/v1/widgets/x", Method::GET),
+            ("/api/v1/widgets/x/systemd", Method::POST),
+            ("/api/v1/posts/hackernews", Method::GET),
+            ("/api/v1/posts/hackernews/views", Method::GET),
+            ("/api/v1/posts/views", Method::POST),
+            ("/api/v1/analytics/events", Method::POST),
+            ("/api/v1/posts/hackernews/1/comments", Method::GET),
+            ("/api/v1/home/sensors", Method::GET),
+            ("/api/v1/home/lights", Method::GET),
+            ("/api/v1/home/lights/x", Method::POST),
+            ("/api/v1/home/temperature", Method::GET),
+            ("/api/v1/icons/si:github", Method::GET),
+            ("/api/v1/links", Method::GET),
+            ("/api/v1/links", Method::POST),
+            (
+                "/api/v1/links/00000000-0000-0000-0000-000000000000",
+                Method::GET,
+            ),
+            (
+                "/api/v1/links/00000000-0000-0000-0000-000000000000",
+                Method::PUT,
+            ),
+            (
+                "/api/v1/links/00000000-0000-0000-0000-000000000000",
+                Method::DELETE,
+            ),
+            (
+                "/api/v1/links/00000000-0000-0000-0000-000000000000/archive",
+                Method::GET,
+            ),
+            (
+                "/api/v1/links/00000000-0000-0000-0000-000000000000/archive",
+                Method::POST,
+            ),
+            ("/api/v1/collections", Method::GET),
+            ("/api/v1/collections", Method::POST),
+            (
+                "/api/v1/collections/00000000-0000-0000-0000-000000000000",
+                Method::PUT,
+            ),
+            (
+                "/api/v1/collections/00000000-0000-0000-0000-000000000000",
+                Method::DELETE,
+            ),
+            ("/api/v1/tags", Method::GET),
+            ("/api/v1/search", Method::GET),
+        ];
+
+        for (path, method) in routes {
+            let db = Db::in_memory().await.unwrap();
+            let state = AppState::new(Config::default(), db).unwrap();
+            let request = Request::builder()
+                .method(method.clone())
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap();
+            let status = router(state)
+                .oneshot(request)
+                .await
+                .expect("infallible")
+                .status();
+
+            if ALLOWLISTED.contains(&(path, method.clone())) {
+                assert_ne!(
+                    status,
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {path} is allowlisted but rejected the request"
+                );
+            } else {
+                assert_eq!(
+                    status,
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {path} served an unauthenticated request"
+                );
+            }
+        }
     }
 }

@@ -1,4 +1,4 @@
-package dev.tibo.chaos
+package xyz.tdbm.chaos
 
 import android.content.Intent
 import android.net.Uri

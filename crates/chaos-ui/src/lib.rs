@@ -3,6 +3,7 @@
 //! (like where the API lives) is injected from the outside via [`AppConfig`].
 
 mod analytics;
+pub(crate) mod auth;
 mod components;
 mod date_util;
 mod echarts;
@@ -329,36 +330,6 @@ pub(crate) fn set_pref(key: &str, value: &str) {
     }
 }
 
-// ---- authentik app credentials (per-device, reverse-proxy Basic-auth) ----
-
-/// authentik username for the app's Basic-auth (when the server sits behind
-/// an authenticating proxy).
-pub(crate) const AUTHENTIK_USER_KEY: &str = "chaos-authentik-user";
-/// authentik app-password for the app's Basic-auth. Stored like the session
-/// token; never rendered back into the password input.
-pub(crate) const AUTHENTIK_TOKEN_KEY: &str = "chaos-authentik-token";
-
-/// Pure gate: both username and app-password must be non-empty for the
-/// credentials to be usable.
-fn authentik_creds_from(user: Option<String>, token: Option<String>) -> Option<(String, String)> {
-    let (u, t) = (user?, token?);
-    (!u.trim().is_empty() && !t.trim().is_empty()).then_some((u, t))
-}
-
-pub(crate) fn authentik_creds() -> Option<(String, String)> {
-    authentik_creds_from(pref(AUTHENTIK_USER_KEY), pref(AUTHENTIK_TOKEN_KEY))
-}
-
-pub(crate) fn set_authentik_creds(user: &str, token: &str) {
-    set_pref(AUTHENTIK_USER_KEY, user);
-    set_pref(AUTHENTIK_TOKEN_KEY, token);
-}
-
-pub(crate) fn clear_authentik_creds() {
-    set_pref(AUTHENTIK_USER_KEY, "");
-    set_pref(AUTHENTIK_TOKEN_KEY, "");
-}
-
 /// The per-device server override (settings page / connect screen). `None`
 /// means the platform default: the page origin on web, the bundled default
 /// in the shells — see chaos-web's `resolve()`.
@@ -384,6 +355,26 @@ pub(crate) fn set_api_base_override(value: Option<&str>) {
 /// except calendars works logged off.
 #[derive(Clone, Copy)]
 pub struct Session(pub RwSignal<Option<User>>);
+
+/// The News tab's loaded payload and scroll offset, held here rather than in
+/// the page so it survives navigation: the router drops and rebuilds
+/// `NewsPage` on every visit, which is what made going back re-fetch from cold
+/// and flash a loading state. Refreshing is then an explicit act — the
+/// pull-to-refresh gesture, or a page reload in a desktop browser.
+///
+/// In memory only: a cold start still fetches.
+#[derive(Clone, Copy, Default)]
+pub struct NewsCache {
+    /// `(source, posts, has_more)` exactly as `load_posts` returned it.
+    #[allow(clippy::type_complexity)]
+    pub loaded: RwSignal<Option<(chaos_domain::Source, chaos_domain::PostsData, bool)>>,
+    /// Vertical scroll offset to restore, in px.
+    pub scroll: RwSignal<f64>,
+}
+
+pub(crate) fn use_news_cache() -> NewsCache {
+    use_context::<NewsCache>().expect("NewsCache provided by App")
+}
 
 /// One HTTP client for the whole app, provided as context at `App`.
 /// `use_client()` clones it per call (reqwest clients are `Arc`s inside),
@@ -459,17 +450,18 @@ pub fn use_client() -> ChaosClient {
     // The token is read per call, not per app: it changes on login/logout
     // and callers must always see the current one (matches the previous
     // behavior, where the whole client was rebuilt per call).
-    let token = config.persist_token.then(stored_token).flatten();
+    // An OIDC access token (shells, signed in through authentik) wins over
+    // chaos's own session token; the server accepts either.
+    let token =
+        crate::auth::access_token().or_else(|| config.persist_token.then(stored_token).flatten());
     match use_context::<SharedClient>() {
-        Some(SharedClient(client)) => client.with_token(token).with_basic_auth(authentik_creds()),
+        Some(SharedClient(client)) => client.with_token(token),
         // Components rendered outside App (tests, shells) fall back to a
         // one-off client. Logged so a refactor that loses the context shows
         // up instead of silently rebuilding a client per call.
         None => {
             leptos::logging::debug_warn!("use_client: no SharedClient in context");
-            ChaosClient::new(config.api_base)
-                .with_token(token)
-                .with_basic_auth(authentik_creds())
+            ChaosClient::new(config.api_base).with_token(token)
         }
     }
 }
@@ -487,6 +479,7 @@ pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
         let client = client.clone();
         spawn_local(async move {
             let _ = client.logout().await;
+            crate::auth::sign_out().await;
             store_token(None);
             offline::cache_clear();
             session.0.set(None);
@@ -506,6 +499,12 @@ const NAV_PRIMARY: [(&str, &str, &str); 5] = [
 
 #[component]
 pub fn App(config: AppConfig) -> impl IntoView {
+    // Migration: the app-password path was replaced by OIDC sign-in. Drop the
+    // stored credentials rather than leaving a password in localStorage.
+    for stale in ["chaos-authentik-user", "chaos-authentik-token"] {
+        set_pref(stale, "");
+    }
+
     let api_base = config.api_base.clone();
     provide_context(config);
     provide_context(SharedClient(ChaosClient::new(api_base)));
@@ -516,6 +515,14 @@ pub fn App(config: AppConfig) -> impl IntoView {
     // reachable", so it triggers a probe rather than trusting it).
     let conn = RwSignal::new(offline::Connectivity::Checking);
     provide_context(conn);
+
+    // The server's advertised auth methods. Seeded from the last successful
+    // probe so an offline boot still remembers that this server wants OIDC.
+    let advertisement = RwSignal::new(
+        offline::cache_get::<Option<chaos_domain::api::AuthAdvertisement>>("server-auth").flatten(),
+    );
+    provide_context(advertisement);
+
     let client_for_online = use_client();
     let online_probe = window_event_listener(leptos::ev::online, move |_| {
         let client = client_for_online.clone();
@@ -527,6 +534,8 @@ pub fn App(config: AppConfig) -> impl IntoView {
 
     let session = Session(RwSignal::new(None));
     provide_context(session);
+    // Outlives route changes on purpose — see NewsCache.
+    provide_context(NewsCache::default());
 
     // Analytics overlay + flush context (needs AppConfig, SharedClient and the
     // connectivity signal, all provided above).
@@ -574,12 +583,29 @@ pub fn App(config: AppConfig) -> impl IntoView {
                         session.0.set(Some(user));
                     }
                 }
-                // The server answered "no session" (expired/revoked): the
-                // cached user is stale — drop it and stay signed out.
-                Err(chaos_client::ClientError::Api { .. }) => {
+                // The server answered "no session" (expired/revoked): try one
+                // token refresh before concluding the user is signed out — an
+                // access token that expired while the app slept is normal.
+                Err(chaos_client::ClientError::Api { status: 401, .. }) => {
+                    // Rebuilt rather than `use_client()`: this runs detached
+                    // from the reactive owner, and the point is to carry the
+                    // token the refresh just mirrored.
+                    if crate::auth::sync_access_token().await
+                        && let Ok(user) = client
+                            .clone()
+                            .with_token(crate::auth::access_token())
+                            .me()
+                            .await
+                    {
+                        offline::cache_put("me", &user);
+                        session.0.set(Some(user));
+                        return;
+                    }
                     offline::cache_remove("me");
                     session.0.set(None);
                 }
+                // Any other API error says nothing about the session.
+                Err(chaos_client::ClientError::Api { .. }) => {}
                 // Decode noise says nothing about the session; change nothing.
                 Err(_) => {}
             }
@@ -757,11 +783,49 @@ fn ShareRedirect() -> impl IntoView {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum GateState {
-    Checking,
-    Ready,
-    Unreachable,
+/// One step of the post-sign-in poll: the shell completes the code exchange
+/// when authentik redirects back, so the UI waits for a token to appear.
+/// Written as a `set_timeout` chain rather than an async sleep because the
+/// crate has no timer future (see `offline.rs`, `analytics.rs`).
+/// Re-run `me()` and update the session. Split out because acquiring a token is
+/// a second, independent reason to revalidate: the connectivity effect only
+/// fires on an Offline→Online *transition*, and by the time sign-in completes
+/// the app has long been online, so nothing would otherwise refresh the
+/// identity and the user stays "stranger" until the next cold start.
+async fn revalidate_session(session: Session) {
+    let client = use_client().with_token(auth::access_token());
+    if let Ok(user) = client.me().await {
+        offline::cache_put("me", &user);
+        session.0.set(Some(user));
+    }
+}
+
+fn poll_for_token(
+    left: u32,
+    waiting: RwSignal<bool>,
+    gate: RwSignal<auth::GateState>,
+    session: Session,
+) {
+    if left == 0 {
+        waiting.set(false);
+        return;
+    }
+    set_timeout(
+        move || {
+            spawn_local(async move {
+                if auth::sync_access_token().await {
+                    waiting.set(false);
+                    gate.set(auth::GateState::Ready);
+                    // The token only just arrived, so the identity fetched at
+                    // boot was anonymous. Redo it now that we can authorize.
+                    revalidate_session(session).await;
+                } else {
+                    poll_for_token(left - 1, waiting, gate, session);
+                }
+            });
+        },
+        std::time::Duration::from_millis(1_500),
+    );
 }
 
 /// Blocks the app behind a health check so a shell pointing at the wrong
@@ -770,17 +834,26 @@ enum GateState {
 /// that the web entrypoint's API-base resolution already honors.
 #[component]
 fn ServerGate(children: ChildrenFn) -> impl IntoView {
-    let gate = RwSignal::new(GateState::Checking);
+    let gate = RwSignal::new(auth::GateState::Checking);
     let client = use_client();
     let conn = offline::use_connectivity();
     let seen = offline::server_seen(use_client().base().as_str());
+    let advertisement = auth::advertisement();
+    // "Waiting for the browser to come back" — drives the polling UI.
+    let waiting = RwSignal::new(false);
+    let session = use_session();
+
     spawn_local(async move {
-        // `probe` handles set_server_fahrenheit and mark_server_seen. A
-        // server we've reached before is just offline right now: boot into
-        // the cached UI with the badge instead of the connect form.
-        if offline::probe(&client, conn).await {
-            gate.set(GateState::Ready);
-        } else if seen {
+        // A shell may already hold a token from a previous run; mirror it
+        // before the first gate decision so a signed-in app never flashes the
+        // sign-in screen. Outside a shell (plain browser) there is nothing to
+        // sign into from here — the page rides the browser's own authentik
+        // session — so the gate must not demand a token it can't obtain.
+        let has_token = !auth::shell_available() || auth::sync_access_token().await;
+        // `probe` handles set_server_fahrenheit, mark_server_seen and the
+        // auth advertisement.
+        let health = offline::probe(&client, conn).await;
+        if health.is_none() && seen {
             // Known server, just offline right now: the probe couldn't
             // deliver the server's °F/°C default, so restore the one it
             // reported last time. `cache_get` wraps the stored value in its
@@ -790,11 +863,35 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
             set_server_fahrenheit(
                 offline::cache_get::<Option<bool>>("server-fahrenheit").flatten(),
             );
-            gate.set(GateState::Ready);
-        } else {
-            gate.set(GateState::Unreachable);
+        }
+        gate.set(auth::gate_state(health.as_ref(), has_token, seen));
+        // Booting with a token already stored races the connectivity effect's
+        // `me()`: whichever runs first, that one may go out unauthenticated.
+        // Redo it here, where the token is known to be mirrored.
+        if auth::shell_available() && has_token {
+            revalidate_session(session).await;
         }
     });
+
+    let sign_in = move |_| {
+        let Some(oidc) = advertisement.get_untracked().and_then(|a| a.oidc) else {
+            return;
+        };
+        waiting.set(true);
+        spawn_local(async move {
+            if auth::start_sign_in(&oidc.issuer, &oidc.client_id)
+                .await
+                .is_err()
+            {
+                waiting.set(false);
+                return;
+            }
+            // The shell completes the exchange when authentik redirects back;
+            // poll until a token appears. Two minutes is long enough for a
+            // password + 2FA and short enough not to poll forever.
+            poll_for_token(80, waiting, gate, session);
+        });
+    };
 
     let current = use_client().base().to_string();
     let input = RwSignal::new(current);
@@ -808,9 +905,33 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
 
     view! {
         {move || match gate.get() {
-            GateState::Checking => view! { <p class="muted gate-msg">"Connecting…"</p> }.into_any(),
-            GateState::Ready => children().into_any(),
-            GateState::Unreachable => {
+            auth::GateState::Checking => {
+                view! { <p class="muted gate-msg">"Connecting…"</p> }.into_any()
+            }
+            auth::GateState::Ready => children().into_any(),
+            auth::GateState::NeedsSignIn => {
+                view! {
+                    <section class="server-gate">
+                        <h2>"Sign in"</h2>
+                        <p class="muted">
+                            "This server is protected by authentik. Signing in opens it in your browser."
+                        </p>
+                        <div class="gate-form">
+                            <button class="primary" on:click=sign_in disabled=move || waiting.get()>
+                                {move || {
+                                    if waiting.get() {
+                                        "Waiting for authentik…"
+                                    } else {
+                                        "Sign in with authentik"
+                                    }
+                                }}
+                            </button>
+                        </div>
+                    </section>
+                }
+                    .into_any()
+            }
+            auth::GateState::Unreachable => {
                 view! {
                     <section class="server-gate">
                         <h2>"Cannot reach the chaos server"</h2>
@@ -827,7 +948,7 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
                             <button class="primary" on:click=connect>
                                 "Connect"
                             </button>
-                            <button on:click=move |_| gate.set(GateState::Ready)>
+                            <button on:click=move |_| gate.set(auth::GateState::Ready)>
                                 "Continue anyway"
                             </button>
                         </div>
@@ -856,25 +977,6 @@ mod tests {
             hourly: Vec::new(),
             now_index: 0,
         }
-    }
-
-    #[test]
-    fn authentik_creds_needs_both() {
-        assert_eq!(authentik_creds_from(None, None), None);
-        assert_eq!(authentik_creds_from(Some("u".into()), None), None);
-        assert_eq!(authentik_creds_from(None, Some("t".into())), None);
-        assert_eq!(
-            authentik_creds_from(Some("u".into()), Some("".into())),
-            None
-        );
-        assert_eq!(
-            authentik_creds_from(Some("  ".into()), Some("t".into())),
-            None
-        );
-        assert_eq!(
-            authentik_creds_from(Some("u".into()), Some("t".into())),
-            Some(("u".into(), "t".into()))
-        );
     }
 
     #[test]

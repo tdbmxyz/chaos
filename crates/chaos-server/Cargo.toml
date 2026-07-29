@@ -35,3 +35,9 @@ rpassword = "7"
 ical = "0.11"
 chrono-tz = "0.10"
 rrule = "0.14"
+jsonwebtoken = "9"
+
+[dev-dependencies]
+rsa = { version = "0.9", features = ["pem"] }
+rand = "0.8"
+base64 = "0.22"

@@ -2,8 +2,9 @@
 //!
 //! Aggregates config-defined services and bookmarks, stored links (the
 //! existing LIKE + FTS5 query path), and — when the request carries a
-//! session — the user's calendar events. Public like the links API; only
-//! the events group is user-scoped (logged off → empty, never an error).
+//! session — the user's calendar events. Requires a signed-in user like the
+//! rest of the API; `optional_user_id` stays for *attribution*, and only the
+//! events group is user-scoped (unattributed → empty, never an error).
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -16,6 +17,7 @@ use chrono::{Duration, Utc};
 use uuid::Uuid;
 
 use crate::api::ApiError;
+use crate::auth::AuthUser;
 use crate::state::AppState;
 
 /// Cap per result group, so one noisy section cannot drown the palette.
@@ -24,6 +26,7 @@ const GROUP_LIMIT: usize = 10;
 const EVENT_WINDOW_DAYS: i64 = 60;
 
 pub async fn search(
+    AuthUser(_user): AuthUser,
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<SearchQuery>,

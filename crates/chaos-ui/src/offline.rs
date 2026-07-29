@@ -144,9 +144,14 @@ pub(crate) fn mark_server_seen(base: &str) {
 }
 
 /// One bounded health probe; the only code path that can set `Online`.
-/// Returns whether the server answered healthy (an Api-error health
-/// response also counts as offline).
-pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) -> bool {
+/// Returns the server's response when it answered healthy (an Api-error
+/// health response also counts as offline), so callers that need more than
+/// "is it up" — the gate reads the auth advertisement — get the real thing
+/// rather than reconstructing one.
+pub(crate) async fn probe(
+    client: &ChaosClient,
+    conn: RwSignal<Connectivity>,
+) -> Option<chaos_domain::api::HealthResponse> {
     let was_online = conn.get_untracked() == Connectivity::Online;
     match client.health().await {
         Ok(health) => {
@@ -155,6 +160,10 @@ pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) ->
             // (where no health response exists) can restore it — see the
             // seen-server branch in ServerGate.
             cache_put("server-fahrenheit", &health.fahrenheit);
+            // The gate needs the auth advertisement, and an offline boot needs
+            // the last-known one so it doesn't forget the server wants OIDC.
+            cache_put("server-auth", &health.auth);
+            crate::auth::set_advertisement(health.auth.clone());
             mark_server_seen(client.base().as_str());
             conn.set(Connectivity::Online);
             // Reaching Online from a non-Online state (boot or reconnect) is
@@ -162,11 +171,11 @@ pub(crate) async fn probe(client: &ChaosClient, conn: RwSignal<Connectivity>) ->
             if !was_online {
                 crate::analytics::flush_now();
             }
-            true
+            Some(health)
         }
         Err(_) => {
             conn.set(Connectivity::Offline);
-            false
+            None
         }
     }
 }
@@ -187,7 +196,7 @@ pub(crate) fn OfflineBadge() -> impl IntoView {
         busy.set(true);
         let client = crate::use_client();
         leptos::task::spawn_local(async move {
-            if !probe(&client, conn).await {
+            if probe(&client, conn).await.is_none() {
                 failed_flash.set(true);
                 set_timeout(
                     move || failed_flash.set(false),

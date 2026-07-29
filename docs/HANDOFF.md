@@ -90,11 +90,11 @@ desktop use. All decisions in `docs/adr/`, phases in `docs/ROADMAP.md`.
     digest-based secret compare (no timing oracle), the name header now
     syncs `display_name` on rename, resolutions log throttled `sso` login
     analytics events, and deployment.md keeps the secret out of the nix store.
-  - **App authentication:** the Tauri/Android app can send
-    `Authorization: Basic base64(user:app-password)` (Settings → Authentik,
-    stored per-device in localStorage) so authentik's outpost lets it through;
-    chaos then reads the forwarded identity. `ChaosClient.basic_auth` beats the
-    Bearer token in `check_status`. Blank creds → normal chaos login.
+  - **App authentication:** the Tauri/Android app signs in to authentik with
+    OIDC (PKCE in the shell) and sends the access token as `Authorization:
+    Bearer`, which authentik's outpost lets through; chaos then reads the
+    forwarded identity. The old per-device app-password (Settings → Authentik,
+    HTTP Basic) was removed — the app has one credential system, not two.
   - **Greeting:** the topbar / More page shows "Hello {display_name}" when
     `me()` resolves (chaos login OR forward-auth) and "Hello stranger"
     otherwise — a quick "am I really logged in through SSO?" check.
