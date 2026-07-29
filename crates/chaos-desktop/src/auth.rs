@@ -125,12 +125,21 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Every network call here is on a path the user is actively waiting on, and a
+/// stalled connection on mobile data must not hang sign-in forever.
+fn http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .unwrap_or_default()
+}
+
 async fn discover(issuer: &str) -> Result<Discovery, String> {
     let url = format!(
         "{}/.well-known/openid-configuration",
         issuer.trim_end_matches('/')
     );
-    reqwest::Client::new()
+    http()
         .get(&url)
         .send()
         .await
@@ -190,7 +199,7 @@ pub async fn finish<R: Runtime>(app: &AppHandle<R>, code: &str, state: &str) -> 
         return Err("sign-in state did not match; ignoring this callback".into());
     }
     let discovery = discover(&pending.issuer).await?;
-    let response = reqwest::Client::new()
+    let response = http()
         .post(&discovery.token_endpoint)
         .form(&[
             ("grant_type", "authorization_code"),
@@ -249,7 +258,7 @@ pub async fn auth_token<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>,
         return Ok(None);
     };
     let discovery = discover(&issuer).await?;
-    let response = reqwest::Client::new()
+    let response = http()
         .post(&discovery.token_endpoint)
         .form(&[
             ("grant_type", "refresh_token"),

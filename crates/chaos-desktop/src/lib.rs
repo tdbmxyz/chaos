@@ -76,11 +76,16 @@ fn open_with_system(_url: &str) -> std::io::Result<()> {
 /// link on Android, argv on the desktop). Errors are logged rather than
 /// surfaced: the UI is polling `auth_token` and shows its own timeout.
 fn handle_callback<R: tauri::Runtime>(app: &tauri::AppHandle<R>, url: &str) {
-    let Some((code, state)) = auth::parse_callback(url) else {
-        return;
-    };
+    // Do NOTHING blocking here. On Android this runs on the main thread, and
+    // the store is backed by a file behind a lock the webview's own commands
+    // also take — touching it here wedged the UI thread hard enough that the
+    // system killed the app. Hand straight off to the async runtime.
     let app = app.clone();
+    let url = url.to_string();
     tauri::async_runtime::spawn(async move {
+        let Some((code, state)) = auth::parse_callback(&url) else {
+            return;
+        };
         if let Err(err) = auth::finish(&app, &code, &state).await {
             eprintln!("chaos: sign-in callback failed: {err}");
         }
