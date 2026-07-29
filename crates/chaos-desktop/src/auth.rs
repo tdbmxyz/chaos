@@ -52,7 +52,11 @@ pub fn authorize_url(authorization_endpoint: &str, pending: &Pending) -> String 
         .append_pair("response_type", "code")
         .append_pair("client_id", &pending.client_id)
         .append_pair("redirect_uri", REDIRECT_URI)
-        .append_pair("scope", "openid profile email")
+        // offline_access is what makes authentik issue a refresh token at all;
+        // without it the session dies with the access token an hour later and
+        // the provider's refresh-token validity is meaningless. The matching
+        // scope mapping has to be assigned to the provider too.
+        .append_pair("scope", "openid profile email offline_access")
         .append_pair("state", &pending.state)
         .append_pair("code_challenge", &challenge)
         .append_pair("code_challenge_method", "S256")
