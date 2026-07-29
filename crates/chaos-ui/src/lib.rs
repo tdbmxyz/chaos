@@ -765,7 +765,25 @@ fn ShareRedirect() -> impl IntoView {
 /// when authentik redirects back, so the UI waits for a token to appear.
 /// Written as a `set_timeout` chain rather than an async sleep because the
 /// crate has no timer future (see `offline.rs`, `analytics.rs`).
-fn poll_for_token(left: u32, waiting: RwSignal<bool>, gate: RwSignal<auth::GateState>) {
+/// Re-run `me()` and update the session. Split out because acquiring a token is
+/// a second, independent reason to revalidate: the connectivity effect only
+/// fires on an Offline→Online *transition*, and by the time sign-in completes
+/// the app has long been online, so nothing would otherwise refresh the
+/// identity and the user stays "stranger" until the next cold start.
+async fn revalidate_session(session: Session) {
+    let client = use_client().with_token(auth::access_token());
+    if let Ok(user) = client.me().await {
+        offline::cache_put("me", &user);
+        session.0.set(Some(user));
+    }
+}
+
+fn poll_for_token(
+    left: u32,
+    waiting: RwSignal<bool>,
+    gate: RwSignal<auth::GateState>,
+    session: Session,
+) {
     if left == 0 {
         waiting.set(false);
         return;
@@ -776,8 +794,11 @@ fn poll_for_token(left: u32, waiting: RwSignal<bool>, gate: RwSignal<auth::GateS
                 if auth::sync_access_token().await {
                     waiting.set(false);
                     gate.set(auth::GateState::Ready);
+                    // The token only just arrived, so the identity fetched at
+                    // boot was anonymous. Redo it now that we can authorize.
+                    revalidate_session(session).await;
                 } else {
-                    poll_for_token(left - 1, waiting, gate);
+                    poll_for_token(left - 1, waiting, gate, session);
                 }
             });
         },
@@ -798,6 +819,7 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
     let advertisement = auth::advertisement();
     // "Waiting for the browser to come back" — drives the polling UI.
     let waiting = RwSignal::new(false);
+    let session = use_session();
 
     spawn_local(async move {
         // A shell may already hold a token from a previous run; mirror it
@@ -821,6 +843,12 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
             );
         }
         gate.set(auth::gate_state(health.as_ref(), has_token, seen));
+        // Booting with a token already stored races the connectivity effect's
+        // `me()`: whichever runs first, that one may go out unauthenticated.
+        // Redo it here, where the token is known to be mirrored.
+        if auth::shell_available() && has_token {
+            revalidate_session(session).await;
+        }
     });
 
     let sign_in = move |_| {
@@ -839,7 +867,7 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
             // The shell completes the exchange when authentik redirects back;
             // poll until a token appears. Two minutes is long enough for a
             // password + 2FA and short enough not to poll forever.
-            poll_for_token(80, waiting, gate);
+            poll_for_token(80, waiting, gate, session);
         });
     };
 
