@@ -218,20 +218,29 @@ pub fn NewsPage() -> impl IntoView {
     // Viewed-state tracking is authed-only. When signed in: expose `ViewedState`
     // (so `post_row_view` renders + records), load the server viewed-map into
     // the overlay per source, and observe rows for the `Seen` signal.
-    let authed = crate::use_session().0.get_untracked().is_some();
-    if authed {
-        provide_context(ViewedState {
-            source: source.get_untracked(),
-        });
+    // `ViewedState` marks the page, not the user: it says "rows here are
+    // trackable", and `post_row_view` reads the session itself to decide
+    // whether tracking is actually on. The session resolves asynchronously
+    // after boot, so deciding it here — once, untracked — meant a cold start
+    // rendered the whole page untracked and never fetched the server's
+    // viewed-map, which is why visited rows looked like they reset.
+    let session = crate::use_session();
+    provide_context(ViewedState {
+        source: source.get_untracked(),
+    });
 
+    {
         // Load the server viewed-map into the overlay whenever the source
-        // changes (and on reconnect). Best-effort: offline/auth errors are
-        // ignored — the overlay keeps whatever it has.
+        // changes, on reconnect, and once the user resolves. Best-effort:
+        // offline/auth errors are ignored — the overlay keeps whatever it has.
         Effect::new({
             let client = client.clone();
             move |_| {
                 let src = source.get();
                 conn.track();
+                if session.0.get().is_none() {
+                    return;
+                }
                 let client = client.clone();
                 spawn_local(async move {
                     if let Ok(map) = client.viewed_map(src).await {
@@ -252,6 +261,11 @@ pub fn NewsPage() -> impl IntoView {
             source.get();
             range.get();
             cache.loaded.track();
+            // Rows only carry the observer's handle once tracking is on, so
+            // re-bind when the user resolves too.
+            if session.0.get().is_none() {
+                return;
+            }
             // Defer to the next tick: this effect fires when the data resolves,
             // but Leptos hasn't committed the new row `<li>`s to the DOM yet, so
             // querying for them here would observe nothing. A 0ms timeout runs

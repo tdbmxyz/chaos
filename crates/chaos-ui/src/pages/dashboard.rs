@@ -1061,10 +1061,14 @@ pub(crate) fn post_row_view(
         .map(|h| h.strip_prefix("www.").unwrap_or(h).to_string());
     let title = item.title.clone();
 
-    // Viewed-state tracking is on only when a `ViewedState` is in context
-    // (authed `/news` + reader). Absent → plain rows, byte-identical to before,
-    // so the desktop dashboard widget and logged-off web are unaffected.
-    let tracked = use_context::<crate::analytics::ViewedState>().is_some();
+    // Viewed-state tracking needs both: a page that tracks (`ViewedState` in
+    // context — the dashboard widget deliberately has none, so its rows stay
+    // plain) and a signed-in user. The session is read reactively and second,
+    // so the widget never subscribes to it: the list closure that calls this
+    // re-runs when the user resolves, which is what stops a cold start from
+    // rendering every row untracked.
+    let tracked = use_context::<crate::analytics::ViewedState>().is_some()
+        && crate::use_session().0.get().is_some();
     let vid = item.id.clone();
 
     let title_link = match reader_href {
@@ -1147,8 +1151,8 @@ pub(crate) fn post_row_view(
             None => ViewFlags::default(),
         }
     };
-    let flags_read = flags.clone();
     let flags_check = flags.clone();
+    let flags_comments = flags.clone();
     // `data-view-id` is the IntersectionObserver's handle; only rows with an id
     // are observable.
     let view_id = vid.as_ref().map(|id| format!("{}:{}", source.as_str(), id));
@@ -1156,17 +1160,26 @@ pub(crate) fn post_row_view(
     let article_id = vid.clone();
 
     view! {
+        // Only `seen` (scrolled past) dims the row. Having read the comments
+        // is marked by a ✓ beside the count instead — dimming the row for it
+        // buried the thing you were most likely looking for.
         <li
             class="post-row"
             class:seen=move || crate::analytics::row_state_class(flags()) == "seen"
-            class:read=move || crate::analytics::row_state_class(flags_read()) == "read"
             data-view-id=view_id
         >
             <div class="post-main">
                 {title_link}
                 <span class="muted feed-meta">
                     <span class="feed-score" style:color=score_style>{score}</span>
-                    <span class="feed-comments">{comments}</span>
+                    <span class="feed-comments">
+                        {comments}
+                        {move || {
+                            flags_comments()
+                                .comments
+                                .then(|| view! { <span class="comments-check">"✓"</span> })
+                        }}
+                    </span>
                     <span class="feed-age">{age}</span>
                 </span>
             </div>
