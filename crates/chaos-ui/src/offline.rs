@@ -163,7 +163,10 @@ pub(crate) async fn probe(
             // The gate needs the auth advertisement, and an offline boot needs
             // the last-known one so it doesn't forget the server wants OIDC.
             cache_put("server-auth", &health.auth);
-            crate::auth::set_advertisement(health.auth.clone());
+            // The advertisement signal is published by `ServerGate` from the
+            // response this returns, not from here: `probe` runs inside an
+            // already-awaited task, where `use_context` finds no owner and a
+            // set through it would silently do nothing.
             mark_server_seen(client.base().as_str());
             conn.set(Connectivity::Online);
             // Reaching Online from a non-Online state (boot or reconnect) is
