@@ -106,6 +106,9 @@ const KEY_EXPIRES: &str = "expires_at";
 const KEY_PENDING: &str = "pending";
 const KEY_ISSUER: &str = "issuer";
 const KEY_CLIENT: &str = "client_id";
+/// The last thing the sign-in flow did, so the UI can say what happened
+/// instead of spinning. A phone has no console to read.
+const KEY_STATUS: &str = "last_status";
 
 #[derive(Debug, Deserialize)]
 struct Discovery {
@@ -186,12 +189,61 @@ pub async fn auth_start<R: Runtime>(
     );
     store.set(KEY_ISSUER, issuer);
     store.set(KEY_CLIENT, client_id);
+    store.set(
+        KEY_STATUS,
+        "waiting for the browser to come back".to_string(),
+    );
     store.save().map_err(|e| e.to_string())?;
     Ok(authorize_url(&discovery.authorization_endpoint, &pending))
 }
 
-/// Finish a sign-in from the deep-link callback.
+/// Token plus the last thing the flow did, in one call — the gate needs both
+/// on every poll and two round trips through the invoke bridge would race.
+#[derive(Debug, Serialize)]
+pub struct AuthStatus {
+    pub token: Option<String>,
+    pub status: Option<String>,
+}
+
+#[tauri::command]
+pub async fn auth_status<R: Runtime>(app: AppHandle<R>) -> Result<AuthStatus, String> {
+    let token = auth_token(app.clone()).await?;
+    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
+    Ok(AuthStatus {
+        token,
+        status: store
+            .get(KEY_STATUS)
+            .and_then(|v| v.as_str().map(String::from)),
+    })
+}
+
+/// Record what the sign-in flow just did. The phone has no console, so this
+/// is how a stuck sign-in explains itself: the gate reads it back through
+/// `auth_status` and shows it under the button.
+pub fn record_status<R: Runtime>(app: &AppHandle<R>, status: &str) {
+    if let Ok(store) = app.store(STORE_FILE) {
+        store.set(KEY_STATUS, status.to_string());
+        let _ = store.save();
+    }
+}
+
+/// Finish a sign-in from the deep-link callback, recording the outcome either
+/// way so a failure is visible in the app rather than only on stderr.
 pub async fn finish<R: Runtime>(app: &AppHandle<R>, code: &str, state: &str) -> Result<(), String> {
+    record_status(app, "callback received, exchanging it for a token…");
+    match exchange(app, code, state).await {
+        Ok(()) => {
+            record_status(app, "signed in");
+            Ok(())
+        }
+        Err(err) => {
+            record_status(app, &format!("sign-in failed: {err}"));
+            Err(err)
+        }
+    }
+}
+
+async fn exchange<R: Runtime>(app: &AppHandle<R>, code: &str, state: &str) -> Result<(), String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
     let pending: Pending = store
         .get(KEY_PENDING)

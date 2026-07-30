@@ -91,15 +91,27 @@ fn set_access_token(token: Option<&str>) {
 /// Ask the shell for a current access token (refreshing if needed) and mirror
 /// it. Returns whether a token is held afterwards.
 pub(crate) async fn sync_access_token() -> bool {
-    match invoke("auth_token", JsValue::UNDEFINED).await {
+    sync_status().await.0
+}
+
+/// Like [`sync_access_token`], but also returns what the shell says the
+/// sign-in flow last did. A phone has no console, so a sign-in that fails
+/// silently is indistinguishable from one that hangs — the gate shows this.
+pub(crate) async fn sync_status() -> (bool, Option<String>) {
+    match invoke("auth_status", JsValue::UNDEFINED).await {
         Ok(value) => {
-            let token = value.as_string();
+            let token = js_sys::Reflect::get(&value, &"token".into())
+                .ok()
+                .and_then(|v| v.as_string());
+            let status = js_sys::Reflect::get(&value, &"status".into())
+                .ok()
+                .and_then(|v| v.as_string());
             set_access_token(token.as_deref());
-            token.is_some()
+            (token.is_some(), status)
         }
         // No shell (browser), or the command failed: leave any mirrored token
         // alone rather than signing the user out over a transient error.
-        Err(_) => access_token().is_some(),
+        Err(_) => (access_token().is_some(), None),
     }
 }
 

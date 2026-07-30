@@ -445,6 +445,15 @@ pub(crate) fn on_android() -> bool {
         .is_some_and(|p| p == "android")
 }
 
+/// The token a request should carry right now: the OIDC access token when a
+/// shell holds one, otherwise chaos's own session token. Rebuilding a client
+/// with this is how a detached task picks up a token that arrived after the
+/// client was cloned — the boot identity call did not, which is why a
+/// freshly signed-in app used to greet its owner as a stranger.
+pub(crate) fn current_token() -> Option<String> {
+    crate::auth::access_token().or_else(|| persist_token().then(stored_token).flatten())
+}
+
 pub fn use_client() -> ChaosClient {
     let config = use_context::<AppConfig>().expect("AppConfig provided by the shell");
     // The token is read per call, not per app: it changes on login/logout
@@ -566,6 +575,14 @@ pub fn App(config: AppConfig) -> impl IntoView {
         }
         let client = client.clone();
         spawn_local(async move {
+            // Ask the shell for a token before identifying: this client was
+            // cloned at startup, when a shell that had just signed in hadn't
+            // mirrored its token yet. Behind an authenticating proxy an
+            // anonymous `me()` isn't a 401 we could recover from — it's the
+            // proxy's redirect to a login page on another origin, which the
+            // webview can only report as a transport failure.
+            auth::sync_access_token().await;
+            let client = client.with_token(current_token());
             match client.me().await {
                 Ok(user) => {
                     // Cache the signed-in user so the next offline boot can
@@ -793,7 +810,7 @@ fn ShareRedirect() -> impl IntoView {
 /// the app has long been online, so nothing would otherwise refresh the
 /// identity and the user stays "stranger" until the next cold start.
 async fn revalidate_session(session: Session) {
-    let client = use_client().with_token(auth::access_token());
+    let client = use_client().with_token(current_token());
     if let Ok(user) = client.me().await {
         offline::cache_put("me", &user);
         session.0.set(Some(user));
@@ -805,6 +822,7 @@ fn poll_for_token(
     waiting: RwSignal<bool>,
     gate: RwSignal<auth::GateState>,
     session: Session,
+    status: RwSignal<Option<String>>,
 ) {
     if left == 0 {
         waiting.set(false);
@@ -813,14 +831,16 @@ fn poll_for_token(
     set_timeout(
         move || {
             spawn_local(async move {
-                if auth::sync_access_token().await {
+                let (has_token, latest) = auth::sync_status().await;
+                status.set(latest);
+                if has_token {
                     waiting.set(false);
                     gate.set(auth::GateState::Ready);
                     // The token only just arrived, so the identity fetched at
                     // boot was anonymous. Redo it now that we can authorize.
                     revalidate_session(session).await;
                 } else {
-                    poll_for_token(left - 1, waiting, gate, session);
+                    poll_for_token(left - 1, waiting, gate, session, status);
                 }
             });
         },
@@ -841,7 +861,33 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
     let advertisement = auth::advertisement();
     // "Waiting for the browser to come back" — drives the polling UI.
     let waiting = RwSignal::new(false);
+    // What the shell says the sign-in flow last did, shown under the button.
+    let sign_in_status = RwSignal::new(None::<String>);
     let session = use_session();
+
+    // Returning from the browser is the moment the token exists, and it is a
+    // more reliable signal than a timer: Android suspends webview timers for a
+    // backgrounded app, and may kill the process outright while the browser is
+    // in front — in which case the poll loop that started the sign-in is gone
+    // and only this path (on the fresh webview) can notice.
+    let resumed = window_event_listener(leptos::ev::visibilitychange, move |_| {
+        let visible = web_sys::window()
+            .and_then(|w| w.document())
+            .is_some_and(|d| !d.hidden());
+        if !visible || !auth::shell_available() {
+            return;
+        }
+        spawn_local(async move {
+            let (has_token, status) = auth::sync_status().await;
+            sign_in_status.set(status);
+            if has_token && gate.get_untracked() != auth::GateState::Ready {
+                waiting.set(false);
+                gate.set(auth::GateState::Ready);
+                revalidate_session(session).await;
+            }
+        });
+    });
+    on_cleanup(move || resumed.remove());
 
     spawn_local(async move {
         // A shell may already hold a token from a previous run; mirror it
@@ -889,7 +935,7 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
             // The shell completes the exchange when authentik redirects back;
             // poll until a token appears. Two minutes is long enough for a
             // password + 2FA and short enough not to poll forever.
-            poll_for_token(80, waiting, gate, session);
+            poll_for_token(80, waiting, gate, session, sign_in_status);
         });
     };
 
@@ -927,6 +973,14 @@ fn ServerGate(children: ChildrenFn) -> impl IntoView {
                                 }}
                             </button>
                         </div>
+                        // The shell's own account of the flow: without it a
+                        // failed exchange is indistinguishable from a slow
+                        // one, and a phone has no console to check.
+                        {move || {
+                            sign_in_status
+                                .get()
+                                .map(|status| view! { <p class="muted gate-msg">{status}</p> })
+                        }}
                     </section>
                 }
                     .into_any()

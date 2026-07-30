@@ -126,6 +126,7 @@ pub fn run() {
             open_external,
             auth::auth_start,
             auth::auth_token,
+            auth::auth_status,
             auth::auth_sign_out
         ])
         .setup(|app| {
@@ -157,6 +158,23 @@ pub fn run() {
                         handle_callback(&handle, url.as_str());
                     }
                 });
+
+                // A callback that arrived while the app was starting — or that
+                // relaunched it, which is what Android does when it evicted the
+                // app while the browser was in front — never reaches
+                // `on_open_url`. Without this the token only materialises after
+                // the user kills and reopens the app.
+                match app.deep_link().get_current() {
+                    Ok(Some(urls)) => {
+                        for url in urls {
+                            handle_callback(app.handle(), url.as_str());
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        auth::record_status(app.handle(), &format!("deep link unavailable: {err}"));
+                    }
+                }
             }
             Ok(())
         })
