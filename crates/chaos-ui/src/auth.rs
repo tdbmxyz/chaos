@@ -142,15 +142,14 @@ pub(crate) async fn sign_out() {
 
 /// The server's advertised auth methods, from the last successful probe.
 /// A signal so the gate re-renders when a probe answers.
+///
+/// Read it while a reactive owner exists — during component setup — and pass
+/// the signal itself into any task that needs it. Signals are `Copy` and
+/// owner-independent; a `use_context` from inside a spawned task is not, and
+/// returns `None` there.
 pub(crate) fn advertisement() -> RwSignal<Option<AuthAdvertisement>> {
     use_context::<RwSignal<Option<AuthAdvertisement>>>()
         .expect("auth advertisement provided by App")
-}
-
-pub(crate) fn set_advertisement(value: Option<AuthAdvertisement>) {
-    if let Some(signal) = use_context::<RwSignal<Option<AuthAdvertisement>>>() {
-        signal.set(value);
-    }
 }
 
 #[cfg(test)]
