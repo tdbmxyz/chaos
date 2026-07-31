@@ -831,21 +831,25 @@ button.primary {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Viewed-state (authed /news + reader): dimming is the reading axis, the check
-   is the article axis. Opening the article suppresses the seen-dim (its check is
-   the signal), so only `seen`/`read` dim the title. */
+/* Viewed-state (authed /news + reader). Dimming means "scrolled past and did
+   nothing with it"; anything you actually opened is marked by a ✓ instead —
+   beside the comment count for the discussion, beside the favicon for the
+   article. Opening either suppresses the dim, so a row you engaged with never
+   fades into the background. */
 li.post-row.seen .post-title {
   opacity: 0.72;
 }
-li.post-row.read .post-title {
-  opacity: 0.52;
-}
-/* Accent ✓ between the domain and the favicon when the article was opened. */
-.article-check {
+/* Accent ✓ next to the comment count when the discussion was opened, and
+   between the domain and the favicon when the article was. */
+.article-check,
+.comments-check {
   color: var(--accent);
   opacity: 0.85;
   font-size: 0.8rem;
   font-weight: 700;
+}
+.comments-check {
+  margin-left: 0.25rem;
 }
 
 /* `.post-row .post-favicon` (two classes) outranks the generic `.feed-list a`
