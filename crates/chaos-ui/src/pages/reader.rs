@@ -151,7 +151,10 @@ pub fn PostReader() -> impl IntoView {
             return;
         }
         let Some(src) = source() else { return };
-        if crate::use_session().0.get_untracked().is_none() {
+        // Tracked, not untracked: opening the reader as the first page of a
+        // cold start resolves the thread before the session, and an untracked
+        // read here would drop the "opened comments" record for good.
+        if crate::use_session().0.get().is_none() {
             return;
         }
         let id = id();
@@ -200,35 +203,28 @@ fn reader_body(
     let age = thread.published.map(rel_time);
     // Title is ALWAYS a text node (never inner_html).
     let title = thread.title.clone();
-    // Authed: tapping the article title records opened-article.
-    let authed = crate::use_session().0.get_untracked().is_some();
     let article_id = thread.id.clone();
     let title_view = match thread.url.as_ref().map(|u| u.to_string()) {
-        Some(href) => {
-            if authed {
-                view! {
-                    <a
-                        class="reader-title"
-                        href=href
-                        target="_blank"
-                        rel="noreferrer"
-                        on:click=move |_| crate::analytics::record_view(
-                            source,
-                            &article_id,
-                            ViewEvent::OpenedArticle,
-                        )
-                    >
-                        {title}
-                    </a>
+        // Tapping the article title records opened-article when signed in.
+        // The check happens at click time, not render time: the session can
+        // resolve after this view is built, and deciding here would leave the
+        // tap unrecorded for the rest of the page's life.
+        Some(href) => view! {
+            <a
+                class="reader-title"
+                href=href
+                target="_blank"
+                rel="noreferrer"
+                on:click=move |_| {
+                    if crate::use_session().0.get_untracked().is_some() {
+                        crate::analytics::record_view(source, &article_id, ViewEvent::OpenedArticle);
+                    }
                 }
-                .into_any()
-            } else {
-                view! {
-                    <a class="reader-title" href=href target="_blank" rel="noreferrer">{title}</a>
-                }
-                .into_any()
-            }
+            >
+                {title}
+            </a>
         }
+        .into_any(),
         None => view! { <span class="reader-title">{title}</span> }.into_any(),
     };
     // Self-text body: inner_html only for server-sanitized HTML; text otherwise.
