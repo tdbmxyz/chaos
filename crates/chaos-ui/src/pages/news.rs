@@ -241,7 +241,10 @@ pub fn NewsPage() -> impl IntoView {
                 if session.0.get().is_none() {
                     return;
                 }
-                let client = client.clone();
+                // Re-tokened, not reused as captured: this client was cloned
+                // when the page mounted, and in a shell the access token can
+                // arrive (or be refreshed) after that.
+                let client = client.clone().with_token(crate::current_token());
                 spawn_local(async move {
                     if let Ok(map) = client.viewed_map(src).await {
                         analytics::merge_server_map(src, map);

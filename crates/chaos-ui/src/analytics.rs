@@ -174,14 +174,17 @@ pub(crate) fn maybe_record_app_open() {
     }
 }
 
-/// The current-token client from the captured flush context, or `None` before
-/// App boot (tests / components rendered outside App).
+/// The client from the captured flush context, or `None` before App boot
+/// (tests / components rendered outside App). Untokened on purpose: `flush`
+/// applies the token that is current at POST time. This used to re-read only
+/// `chaos-token` here, which silently excluded a shell signed in through
+/// authentik — its token lives under the OIDC key — so every POST 401'd and
+/// nothing was ever recorded from the app.
 fn flush_client() -> Option<(ChaosClient, RwSignal<Connectivity>)> {
     FLUSH_CTX.with(|c| {
-        c.borrow().as_ref().map(|(client, conn, persist)| {
-            let token = persist.then(crate::stored_token).flatten();
-            (client.clone().with_token(token), *conn)
-        })
+        c.borrow()
+            .as_ref()
+            .map(|(client, conn, _persist)| (client.clone(), *conn))
     })
 }
 
@@ -220,7 +223,15 @@ pub(crate) fn flush_now() {
 
 /// POST both outboxes; clear each on its own success. A failed POST leaves that
 /// outbox queued for the next flush.
+///
+/// The token is applied here rather than trusted from the caller: the flush
+/// client is captured once at boot, when a shell that signs in through
+/// authentik has no token yet, and it is reused for the life of the app. With
+/// the app-password path (creds in localStorage from the start) that captured
+/// client happened to be authorized; with OIDC it never is, so every POST 401'd
+/// and the outbox requeued forever — no viewed state reached the server at all.
 pub(crate) async fn flush(client: ChaosClient) {
+    let client = client.with_token(crate::current_token());
     let views: Vec<ViewEventItem> = read_vec(OUTBOX_KEY);
     if !views.is_empty()
         && client
