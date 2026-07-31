@@ -27,6 +27,11 @@ pub fn Login() -> impl IntoView {
         error.set(None);
         let client = client.clone();
         let navigate = navigate.clone();
+        // Read here, not in the task below: `persist_token()` is a context
+        // read, and context is gone once a `spawn_local` has awaited — it
+        // would answer `false` and the token would never be stored, leaving
+        // the app authenticated in appearance only.
+        let persist = crate::persist_token();
         spawn_local(async move {
             match client
                 .login(&LoginRequest {
@@ -36,7 +41,7 @@ pub fn Login() -> impl IntoView {
                 .await
             {
                 Ok(resp) => {
-                    if crate::persist_token() {
+                    if persist {
                         crate::store_token(Some(&resp.token));
                     }
                     // A login is a user switch: the previous user's
