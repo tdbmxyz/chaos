@@ -1,13 +1,8 @@
-# Release: runs when a semver tag (v*) is pushed from main, builds the
-# server binary and web bundle with Nix, and attaches them to a GitHub
-# Release.
-#
-# NixOS deployments (the normal path) consume the flake directly and
-# don't need these artifacts; they exist for non-Nix hosts and as a
-# frozen record of what the tag shipped. The desktop bundle stays a
-# local build (`just bundle`), and the signed Android APK is attached
-# to the release afterwards with `just release-apk` — the keystore
-# never leaves the dev machine.
+# Release: runs when a semver tag (v*) is pushed from main and publishes the
+# GitHub Release and generated notes. NixOS deployments consume the tagged
+# flake directly, so CI does not build or upload duplicate server/web archives.
+# The signed Android APK can still be attached locally with `just release-apk`;
+# its keystore never leaves the development machine.
 name: release
 
 on:
@@ -24,22 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: DeterminateSystems/nix-installer-action@v16
-
-      # Restore the Nix store persisted by CI (falling back to the build
-      # job's caches) so release builds don't start from an empty store.
-      - uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-release-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-prefixes-first-match: |
-            nix-release-${{ runner.os }}-
-            nix-build-${{ runner.os }}-
-          gc-max-store-size-linux: 6G
-          purge: true
-          purge-prefixes: nix-release-${{ runner.os }}-
-          purge-created: 0
-          purge-primary-key: never
-
       # The flake reads its version from Cargo.toml, so one check covers both.
       - name: Check tag matches workspace version
         run: |
@@ -48,32 +27,16 @@ jobs:
           echo "tag=$tag cargo=$cargo_version"
           test "$tag" = "$cargo_version"
 
-      - name: Build artifacts
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          nix build .#chaos-server -o server-out
-          tar -C "$(readlink -f server-out)/bin" -czf "chaos-server-${version}-x86_64-linux.tar.gz" chaos-server
-          nix build .#chaos-web -o web-out
-          tar -C "$(readlink -f web-out)" -czf "chaos-web-${version}.tar.gz" .
-          sha256sum chaos-*.tar.gz > SHA256SUMS
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            chaos-*.tar.gz
-            SHA256SUMS
           body: |
             ## Deploying
 
-            NixOS hosts consume the flake (this is what the zeus module does):
+            NixOS hosts consume the tagged flake directly (this is what the
+            zeus module does):
 
             ```bash
             nix build github:tdbmxyz/chaos/${{ github.ref_name }}#chaos-server
             ```
-
-            For anything else, `chaos-server-*-x86_64-linux.tar.gz` is the
-            dynamically linked server binary and `chaos-web-*.tar.gz` the
-            built frontend — point `static_dir` in chaos.toml at the
-            extracted web bundle.
