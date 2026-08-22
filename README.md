@@ -48,8 +48,8 @@ integration branch, and work happens on feature branches merged into
 `develop` by PR. CI (fmt, clippy, tests, nix build of the deployable
 packages) gates every PR and both long-lived branches. A release is a PR
 from `develop` to `main` that bumps the workspace version, followed by a
-matching `v*` tag — the release workflow then builds the artifacts and
-publishes the GitHub Release.
+matching `v*` tag — the release workflow then publishes the GitHub Release
+and generated notes. Deployments consume the tagged flake directly.
 
 ## Deployment
 
