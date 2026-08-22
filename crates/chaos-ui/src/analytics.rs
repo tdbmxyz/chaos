@@ -21,7 +21,7 @@ const EVENTS_KEY: &str = "chaos-event-outbox";
 const APPOPEN_KEY: &str = "chaos-appopen-at";
 
 /// Global optimistic overlay: (source-as-str, post_id) -> flags. Provided once
-/// in App context so NewsPage rows and the reader share it. Rows read their
+/// in App context so dashboard rows, NewsPage, and the reader share it. Rows read their
 /// flags reactively, so an OR into the map instantly restyles the row.
 /// (source-as-str, post_id) -> flags.
 pub(crate) type OverlayMap = HashMap<(String, String), ViewFlags>;
@@ -48,8 +48,11 @@ thread_local! {
         const { Cell::new(None) };
 }
 
-/// Provide the overlay context and capture the flush + overlay context. Call
-/// once in App.
+/// Provide the overlay context, capture the flush context, and keep the
+/// server's viewed state in sync for every posts surface. Loading both sources
+/// here (rather than only while `/news` is mounted) lets dashboard rows show
+/// the same checks immediately and keeps clicks on either surface shared.
+/// Call once in App.
 pub(crate) fn provide_overlay() {
     let sig = RwSignal::new(HashMap::new());
     provide_context(Overlay(sig));
@@ -57,7 +60,22 @@ pub(crate) fn provide_overlay() {
     let client = crate::use_client();
     let conn = use_connectivity();
     let persist = crate::persist_token();
-    FLUSH_CTX.with(|c| *c.borrow_mut() = Some((client, conn, persist)));
+    FLUSH_CTX.with(|c| *c.borrow_mut() = Some((client.clone(), conn, persist)));
+
+    let session = crate::use_session();
+    Effect::new(move |_| {
+        if conn.get() != Connectivity::Online || session.0.get().is_none() {
+            return;
+        }
+        for source in [Source::HackerNews, Source::Lobsters] {
+            let client = client.clone().with_token(crate::current_token());
+            spawn_local(async move {
+                if let Ok(map) = client.viewed_map(source).await {
+                    merge_server_map(source, map);
+                }
+            });
+        }
+    });
 }
 
 /// The overlay signal from the boot-time thread-local (owner-free, so it works
@@ -67,18 +85,6 @@ pub(crate) fn overlay() -> Overlay {
         .with(|o| o.get())
         .map(Overlay)
         .expect("Overlay provided by App")
-}
-
-/// Present in context only when viewed-state tracking is active (authed on
-/// `/news` + reader). Its absence tells `post_row_view` to render plain rows.
-/// Carries the currently shown source.
-#[derive(Clone, Copy)]
-pub(crate) struct ViewedState {
-    // Carried as the declared context shape (and a seam for a future
-    // desktop-widget adoption); rows key off `ViewedState`'s *presence* and
-    // already receive the active source as a render argument.
-    #[allow(dead_code)]
-    pub source: Source,
 }
 
 fn now_utc() -> DateTime<Utc> {

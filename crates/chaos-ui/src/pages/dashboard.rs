@@ -1061,14 +1061,11 @@ pub(crate) fn post_row_view(
         .map(|h| h.strip_prefix("www.").unwrap_or(h).to_string());
     let title = item.title.clone();
 
-    // Viewed-state tracking needs both: a page that tracks (`ViewedState` in
-    // context — the dashboard widget deliberately has none, so its rows stay
-    // plain) and a signed-in user. The session is read reactively and second,
-    // so the widget never subscribes to it: the list closure that calls this
-    // re-runs when the user resolves, which is what stops a cold start from
-    // rendering every row untracked.
-    let tracked = use_context::<crate::analytics::ViewedState>().is_some()
-        && crate::use_session().0.get().is_some();
+    // Every signed-in posts surface shares the app-level viewed-state overlay,
+    // so dashboard widgets and `/news` display and update the same checks. Read
+    // the session reactively so rows built during a cold start become tracked
+    // as soon as authentication resolves.
+    let tracked = crate::use_session().0.get().is_some();
     let vid = item.id.clone();
 
     let title_link = match reader_href {
