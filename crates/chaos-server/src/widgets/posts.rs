@@ -9,12 +9,16 @@
 
 use chaos_domain::{FeedItem, PostsData, WidgetData};
 use chrono::{DateTime, Utc};
+use scraper::{ElementRef, Html, Selector};
 use serde::Deserialize;
 use url::Url;
 
-use crate::http_util::get_json;
+use crate::http_util::{get_json, get_text_capped};
 
+const HN_ORIGIN: &str = "https://news.ycombinator.com/";
 const HN_ITEM: &str = "https://news.ycombinator.com/item?id=";
+const HN_FRONT_PAGE: &str = "https://news.ycombinator.com/";
+const HN_FRONT_PAGE_MAX_BYTES: usize = 1024 * 1024;
 const ALGOLIA_SEARCH: &str = "https://hn.algolia.com/api/v1/search";
 /// Only count stories that cleared this many upvotes — a "notable story" floor
 /// that replaces the sparse, bursty `front_page` tag (which left the 24-48h tab
@@ -85,6 +89,88 @@ fn algolia_item(hit: AlgoliaHit) -> FeedItem {
     }
 }
 
+/// Parse the official HN front page. Algolia is normally our richer weekly
+/// archive, but its index can lag by a day; the front page supplies current
+/// stories in one courteous request instead of fan-out to the Firebase item API.
+fn parse_hn_front_page(body: &str) -> Result<Vec<FeedItem>, String> {
+    let document = Html::parse_document(body);
+    let story_sel = Selector::parse("tr.athing").expect("static selector");
+    let title_sel = Selector::parse("span.titleline > a").expect("static selector");
+    let score_sel = Selector::parse("span.score").expect("static selector");
+    let age_sel = Selector::parse("span.age").expect("static selector");
+    let sublink_sel = Selector::parse("a").expect("static selector");
+    let base = Url::parse(HN_ORIGIN).expect("static HN origin");
+    let mut items = Vec::new();
+
+    for story in document.select(&story_sel) {
+        let Some(id) = story.value().attr("id").filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        let Some(title_link) = story.select(&title_sel).next() else {
+            continue;
+        };
+        let title = title_link.text().collect::<String>();
+        let discussion = Url::parse(&format!("{HN_ITEM}{id}")).ok();
+        let url = title_link
+            .value()
+            .attr("href")
+            .and_then(|href| base.join(href).ok())
+            .or_else(|| discussion.clone());
+
+        let subtext = story
+            .next_siblings()
+            .find_map(ElementRef::wrap)
+            .filter(|row| row.value().name() == "tr");
+        let score = subtext
+            .as_ref()
+            .and_then(|row| row.select(&score_sel).next())
+            .and_then(|el| el.text().next())
+            .and_then(|text| text.split_whitespace().next())
+            .and_then(|n| n.parse().ok());
+        let published = subtext
+            .as_ref()
+            .and_then(|row| row.select(&age_sel).next())
+            .and_then(|el| el.value().attr("title"))
+            .and_then(|title| title.split_whitespace().next_back())
+            .and_then(|timestamp| timestamp.parse().ok())
+            .and_then(|timestamp| DateTime::from_timestamp(timestamp, 0));
+        let comments = subtext.as_ref().and_then(|row| {
+            row.select(&sublink_sel)
+                .filter_map(|el| el.text().next())
+                .find(|text| {
+                    text == &"discuss" || text.ends_with(" comment") || text.ends_with(" comments")
+                })
+                .map(|text| {
+                    if text == "discuss" {
+                        0
+                    } else {
+                        text.split_whitespace()
+                            .next()
+                            .and_then(|n| n.parse().ok())
+                            .unwrap_or(0)
+                    }
+                })
+        });
+
+        items.push(FeedItem {
+            title,
+            url,
+            source: Some("Hacker News".into()),
+            published,
+            score,
+            comments,
+            comments_url: discussion,
+            id: Some(id.to_string()),
+        });
+    }
+
+    if items.is_empty() {
+        Err("HN front page contained no stories".into())
+    } else {
+        Ok(items)
+    }
+}
+
 /// The top stories of a trailing window: everything published within the last
 /// `hours`, by upvotes, deduped by id (a story fetched on two pages collapses
 /// to its highest-scored copy), capped at `limit`. Windows are CUMULATIVE — the
@@ -128,10 +214,28 @@ pub async fn hacker_news(
     let url = format!(
         "{ALGOLIA_SEARCH}?tags=story&numericFilters=created_at_i>{cutoff},points>={HN_MIN_POINTS}&hitsPerPage=1000"
     );
-    let resp: AlgoliaResponse = get_json(http, &url)
-        .await
-        .map_err(|e| format!("hn algolia: {e}"))?;
-    let items: Vec<FeedItem> = resp.hits.into_iter().map(algolia_item).collect();
+    let (archive, front_page) = tokio::join!(
+        get_json::<AlgoliaResponse>(http, &url),
+        get_text_capped(http, HN_FRONT_PAGE, HN_FRONT_PAGE_MAX_BYTES),
+    );
+    let mut items: Vec<FeedItem> = match archive {
+        Ok(resp) => resp.hits.into_iter().map(algolia_item).collect(),
+        Err(err) => {
+            tracing::warn!(
+                reason = err,
+                "HN Algolia fetch failed; using front page only"
+            );
+            Vec::new()
+        }
+    };
+    match front_page.and_then(|body| parse_hn_front_page(&body)) {
+        Ok(current) => items.extend(current),
+        Err(err) if items.is_empty() => return Err(format!("HN providers failed: {err}")),
+        Err(err) => tracing::warn!(
+            reason = err,
+            "HN front-page fetch failed; using Algolia only"
+        ),
+    }
     let (last_24h, last_48h, last_week) = windows(&items, now, limit);
     if last_24h.is_empty() && last_48h.is_empty() && last_week.is_empty() {
         return Err("no stories returned".into());
@@ -152,9 +256,14 @@ pub async fn lobsters(
     let mut items: Vec<FeedItem> = Vec::new();
     for page in 1..=LOBSTERS_PAGE_CAP {
         let stories: Vec<LobstersStory> =
-            get_json(http, &format!("{LOBSTERS_NEWEST}/page/{page}.json"))
-                .await
-                .map_err(|e| format!("lobsters: {e}"))?;
+            match get_json(http, &format!("{LOBSTERS_NEWEST}/page/{page}.json")).await {
+                Ok(stories) => stories,
+                Err(err) if !items.is_empty() => {
+                    tracing::warn!(page, reason = err, "lobsters sweep stopped early");
+                    break;
+                }
+                Err(err) => return Err(format!("lobsters: {err}")),
+            };
         if stories.is_empty() {
             break;
         }
@@ -168,6 +277,10 @@ pub async fn lobsters(
         if done {
             break;
         }
+        // Avoid a burst of up to ten back-to-back requests. This sweep is
+        // cached for 30 minutes by WidgetHub, so a short delay costs little
+        // and is considerably friendlier to lobste.rs.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     if items.is_empty() {
         return Err("no stories returned".into());
@@ -262,6 +375,39 @@ mod tests {
         let item = algolia_item(serde_json::from_str(raw).expect("parse"));
         assert_eq!(item.url.unwrap().as_str(), "https://blog.rust-lang.org/2");
         assert_eq!(item.source.as_deref(), Some("Hacker News"));
+    }
+
+    #[test]
+    fn hn_front_page_supplies_current_story_metadata() {
+        let html = r#"
+            <table>
+              <tr class="athing submission" id="49419237">
+                <td class="title"><span class="titleline">
+                  <a href="https://example.com/post">Current story</a>
+                </span></td>
+              </tr>
+              <tr><td class="subtext">
+                <span class="score">454 points</span>
+                <span class="age" title="2026-08-24T13:05:25 1787576725">
+                  <a href="item?id=49419237">2 hours ago</a>
+                </span>
+                <a href="item?id=49419237">hide</a>
+                <a href="item?id=49419237">127 comments</a>
+              </td></tr>
+            </table>
+        "#;
+        let items = parse_hn_front_page(html).expect("front page");
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.id.as_deref(), Some("49419237"));
+        assert_eq!(item.title, "Current story");
+        assert_eq!(
+            item.url.as_ref().map(Url::as_str),
+            Some("https://example.com/post")
+        );
+        assert_eq!(item.score, Some(454));
+        assert_eq!(item.comments, Some(127));
+        assert_eq!(item.published.map(|t| t.timestamp()), Some(1787576725));
     }
 
     #[test]
