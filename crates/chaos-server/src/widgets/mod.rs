@@ -31,6 +31,9 @@ use crate::config::{ColumnConfig, Config};
 
 /// Cap on cache growth. Generous for any real dashboard.
 const WIDGET_CACHE_ENTRIES: usize = 512;
+const HN_POSTS_TTL: Duration = Duration::from_secs(300);
+/// Lobsters requires a paginated sweep, so refresh it much less often than HN.
+const LOBSTERS_POSTS_TTL: Duration = Duration::from_secs(30 * 60);
 
 /// How many posts the standalone news endpoint fetches per window (larger
 /// than the dashboard widget default: the `/news` page is the full reader).
@@ -47,6 +50,10 @@ pub struct WidgetHub {
     /// `StaleCache` is typed to its value and threads are `PostThread`, not
     /// `WidgetData`.
     thread_cache: StaleCache<String, PostThread>,
+    /// One refresh at a time per posts provider. Dashboard widgets and the
+    /// News page otherwise miss under different keys and stampede upstream.
+    hn_posts_lock: tokio::sync::Mutex<()>,
+    lobsters_posts_lock: tokio::sync::Mutex<()>,
     /// CPU/memory sparkline samples; the sampler task only runs when the
     /// layout actually has a server_stats widget.
     stats_history: Option<stats::History>,
@@ -74,6 +81,8 @@ impl WidgetHub {
             entries,
             cache: StaleCache::new(WIDGET_CACHE_ENTRIES),
             thread_cache: StaleCache::new(WIDGET_CACHE_ENTRIES),
+            hn_posts_lock: tokio::sync::Mutex::new(()),
+            lobsters_posts_lock: tokio::sync::Mutex::new(()),
             stats_history,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -99,9 +108,24 @@ impl WidgetHub {
         &self,
         source: chaos_domain::Source,
     ) -> Result<WidgetData, WidgetError> {
+        self.posts_data(source, NEWS_LIMIT).await
+    }
+
+    /// Shared source-level fetch for both dashboard widgets and `/news`.
+    /// Fetch at the larger News-page limit once, then truncate for a smaller
+    /// widget. The per-source mutex gives the cache single-flight semantics.
+    async fn posts_data(
+        &self,
+        source: chaos_domain::Source,
+        limit: u32,
+    ) -> Result<WidgetData, WidgetError> {
         use chaos_domain::Source;
+        let (lock, ttl) = match source {
+            Source::HackerNews => (&self.hn_posts_lock, HN_POSTS_TTL),
+            Source::Lobsters => (&self.lobsters_posts_lock, LOBSTERS_POSTS_TTL),
+        };
+        let _guard = lock.lock().await;
         let key = format!("posts:{}", source.as_str());
-        let ttl = Duration::from_secs(300);
         let now = chrono::Utc::now();
         let fetch = async {
             match source {
@@ -109,7 +133,13 @@ impl WidgetHub {
                 Source::Lobsters => posts::lobsters(&self.http, NEWS_LIMIT, now).await,
             }
         };
-        self.cached_fetch(key, ttl, fetch).await
+        let mut data = self.cached_fetch(key, ttl, fetch).await?;
+        if let WidgetData::Posts(posts) = &mut data {
+            posts.last_24h.truncate(limit as usize);
+            posts.last_48h.truncate(limit as usize);
+            posts.last_week.truncate(limit as usize);
+        }
+        Ok(data)
     }
 
     /// One post's comment thread for the reader endpoint, cached per
@@ -184,12 +214,20 @@ impl WidgetHub {
     async fn fetch(&self, widget: &Widget) -> Result<WidgetData, String> {
         match widget {
             Widget::Feed { urls, limit, .. } => feed::fetch(&self.http, urls, *limit).await,
-            Widget::HackerNews { limit, .. } => {
-                posts::hacker_news(&self.http, *limit, chrono::Utc::now()).await
-            }
-            Widget::Lobsters { limit, .. } => {
-                posts::lobsters(&self.http, *limit, chrono::Utc::now()).await
-            }
+            Widget::HackerNews { limit, .. } => self
+                .posts_data(chaos_domain::Source::HackerNews, *limit)
+                .await
+                .map_err(|err| match err {
+                    WidgetError::Upstream(reason) => reason,
+                    _ => "posts fetch failed".into(),
+                }),
+            Widget::Lobsters { limit, .. } => self
+                .posts_data(chaos_domain::Source::Lobsters, *limit)
+                .await
+                .map_err(|err| match err {
+                    WidgetError::Upstream(reason) => reason,
+                    _ => "posts fetch failed".into(),
+                }),
             Widget::Releases { repos, limit } => releases::fetch(&self.http, repos, *limit).await,
             Widget::ServerStats { mounts } => {
                 let history = self
@@ -254,7 +292,8 @@ impl WidgetHub {
 fn ttl(widget: &Widget) -> Duration {
     match widget {
         Widget::Feed { .. } => Duration::from_secs(300),
-        Widget::HackerNews { .. } | Widget::Lobsters { .. } => Duration::from_secs(300),
+        Widget::HackerNews { .. } => HN_POSTS_TTL,
+        Widget::Lobsters { .. } => LOBSTERS_POSTS_TTL,
         Widget::Releases { .. } => Duration::from_secs(1800),
         Widget::ServerStats { .. } => Duration::from_secs(10),
         Widget::Systemd { .. } => Duration::from_secs(5),
