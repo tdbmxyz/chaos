@@ -74,6 +74,20 @@
         };
       };
 
+    # Trunk 0.21.14 vendors libdeflate-sys 1.23.1, whose evex512 target
+    # attributes were removed by GCC 16. Keep this compatibility compiler
+    # scoped to Trunk (web builds and every dev shell), not the app/toolchain.
+    # Remove the override when Trunk bundles libdeflate >= 1.25.
+    trunk = pkgs.trunk.overrideAttrs (old: {
+      env =
+        (old.env or {})
+        // {
+          # cc-rs's target-specific override takes precedence over HOST_CC,
+          # which Nix's Rust hooks export from the current stdenv.
+          CC_x86_64_unknown_linux_gnu = "${pkgs.gcc15}/bin/cc";
+        };
+    });
+
     # Native libraries required by Tauri v2 (webview + GTK stack).
     tauriLibs = with pkgs; [
       webkitgtk_4_1
@@ -115,7 +129,7 @@
 
       nativeBuildInputs = [
         rustToolchain
-        pkgs.trunk
+        trunk
         pkgs.binaryen
         wasm-bindgen-cli
         pkgs.rustPlatform.cargoSetupHook
@@ -143,19 +157,20 @@
     # megabytes of wasm per request (see api/static_assets.rs). Separate from
     # chaos-web because chaos-desktop bakes that dist into its binary and the
     # APK, where these files would be dead weight.
-    chaos-web-static = pkgs.runCommand "chaos-web-static-${version}" {
-      nativeBuildInputs = [pkgs.brotli pkgs.gzip];
-      meta.description = "chaos web frontend, with precompressed assets";
-    } ''
-      cp -r ${chaos-web} $out
-      chmod -R u+w $out
-      find $out -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' \
-        -o -name '*.html' -o -name '*.json' -o -name '*.svg' -o -name '*.map' \) \
-        -print0 | while IFS= read -r -d "" f; do
-        brotli -q 11 -f -o "$f.br" "$f"
-        gzip -9 -c "$f" > "$f.gz"
-      done
-    '';
+    chaos-web-static =
+      pkgs.runCommand "chaos-web-static-${version}" {
+        nativeBuildInputs = [pkgs.brotli pkgs.gzip];
+        meta.description = "chaos web frontend, with precompressed assets";
+      } ''
+        cp -r ${chaos-web} $out
+        chmod -R u+w $out
+        find $out -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' \
+          -o -name '*.html' -o -name '*.json' -o -name '*.svg' -o -name '*.map' \) \
+          -print0 | while IFS= read -r -d "" f; do
+          brotli -q 11 -f -o "$f.br" "$f"
+          gzip -9 -c "$f" > "$f.gz"
+        done
+      '';
 
     # Desktop shell. generate_context! bakes the web dist into the binary at
     # compile time, so the chaos-web output is copied in place before cargo
