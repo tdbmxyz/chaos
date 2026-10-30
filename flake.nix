@@ -22,6 +22,7 @@
       config.android_sdk.accept_license = true;
     };
     inherit (pkgs) lib;
+    chaos-monolith = pkgs.callPackage ./nix/monolith.nix {};
 
     androidNdkVersion = "27.0.12077973";
     androidComposition = pkgs.androidenv.composeAndroidPackages {
@@ -219,7 +220,7 @@
     };
   in {
     packages.${system} = {
-      inherit chaos-server chaos-web chaos-web-static chaos-desktop;
+      inherit chaos-server chaos-web chaos-web-static chaos-desktop chaos-monolith;
       default = chaos-server;
     };
 
@@ -247,7 +248,7 @@
             cargo-tauri
             cargo-nextest
             just
-            monolith # page snapshots for the link archiver
+            chaos-monolith # page snapshots, with local SVG references preserved
           ]
           ++ lib.optional hasCargoLock wasm-bindgen-cli;
 

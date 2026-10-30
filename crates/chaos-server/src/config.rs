@@ -217,7 +217,7 @@ pub struct ArchiveConfig {
     pub dir: PathBuf,
     /// monolith executable; on NixOS provided via the service PATH.
     pub monolith_bin: String,
-    /// Per-page snapshot timeout.
+    /// Per-page snapshot timeout (large, image-heavy pages can take minutes).
     pub timeout_secs: u64,
 }
 
@@ -228,7 +228,7 @@ impl Default for ArchiveConfig {
             auto: true,
             dir: PathBuf::from("archives"),
             monolith_bin: "monolith".into(),
-            timeout_secs: 120,
+            timeout_secs: 300,
         }
     }
 }
