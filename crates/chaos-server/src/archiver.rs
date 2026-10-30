@@ -93,7 +93,10 @@ async fn archive_one(state: &AppState, link: &Link) -> ArchiveOutcome {
     };
 
     match outcome {
-        Ok((size_bytes, text)) => ArchiveOutcome::Success { size_bytes, text },
+        Ok((size_bytes, text)) => {
+            tracing::info!(link = %link.id, size_bytes, "archive complete");
+            ArchiveOutcome::Success { size_bytes, text }
+        }
         Err(reason) => {
             let _ = tokio::fs::remove_file(&tmp_path).await;
             tracing::warn!(link = %link.id, reason, "archive failed");
@@ -111,7 +114,6 @@ async fn run_monolith(
         .arg(link.url.as_str())
         .arg("-o")
         .arg(tmp_path)
-        .arg("-q") // quiet
         .arg("-j") // strip javascript: archives are for reading, not running
         .arg("-I") // isolate: block outbound requests when viewing
         .arg("-k") // tolerate self-signed certificates (LAN services)
@@ -147,19 +149,36 @@ async fn finalize(
             "snapshot too large ({size_bytes} bytes, cap {MAX_SNAPSHOT_BYTES})"
         ));
     }
-    let html = tokio::fs::read_to_string(tmp_path)
+    let bytes = tokio::fs::read(tmp_path)
         .await
         .map_err(|e| format!("reading snapshot: {e}"))?;
 
-    // HTML parsing of a multi-MB page is CPU work; keep it off the runtime.
-    let text = tokio::task::spawn_blocking(move || extract_text(&html))
-        .await
-        .map_err(|e| format!("text extraction panicked: {e}"))?;
+    // Monolith passes PDFs through unchanged. Preserve their bytes rather
+    // than interpreting them as HTML; PDF text indexing is not supported yet.
+    let text = if snapshot_content_type(&bytes) == "application/pdf" {
+        String::new()
+    } else {
+        let html = String::from_utf8(bytes).map_err(|e| format!("decoding HTML snapshot: {e}"))?;
+        // HTML parsing of a multi-MB page is CPU work; keep it off the runtime.
+        tokio::task::spawn_blocking(move || extract_text(&html))
+            .await
+            .map_err(|e| format!("text extraction panicked: {e}"))?
+    };
 
     tokio::fs::rename(tmp_path, final_path)
         .await
         .map_err(|e| format!("moving snapshot in place: {e}"))?;
     Ok((size_bytes, text))
+}
+
+/// Detect PDFs by their signature, not the URL (which may redirect or have
+/// no extension). Keep the existing on-disk paths compatible with old archives.
+pub fn snapshot_content_type(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"%PDF-") {
+        "application/pdf"
+    } else {
+        "text/html; charset=utf-8"
+    }
 }
 
 /// Visible text of the page, whitespace-collapsed and size-capped.
@@ -232,6 +251,31 @@ mod tests {
         assert!(err.contains("too large"), "unexpected reason: {err}");
         // The snapshot must not have been moved into place.
         assert!(tokio::fs::metadata(&final_path).await.is_err());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[test]
+    fn snapshot_type_uses_content_not_filename() {
+        assert_eq!(snapshot_content_type(b"%PDF-1.7\n"), "application/pdf");
+        assert_eq!(
+            snapshot_content_type(b"<html><body>%PDF-1.7</body></html>"),
+            "text/html; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_preserves_binary_pdf_without_html_indexing() {
+        let dir = temp_dir("pdf").await;
+        let tmp = dir.join("page.html.tmp");
+        let final_path = dir.join("page.html");
+        let pdf = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n";
+        tokio::fs::write(&tmp, pdf).await.expect("write PDF");
+
+        let (size_bytes, text) = finalize(&tmp, &final_path).await.expect("finalize PDF");
+        assert_eq!(size_bytes, pdf.len() as u64);
+        assert!(text.is_empty());
+        assert_eq!(tokio::fs::read(&final_path).await.unwrap(), pdf);
+        assert!(tokio::fs::metadata(&tmp).await.is_err());
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 

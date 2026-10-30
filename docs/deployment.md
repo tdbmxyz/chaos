@@ -7,6 +7,14 @@ cache), serves the built frontend, puts `monolith` on the service PATH for
 archiving, and installs a `chaos-admin` host command for server-side
 administration (user accounts, imports).
 
+The default Monolith package includes a fix for local SVG references: without
+it, each `<use href="#symbol">` can embed another copy of the entire page and
+trip the 64 MiB snapshot limit. The development shell uses the same patched
+package (`nix build .#chaos-monolith`). Overriding `monolithPackage` bypasses
+this patch. The default per-page timeout is 300 seconds for image-heavy pages.
+PDF links are preserved as PDFs and served with `application/pdf`; their text
+is not currently indexed for full-text search.
+
 ## System flake wiring
 
 ```nix
@@ -105,7 +113,7 @@ see docs/adr/0004-auth-and-calendar.md.
 | `services.chaos.openFirewall` | `false` | Open the port |
 | `services.chaos.package` | flake's `chaos-server` | Server binary |
 | `services.chaos.webPackage` | flake's `chaos-web` | Frontend (null = API only) |
-| `services.chaos.monolithPackage` | `pkgs.monolith` | Archiver binary |
+| `services.chaos.monolithPackage` | patched `pkgs.monolith` | Archiver binary |
 | `services.chaos.settings` | `{}` | Free-form chaos.toml (see example config) |
 | `services.chaos.systemdControl.enable` | `false` | Allow unit control from the dashboard |
 | `services.chaos.systemdControl.units` | `[]` | Units the server may start/stop/restart |
