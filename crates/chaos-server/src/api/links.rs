@@ -103,7 +103,7 @@ pub async fn serve_archive(
     if !matches!(link.archive, ArchiveState::Archived { .. }) {
         return Err(ApiError::NotFound);
     }
-    let html = tokio::fs::read(archiver::snapshot_path(&state, id))
+    let bytes = tokio::fs::read(archiver::snapshot_path(&state, id))
         .await
         .map_err(|_| ApiError::NotFound)?;
 
@@ -111,7 +111,7 @@ pub async fn serve_archive(
         [
             (
                 header::CONTENT_TYPE,
-                HeaderValue::from_static("text/html; charset=utf-8"),
+                HeaderValue::from_static(archiver::snapshot_content_type(&bytes)),
             ),
             // Belt and braces on top of monolith's -j/-I: no scripts, no
             // outbound requests from archived pages.
@@ -122,7 +122,7 @@ pub async fn serve_archive(
                 ),
             ),
         ],
-        html,
+        bytes,
     )
         .into_response())
 }
@@ -132,4 +132,80 @@ pub async fn tags(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<TagWithCount>>, ApiError> {
     Ok(Json(state.db.list_tags().await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::db::{ArchiveOutcome, Db};
+
+    #[tokio::test]
+    async fn archives_are_served_with_their_content_type_and_original_bytes() {
+        let dir = std::env::temp_dir().join(format!("chaos-serve-archive-{}", Uuid::now_v7()));
+        let mut config = Config::default();
+        config.archive.dir = dir.clone();
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let db = Db::in_memory().await.unwrap();
+        let user = db.create_user("test", "Test", "").await.unwrap();
+        let state = AppState::new(config, db).unwrap();
+
+        for (bytes, content_type) in [
+            (
+                b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".as_slice(),
+                "application/pdf",
+            ),
+            (b"<html>hello</html>".as_slice(), "text/html; charset=utf-8"),
+        ] {
+            // No extension: detection must depend on the stored bytes.
+            let link = state
+                .db
+                .create_link(
+                    &CreateLinkRequest {
+                        url: format!("https://example.com/{}", Uuid::now_v7())
+                            .parse()
+                            .unwrap(),
+                        title: None,
+                        description: None,
+                        collection_id: None,
+                        tags: vec![],
+                    },
+                    true,
+                    None,
+                )
+                .await
+                .unwrap();
+            tokio::fs::write(archiver::snapshot_path(&state, link.id), bytes)
+                .await
+                .unwrap();
+            state
+                .db
+                .finish_archive(
+                    link.id,
+                    ArchiveOutcome::Success {
+                        size_bytes: bytes.len() as u64,
+                        text: String::new(),
+                    },
+                )
+                .await
+                .unwrap();
+
+            let response =
+                serve_archive(AuthUser(user.clone()), State(state.clone()), Path(link.id))
+                    .await
+                    .unwrap();
+            assert_eq!(response.headers()[header::CONTENT_TYPE], content_type);
+            assert!(
+                response.headers()[header::CONTENT_SECURITY_POLICY]
+                    .to_str()
+                    .unwrap()
+                    .contains("sandbox")
+            );
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(body.as_ref(), bytes);
+        }
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
 }

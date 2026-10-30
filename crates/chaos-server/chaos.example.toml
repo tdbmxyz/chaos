@@ -18,7 +18,7 @@ enabled = true
 auto = true            # snapshot new links automatically
 dir = "archives"
 monolith_bin = "monolith"
-timeout_secs = 120
+timeout_secs = 300
 
 # Scheduled database backups: a consistent snapshot (VACUUM INTO) of the
 # SQLite file every interval, pruned to the `keep` newest. Off by default.

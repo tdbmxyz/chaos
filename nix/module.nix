@@ -46,9 +46,9 @@ in {
 
     monolithPackage = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.monolith;
-      defaultText = lib.literalExpression "pkgs.monolith";
-      description = "monolith package used for page snapshots.";
+      default = pkgs.callPackage ./monolith.nix {};
+      defaultText = lib.literalExpression "pkgs.callPackage ./monolith.nix {}";
+      description = "monolith package used for page snapshots, patched to preserve local SVG references.";
     };
 
     address = lib.mkOption {

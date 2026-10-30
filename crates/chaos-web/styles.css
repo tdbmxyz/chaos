@@ -432,6 +432,7 @@ button.danger:hover {
 .archive-failed {
   border-color: var(--down);
   color: var(--down);
+  overflow-wrap: anywhere;
 }
 
 /* modal */

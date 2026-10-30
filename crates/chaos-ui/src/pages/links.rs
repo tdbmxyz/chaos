@@ -658,6 +658,7 @@ fn LinkItem(
     let id = link.id;
     let host = link.url.host_str().unwrap_or_default().to_string();
     let edit_target = link.clone();
+    let archive_error = RwSignal::new(None::<String>);
 
     let delete = {
         let client = client.clone();
@@ -675,10 +676,11 @@ fn LinkItem(
         let client = client.clone();
         move |_| {
             let client = client.clone();
+            archive_error.set(None);
             spawn_local(async move {
                 match client.archive_link(id).await {
                     Ok(_) => refresh.update(|n| *n += 1),
-                    Err(err) => leptos::logging::warn!("archive link: {err}"),
+                    Err(err) => archive_error.set(Some(err.to_string())),
                 }
             });
         }
@@ -702,8 +704,8 @@ fn LinkItem(
         ArchiveState::Failed { reason, .. } => {
             let reason = reason.clone();
             view! {
-                <span class="chip small archive-failed" title=reason>
-                    "archive failed"
+                <span class="chip small archive-failed" title=reason.clone()>
+                    {format!("archive failed: {reason}")}
                 </span>
             }
             .into_any()
@@ -732,6 +734,7 @@ fn LinkItem(
                 </a>
                 <span class="muted link-host">{host}</span>
                 {link.description.map(|d| view! { <p class="link-desc">{d}</p> })}
+                {move || archive_error.get().map(|e| view! { <p class="error">{e}</p> })}
                 <div class="link-tags">
                     {archive_badge}
                     {link
