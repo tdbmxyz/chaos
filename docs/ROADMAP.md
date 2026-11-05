@@ -6,11 +6,11 @@ the previous one.
 ## Phase 0 — Foundations ✅ (this commit)
 
 - [x] Cargo workspace, six crates, compile on native + wasm
-- [x] Nix devshell (stable rust + trunk + wasm-bindgen-cli pinned by Cargo.lock + Tauri deps)
+- [x] Nix devshell (stable rust + trunk + wasm-bindgen-cli pinned by Cargo.lock)
 - [x] Axum server: `/api/v1/health`, `/api/v1/services`, static serving, config via figment
 - [x] Service monitor task (glance `monitor` widget equivalent)
 - [x] Leptos app shell: router, dashboard page rendering service tiles
-- [x] Tauri v2 scaffold
+- [x] Native app support retired; browser-only delivery
 - [x] Architecture docs + ADRs
 
 ## Phase 1 — Usable dashboard
@@ -86,19 +86,12 @@ server-side, one instance id per widget (`GET /api/v1/widgets/{id}`).
 - [ ] Replace glance in the system flake (host-side change; recipe in
       docs/deployment.md)
 
-## Phase 7 — Shells & themes
+## Phase 7 — Browser delivery & themes
 
-Same shell pattern as yomu (yomu-shell): the web bundle runs inside Tauri,
-the shell only injects `window.CHAOS_API_BASE`, the UI has a ServerGate
-connect screen and keeps the session token in localStorage when the API is
-cross-origin (bearer instead of the cookie).
+Desktop and mobile use the responsive browser UI. Native shells, packaging,
+Android toolchains, app bridges, and app-specific OIDC have been removed.
 
-- [x] API-base resolution seam (injected global → localStorage override →
-      origin → fallback; `tauri.localhost` never trusted as API)
-- [x] Desktop shell: `CHAOS_SERVER` env / `~/.config/chaos/server`, NVIDIA
-      DMABUF workaround, deb + AppImage bundles (`just bundle`)
-- [x] Android shell: `nix develop .#android` + `just apk` (signed release,
-      keystore in ~/.config/chaos, gen/android committed)
+- [x] API-base resolution (injected global → Settings override → origin → fallback)
 - [x] Design decision: sidebar rail layout adopted as the base (bottom
       tabs on phone) after comparing columns/sidebar/hub/bento; palettes
       moved to a `/settings` page — Campbell default, GitHub Dark,
@@ -107,14 +100,13 @@ cross-origin (bearer instead of the cookie).
 ## Phase 8 — Candidates (in rough value order)
 
 - [ ] Deploy on zeus, retire glance (recipe ready in docs/deployment.md)
-- [ ] authentik (OIDC) sign-in once deployed (seam in ADR 0004)
+- [x] Browser authentik sign-in through trusted forward-auth
 - [x] Notifications: service down/recovered alerts (flap-debounced) +
       calendar reminders via ntfy (`[notifications]` in chaos.toml; web
       push not needed — ntfy app covers phones)
 - [ ] Dashboard editing in-app (add/move/remove widgets, persisted
       server-side) instead of TOML-only layout
-- [x] Quick-add from phone: Android share intent → `/?share=` →
-      `/links?add=` auto quick-add (PWA share-target can reuse the seam)
+- [x] Browser quick-add through `/links?add=` (native share target retired)
 - [x] Calendar polish: event descriptions in the day panel, feed refresh
       button — week/agenda view and per-calendar colors still open
 - [x] Links polish: pagination UI (50/page), site favicons (`fav:` icon
@@ -136,16 +128,13 @@ cross-origin (bearer instead of the cookie).
       the browser `online` event, 8s data / 3s health request deadlines
       so an unreachable server fails fast — ported from yomu's offline
       core
-- [x] Direct-fetch weather: every client (web, desktop, Android) geocodes
+- [x] Direct-fetch weather: the browser geocodes
       and fetches Open-Meteo itself instead of through the server —
       `GET /api/v1/weather` removed, per-place localStorage cache (600s TTL,
       serves stale on failure), so weather keeps working even offline
-- [x] Direct-fetch HN + lobsters when the server is unreachable: HN via
-      the CORS-open Algolia API on every client, lobsters via the Tauri
-      shells' `tauri-plugin-http` (lobste.rs sends no CORS headers, so the
-      plain web build serves lobsters from cache only while offline); a
-      direct fetch overwrites the widget cache so later offline views see
-      fresh leftovers
+- [x] Offline HN via the CORS-open Algolia API, with cache fallback;
+      Lobsters lists and threads use cached server responses (no CORS).
+      Direct HN fetches refresh the browser cache
 - [x] Hacker News and lobsters feeds ordered by upvotes (score descending,
       scoreless items last) instead of the upstream endpoint's own ranking
 - [x] HN/lobsters time-window tabs: Last 24h / 48h / Week — each the
@@ -173,14 +162,14 @@ cross-origin (bearer instead of the cookie).
       `GET /api/v1/posts/{source}/{id}/comments` — HN via the Algolia item
       API, lobste.rs via `/s/{id}.json` (flat depth list rebuilt into a
       tree) — with comment HTML sanitized server-side (ammonia allowlist).
-      Offline falls back to a direct fetch rendered as plain text; the
+      Offline HN falls back to a direct fetch rendered as plain text;
+      Lobsters uses cached sanitized server responses. The
       sanitized-vs-text decision travels with the payload so `inner_html`
       only ever renders server-sanitized HTML
 - [x] Logarithmic score heat scale: `ln(1+score)/ln(1+p99)` instead of
       linear, so clustered mid-range scores stop collapsing into
       indistinguishable yellows
-- [x] Per-user news viewed-state + engagement analytics (authed web +
-      Android): rows on `/news` show seen (viewport → dimmed title) /
+- [x] Per-user news viewed-state + engagement analytics (authed browser): rows on `/news` show seen (viewport → dimmed title) /
       opened-comments (dimmer) / opened-article (`✓` between domain and
       favicon, title kept bright) states, synced cross-device via three
       tables (`post_views` per-user first-timestamps, `posts` ingestion
@@ -190,14 +179,12 @@ cross-origin (bearer instead of the cookie).
       events: `login`, `app_open` (≤1/5min/device), `search`, `reader_open`.
       Logged-off = plain rows, no tracking
 
-- [x] Forward-auth (authentik) + app authentication + greeting: with
+- [x] Forward-auth (authentik) + greeting: with
       `[forward_auth].secret` set, chaos trusts a reverse proxy that stamps
       `X-Chaos-Proxy-Secret` (anti-spoof guard) and forwards
       `X-authentik-username`/`-name`, resolving/auto-provisioning that user in
-      the `AuthUser` extractor (session token still wins). The Tauri/Android app
-      can authenticate to authentik with a per-device app-password
-      (`Authorization: Basic`, Settings → Authentik) so it reaches the server
-      behind SSO. A "Hello {name}" / "Hello stranger" greeting confirms it.
+      the `AuthUser` extractor (session token still wins).
+      A "Hello {name}" / "Hello stranger" greeting confirms it.
       Verified end-to-end (headless browser + curl-simulated proxy)
 
 ## Deferred / explicitly out of scope

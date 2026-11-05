@@ -1,5 +1,5 @@
 {
-  description = "chaos - unified entry point for local services (web + desktop)";
+  description = "chaos - browser dashboard for local services";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -17,21 +17,9 @@
     pkgs = import nixpkgs {
       inherit system;
       overlays = [rust-overlay.overlays.default];
-      # Android SDK/NDK for the mobile shell
-      config.allowUnfree = true;
-      config.android_sdk.accept_license = true;
     };
     inherit (pkgs) lib;
     chaos-monolith = pkgs.callPackage ./nix/monolith.nix {};
-
-    androidNdkVersion = "27.0.12077973";
-    androidComposition = pkgs.androidenv.composeAndroidPackages {
-      # what the tauri-generated gradle project compiles against
-      platformVersions = ["34" "36"];
-      buildToolsVersions = ["34.0.0" "35.0.0"];
-      includeNDK = true;
-      ndkVersion = androidNdkVersion;
-    };
 
     version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
 
@@ -89,21 +77,6 @@
         };
     });
 
-    # Native libraries required by Tauri v2 (webview + GTK stack).
-    tauriLibs = with pkgs; [
-      webkitgtk_4_1
-      gtk3
-      libsoup_3
-      glib
-      cairo
-      pango
-      gdk-pixbuf
-      atk
-      librsvg
-      openssl
-      dbus
-    ];
-
     chaos-server = rustPlatform.buildRustPackage {
       pname = "chaos-server";
       inherit version;
@@ -111,7 +84,6 @@
 
       cargoLock.lockFile = ./Cargo.lock;
 
-      # Only the backend: the desktop crate would drag the webkit stack in.
       cargoBuildFlags = ["-p" "chaos-server"];
       cargoTestFlags = ["-p" "chaos-server"];
 
@@ -155,9 +127,7 @@
 
     # The dist as chaos-server serves it: brotli/gzip siblings generated once
     # here so ServeDir answers compressed requests without re-compressing
-    # megabytes of wasm per request (see api/static_assets.rs). Separate from
-    # chaos-web because chaos-desktop bakes that dist into its binary and the
-    # APK, where these files would be dead weight.
+    # megabytes of wasm per request (see api/static_assets.rs).
     chaos-web-static =
       pkgs.runCommand "chaos-web-static-${version}" {
         nativeBuildInputs = [pkgs.brotli pkgs.gzip];
@@ -172,55 +142,9 @@
           gzip -9 -c "$f" > "$f.gz"
         done
       '';
-
-    # Desktop shell. generate_context! bakes the web dist into the binary at
-    # compile time, so the chaos-web output is copied in place before cargo
-    # runs. wrapGAppsHook3 wires GSettings schemas + TLS (glib-networking),
-    # without which WebKitGTK apps crash or fail https at runtime.
-    chaos-desktop = rustPlatform.buildRustPackage {
-      pname = "chaos-desktop";
-      inherit version;
-      src = self;
-
-      cargoLock.lockFile = ./Cargo.lock;
-
-      cargoBuildFlags = ["-p" "chaos-desktop"];
-      cargoTestFlags = ["-p" "chaos-desktop"];
-
-      nativeBuildInputs = with pkgs; [pkg-config wrapGAppsHook3];
-      buildInputs = tauriLibs ++ [pkgs.glib-networking];
-
-      preBuild = ''
-        rm -rf crates/chaos-web/dist
-        cp -r ${chaos-web} crates/chaos-web/dist
-      '';
-
-      postInstall = ''
-        install -Dm644 crates/chaos-desktop/icons/128x128.png \
-          $out/share/icons/hicolor/128x128/apps/chaos.png
-        install -Dm644 crates/chaos-desktop/icons/32x32.png \
-          $out/share/icons/hicolor/32x32/apps/chaos.png
-        mkdir -p $out/share/applications
-        cat > $out/share/applications/chaos.desktop <<INI
-        [Desktop Entry]
-        Name=chaos
-        Comment=Dashboard, links and calendar for local services
-        Exec=chaos-desktop
-        Icon=chaos
-        Type=Application
-        Categories=Utility;
-        MimeType=x-scheme-handler/xyz.tdbm.chaos;
-        INI
-      '';
-
-      meta = {
-        description = "chaos desktop shell (Tauri)";
-        mainProgram = "chaos-desktop";
-      };
-    };
   in {
     packages.${system} = {
-      inherit chaos-server chaos-web chaos-web-static chaos-desktop chaos-monolith;
+      inherit chaos-server chaos-web chaos-web-static chaos-monolith;
       default = chaos-server;
     };
 
@@ -233,61 +157,16 @@
       default = pkgs.mkShell {
         name = "chaos";
 
-        nativeBuildInputs = with pkgs; [
-          pkg-config
-          gobject-introspection
-        ];
-
-        buildInputs = tauriLibs;
-
         packages = with pkgs;
           [
             rustToolchain
             trunk
             binaryen # wasm-opt, used by trunk release builds
-            cargo-tauri
             cargo-nextest
             just
             chaos-monolith # page snapshots, with local SVG references preserved
           ]
           ++ lib.optional hasCargoLock wasm-bindgen-cli;
-
-        # Some webkit/nvidia combinations render a blank Tauri window without it.
-        env.WEBKIT_DISABLE_DMABUF_RENDERER = "1";
-      };
-
-      # Android build of the shell: `nix develop .#android`, then `just apk`
-      # (or `cargo tauri android build --apk --target aarch64` in
-      # crates/chaos-desktop).
-      android = pkgs.mkShell {
-        name = "chaos-android";
-
-        packages = with pkgs;
-          [
-            rustToolchain
-            trunk
-            binaryen
-            just
-            cargo-tauri
-            jdk17
-            androidComposition.androidsdk
-          ]
-          ++ lib.optional hasCargoLock wasm-bindgen-cli;
-
-        env = rec {
-          JAVA_HOME = pkgs.jdk17.home;
-          ANDROID_HOME = "${androidComposition.androidsdk}/libexec/android-sdk";
-          NDK_HOME = "${ANDROID_HOME}/ndk/${androidNdkVersion}";
-        };
-
-        # The tauri CLI insists on `rustup target add`; the rust-overlay
-        # toolchain already ships every Android target, so a no-op is honest.
-        shellHook = ''
-          shim_dir=$(mktemp -d)
-          printf '#!/bin/sh\nexit 0\n' > "$shim_dir/rustup"
-          chmod +x "$shim_dir/rustup"
-          export PATH="$shim_dir:$PATH"
-        '';
       };
     };
 

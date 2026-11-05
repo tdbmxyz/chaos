@@ -2,92 +2,76 @@
 
 ## Goal
 
-One application, two delivery modes, replacing glance as the home for local services:
+A browser dashboard for local services, link management, and a household
+calendar. Desktop and mobile use the same responsive web UI; there are no
+native desktop or phone applications.
 
-1. **Web**: `chaos-server` serves the API and the built frontend on the LAN — the browser
-   start page, exactly like glance today.
-2. **Desktop app**: the same frontend wrapped in a Tauri window, talking to the same server
-   over HTTP.
+## Crate boundaries
 
-The split into crates enforces the boundaries that make this possible:
-
-```
-                 ┌────────────────┐
-                 │  chaos-domain  │  types + API contract (no I/O)
-                 └───┬───────┬────┘
-                     │       │
-            ┌────────┴──┐ ┌──┴───────────┐
-            │chaos-client│ │ chaos-server │  axum + monitor + (soon) sqlite
-            └────────┬──┘ └──┬───────────┘
-                     │       │ serves /api/v1 + static dist
-              ┌──────┴───┐   │
-              │ chaos-ui │   │  leptos components (wasm)
-              └───┬───┬──┘   │
-                  │   │      │
-        ┌─────────┴┐ ┌┴──────┴─────┐
-        │chaos-web │ │chaos-desktop│  trunk entry / tauri shell
-        └──────────┘ └─────────────┘
+```text
+chaos-domain  ←  chaos-server
+     ↑              │
+chaos-client        │ serves /api/v1 + static dist
+     ↑              │
+ chaos-ui           │
+     ↑              │
+ chaos-web  ←──── browser
 ```
 
-## Rules that keep refactoring cheap
+- **`chaos-domain`** defines wire types and the API contract. No I/O or
+  framework dependencies; compiles for native Rust and wasm.
+- **`chaos-client`** is the typed HTTP API client, using reqwest. It also
+  implements direct browser fetches for Open-Meteo and Hacker News.
+- **`chaos-server`** is the Axum backend, with SQLite via sqlx, background
+  service monitoring, link archiving, and cached widget providers.
+- **`chaos-ui`** contains Leptos CSR pages and components. `AppConfig` provides
+  the API base and optional cross-origin session-token persistence.
+- **`chaos-web`** is the trunk entrypoint, HTML, CSS, and browser assets.
 
-- **`chaos-domain` is the contract.** Everything crossing the wire is defined there once,
-  shared by server and clients. It has no async runtime, no framework deps, and compiles
-  for wasm. Breaking changes to it are treated as API version changes.
-- **All HTTP goes through `chaos-client`.** UI code never touches `reqwest` directly.
-  When auth lands, it lands in one place.
-- **`chaos-ui` is platform-agnostic.** Platform specifics (API base URL today; settings
-  storage tomorrow) are injected by the shells (`chaos-web`, `chaos-desktop`) via
-  `AppConfig`/context. This is the same seam the future mobile shell would use.
-- **The server is the only writer.** Clients are stateless; the desktop app is a thin
-  window onto the server. (The offline story belongs to the manga app, not chaos.)
+The server is the only persistent-data writer. Device preferences, cached
+responses, and offline analytics outboxes live in browser localStorage.
 
 ## Backend
 
-- **Axum** with a versioned API under `/api/v1`. DTOs come from `chaos-domain`.
-- **Service monitor**: background tokio task polling each configured service
-  (`HealthState::Up` for any response < 500, `Degraded` on 5xx, `Down` on transport
-  errors), results kept in memory. This replaces glance's `monitor` widget.
-- **Configuration**: figment (defaults ← TOML ← `CHAOS_*` env). On NixOS, the future
-  `services.chaos` module generates the TOML from `config.modules.server.servicesList`,
-  replacing `inspirations/glance.nix`.
-- **Links (Phase 2)**: SQLite via sqlx, migrations in-repo. Schema follows
-  `chaos-domain::links` (links, collections with hierarchy, tags, archive state).
-  Archiving uses the `monolith` crate to store single-file page snapshots on disk,
-  processed by a background queue. One-time import from Linkwarden's API/export.
+- Versioned API under `/api/v1`, with shared domain DTOs.
+- Configuration uses figment: defaults ← TOML ← `CHAOS_*` environment.
+- SQLite stores links, collections, calendars, sessions, and analytics.
+  Migrations are embedded; tests use in-memory databases.
+- Service monitoring and widget fetching run server-side with bounded requests
+  and per-provider caching. Archiving invokes `monolith` in a separate process.
+- Authentication uses local password sessions (HttpOnly cookie, or an opaque
+  bearer session token for explicit cross-origin clients) and trusted
+  reverse-proxy forward-auth headers. The proxy identity is accepted only
+  with the configured shared secret. Native-app OIDC/PKCE and JWT verification
+  have been removed; browser SSO continues through the proxy.
+- API routes require authentication except health, login, and icon images;
+  a route-coverage test guards this allowlist.
 
 ## Frontend
 
-- **Leptos CSR** built by trunk. No SSR: the frontend must be a static bundle so the
-  identical artifact runs in the browser (served by axum) and inside Tauri. This also
-  keeps the server deployable without a wasm toolchain.
-- API base resolution: same-origin in the browser (trunk proxies `/api` in dev);
-  inside Tauri (origin `tauri://localhost`) it falls back to a configured server URL.
-- Delivery: the dist is precompressed at build time (`packages.chaos-web-static`
-  adds `.br`/`.gz` siblings) and served by `ServeDir::precompressed_br`, with
-  `Cache-Control: immutable` on trunk's fingerprinted filenames and `no-cache`
-  on everything else (`chaos-server/src/api/static_assets.rs`). Compressing per
-  request instead would mean re-brotli-ing megabytes of wasm on every cold load;
-  `chaos-desktop` keeps consuming the uncompressed `chaos-web` because it bakes
-  that dist into its binary.
-- The wasm is built with `[profile.wasm-release]` and a stripped `wasm-opt -Oz`
-  pass, both wired through `data-*` attributes on the `rel="rust"` link in
-  `index.html` — trunk computes the SRI integrity hash after wasm-opt, so a
-  post-build hook would break booting.
-- ECharts (~1 MB) loads on demand via `chaosLoadECharts` rather than blocking
-  every page; only the Home and Weather tabs pay for it.
+- Leptos CSR built by trunk into a static bundle; no SSR or native webview.
+- API base: optional `window.CHAOS_API_BASE` → Settings localStorage override
+  → page origin → local development fallback. Trunk proxies `/api` in dev.
+- A bounded health probe sets connectivity. Cached responses support read-only
+  offline use; the badge and browser `online` event can retry the probe.
+- Weather fetches Open-Meteo directly. Offline HN fetches Algolia directly;
+  Lobsters uses cached server responses because its API does not allow CORS.
+- Comment HTML is sanitized on the server. Direct HN responses use separate
+  cache keys and render only as escaped text; provenance stays with the data.
+- Responsive navigation and layouts serve phone and desktop browser widths.
+  Themes and weather preferences are device-local.
+- Wasm uses `[profile.wasm-release]` and `wasm-opt -Oz`. Trunk computes SRI
+  after optimization; post-build mutation would break integrity checks.
+- ECharts loads on demand only for the Home and Weather pages.
 
-## Deployment target (Phase 5)
+## Deployment
 
-- Flake gains `packages.chaos-server` (with the trunk dist baked in via `static_dir`)
-  and a NixOS module `services.chaos` replacing `services.glance` in the system config.
-- The desktop app ships via `cargo tauri build` / a flake package for Linux.
+- `packages.chaos-server`: backend binary.
+- `packages.chaos-web`: static trunk dist.
+- `packages.chaos-web-static`: dist plus build-time Brotli/gzip siblings.
+- `nixosModules.chaos`: service configuration and deployment wiring; see
+  [deployment.md](deployment.md).
 
-## Known deferred decisions
-
-- **Auth**: none for now (LAN-only, same posture as glance). The seam is axum
-  middleware + `chaos-client`; tracked in ROADMAP.
-- **Database**: sqlx+SQLite arrives with Phase 2; the monitor stays in-memory on purpose.
-- **Widgets beyond monitor/bookmarks** (weather, feeds, releases, server stats): Phase 4,
-  each as a server-side provider with caching, mirroring glance's model where the server
-  fetches and the client renders.
+Static serving uses precompressed assets, immutable caching for fingerprinted
+filenames, and revalidation for entrypoints and other unversioned files.
+Historical plans and ADRs retain the former native-app design for reference.

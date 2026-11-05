@@ -264,11 +264,6 @@ The traefik middleware in front of chaos must:
    `X-Chaos-Proxy-Secret: <secret>` (the same value as `forward_auth.secret`),
    and **strip any client-supplied copy** of that header first so a client can
    never send it themselves.
-3. **Let `Authorization` reach the authentik outpost**: traefik's forwardAuth
-   forwards all request headers by default, but if you set
-   `authRequestHeaders`, include `Authorization` — and the authentik proxy
-   provider needs **"Intercept header authentication"** enabled, or
-   app-passwords over Basic (native apps, below) won't work.
 
 The secret is what makes this safe: chaos trusts the forwarded username **only**
 when the secret header matches. A request that lacks it (or carries the wrong
@@ -276,19 +271,14 @@ value) is never trusted — so a **direct/tailnet route** that bypasses traefik
 stays safe: without the secret header chaos falls back to its own
 cookie/Bearer login, and a direct client cannot forge an identity.
 
-Native apps (Android/desktop) can't follow authentik's HTML login redirect, so
-they authenticate to authentik with an **app-password over HTTP Basic** (create
-an app password in authentik; see the app's Settings → Authentik section). That
-keeps the `Authorization` header for authentik and leaves chaos's own session
-untouched. Direct chaos login (no forward-auth) keeps working exactly as before.
-Note the app-password **replaces the chaos session** on that app's connections:
-a device that reaches the server directly (tailnet/LAN, no authentik in the
-path) should leave Settings → Authentik empty, or the app will look signed out.
+Desktop and mobile both use the browser endpoint. Browser SSO is handled
+by authentik's forward-auth session; direct LAN/tailnet access can use chaos's
+own login and HttpOnly session cookie.
 
 ## Breaking change: weather proxy removed
 
-`GET /api/v1/weather` is gone in this release — every client (web, desktop,
-Android) now geocodes and fetches forecasts directly from Open-Meteo
+`GET /api/v1/weather` is gone — the browser now geocodes and fetches
+forecasts directly from Open-Meteo
 instead of going through the server. The client and server ship together
 (same repo, same release), so there's no compatibility window to worry
 about: deploy both at once and there's nothing else to do — the existing
@@ -313,38 +303,28 @@ Last 24h / 48h / Week tabs:
 The News page and in-app comment reader talk to the same two hosts (so a
 host-level egress filter needs no change), on additional paths: the reader
 fetches per-post threads from `hn.algolia.com/api/v1/items/{id}` and
-`lobste.rs/s/{id}.json`. The Tauri capability already allows both hosts via
-wildcards.
+`lobste.rs/s/{id}.json` through the server. Offline HN can fetch directly
+from the browser; Lobsters lists and threads use cached server responses
+because lobste.rs does not allow CORS.
 
-## Desktop and phone apps
+## Browser-only delivery
 
-The web UI served by the server is the primary interface; the Tauri shells
-wrap the same bundle for app-like use:
+The native desktop and phone apps, their build targets, and their OIDC/PKCE
+sign-in have been removed. Deploy `chaos-server` and the web assets as usual;
+the responsive browser UI works on both phone and desktop.
 
-- **Desktop (NixOS)**: `nix build .#chaos-desktop` (or add the package to
-  the system flake) — installs a desktop entry. Point it at the server
-  once with `echo http://zeus:4600 > ~/.config/chaos/server` (or the
-  `CHAOS_SERVER` env var); without it the app shows a connect screen and
-  remembers the address.
-- **Desktop (other Linux)**: `just bundle` produces a .deb under
-  `target/release/bundle/deb/`.
-- **Android**: `just apk` (it enters the `.#android` dev shell itself —
-  no Android Studio / ~/Android setup needed); the signed APK lands
-  under `crates/chaos-desktop/gen/android/app/build/outputs/apk/`.
-  On first launch the connect screen asks for the server address. Release
-  signing reads `gen/android/keystore.properties` (see the .sample; the
-  real keystore lives in `~/.config/chaos/`).
+The Zeus host configuration in `/etc/nixos` removes the old `[oidc]` and
+legacy `apps`/`android_package` settings, native-app CORS middleware, and
+bearer/health/icon forward-auth bypass routes. The Athena desktop package,
+Home Manager module, and enable option are removed too. Browser requests
+retain the normal forward-auth middleware and shared-secret header.
 
-Shells talk to the server cross-origin, so they sign in with a bearer
-token stored on the device instead of the browser cookie; nothing needs
-configuring server-side (CORS is already open — LAN posture).
-
-The desktop and Android shells bundle `tauri-plugin-http` with a
-capability allowlist scoped to the hosts the dashboard fetches directly
-when offline or for weather (hn.algolia.com, lobste.rs, Open-Meteo —
-hn.algolia.com replaced firebaseio with the tabs work). Nothing to
-configure, but the allowlist is baked into the app: rebuild the Android
-APK (`just apk`) and desktop bundles to pick up the new scope.
+The Authentik blueprint explicitly marks the retired Chaos OAuth application
+and provider `state: absent` (application first), so reconciliation deletes
+existing database objects rather than merely stopping their management. The
+shared domain-level browser SSO provider and Yomu integration are unchanged.
+These host changes take effect on the next NixOS rebuild/blueprint reconciliation;
+editing the configuration alone does not change running services.
 
 ## Migrating Linkwarden data
 
@@ -359,31 +339,3 @@ The export file comes from Linkwarden → Settings → Data → Export. Links ar
 queued for archiving automatically when `[archive] auto` is on. The optional
 `owner-username` attributes every imported link to that user (`created_by`);
 attribution only — every user can still see and edit any link.
-
-## App authentication (OIDC)
-
-The mobile and desktop apps authenticate with an authentik-issued OIDC access
-token rather than the browser's forward-auth session. They have to: the
-outpost's session cookie is `SameSite=Lax` and the apps' origin is
-`tauri://localhost`, so a session established in a browser never rides along on
-the apps' cross-origin API calls. Worse, an unauthenticated call can't even
-report the problem — the WebView follows the outpost's 302 to `auth.<domain>`,
-which sends no CORS header for the app's origin, so the call fails as a network
-error and the app can only say "cannot reach the server".
-
-Server side, `[oidc]` (issuer + client_id) turns on bearer verification. Tokens
-are verified locally against the issuer's JWKS, so the authentik provider
-**must** use an RSA signing key: proxy providers sign HS256 and publish an empty
-`jwks/` (verified on this deployment — `/application/o/chaos/jwks/` returns
-`{}`), which would verify nothing.
-
-Because the apps' requests bypass the forward-auth middleware in traefik, every
-API route requires authentication in chaos itself. `/health` and `/auth/login`
-are the only exceptions — `/health` because the apps read the auth
-advertisement from it before they hold any token — and a route-coverage test
-(`every_route_requires_auth_except_the_allowlist`) fails CI if a new route is
-added without an identity check.
-
-Deploy the server before the traefik change: chaos requiring auth on its own is
-inert for existing clients, whereas letting bearer requests past forward-auth
-before the API authenticates them would briefly expose it.

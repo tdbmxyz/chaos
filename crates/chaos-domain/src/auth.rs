@@ -1,10 +1,9 @@
 //! Users and sessions.
 //!
-//! Authentication is deliberately split in two layers: *identity* (how a
-//! user proves who they are — local password today, authentik/OIDC later)
-//! and *session* (an opaque bearer token / cookie both web and native
-//! clients present on every request). Adding an external IdP later only
-//! adds a new way to obtain a session; everything downstream is unchanged.
+//! Local password login issues an opaque session token, used as a browser
+//! cookie or a bearer header for explicit cross-origin API clients. Trusted
+//! reverse-proxy authentication resolves the same user type without creating
+//! a local session.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

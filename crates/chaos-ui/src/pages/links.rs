@@ -551,7 +551,7 @@ fn AddLinkForm(
         }
     };
 
-    // Shared into the app (Android share sheet → /links?add=<text>): pull
+    // Quick-add entry (/links?add=<text>): pull
     // the first URL out of the payload and save it right away; anything
     // without a recognizable URL only prefills the field for manual fixing.
     let shared = leptos_router::hooks::use_query_map()
