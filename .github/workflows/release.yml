@@ -1,8 +1,6 @@
 # Release: runs when a semver tag (v*) is pushed from main and publishes the
 # GitHub Release and generated notes. NixOS deployments consume the tagged
 # flake directly, so CI does not build or upload duplicate server/web archives.
-# The signed Android APK can still be attached locally with `just release-apk`;
-# its keystore never leaves the development machine.
 name: release
 
 on:

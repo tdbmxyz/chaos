@@ -240,7 +240,6 @@ mod tests {
                     title: "Denpa News".into(),
                     url: "https://denpa.example.com".parse().unwrap(),
                     icon: None,
-                    android_package: None,
                 }],
             }],
             ..Config::default()

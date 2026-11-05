@@ -1274,37 +1274,11 @@ li.post-row.seen .post-title {
   margin: 0;
 }
 
-/* ---- server gate (shell connect screen) ---- */
+/* ---- initial health probe ---- */
 
 .gate-msg {
   text-align: center;
   padding-top: 4rem;
-}
-
-.server-gate {
-  margin: 4rem auto 0;
-  width: min(26rem, calc(100% - 2rem));
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-}
-
-.server-gate h2 {
-  margin: 0;
-}
-
-.server-gate p {
-  margin: 0;
-}
-
-.gate-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
 }
 
 /* ---- offline badge (fixed retry pill, shown whenever not Online) ---- */
@@ -1792,8 +1766,7 @@ body[data-theme="glass"] {
 
 body[data-theme="glass"] .service-card,
 body[data-theme="glass"] .weather-now,
-body[data-theme="glass"] .login-card,
-body[data-theme="glass"] .server-gate {
+body[data-theme="glass"] .login-card {
   backdrop-filter: blur(12px);
   border-radius: 0.9rem;
 }

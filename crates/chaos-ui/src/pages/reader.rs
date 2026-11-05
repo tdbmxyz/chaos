@@ -1,8 +1,8 @@
 //! The in-app comment reader (`/news/:source/:id`): a story header plus a
 //! collapsible comment tree. Online it renders the server-sanitized HTML
 //! thread (`client.post_thread`); offline it fetches the provider directly
-//! (HN's Algolia item API in browser/shell alike, lobste.rs through the shell
-//! HTTP plugin) and renders PLAIN TEXT.
+//! (HN's Algolia item API) and renders PLAIN TEXT. Lobsters uses the cached
+//! server-sanitized thread offline because its API does not allow CORS.
 //!
 //! SECURITY: `inner_html` renders a body ONLY when it is server-sanitized. That
 //! provenance is decided at fetch time and travels WITH the loaded thread (the
@@ -53,7 +53,7 @@ async fn load_thread(
     // `bool` = SANITIZED: true only for the server path, so the caller's
     // `inner_html` decision travels with the data instead of being re-read from
     // the live `conn` signal (which can desync from a stale resource value).
-    if conn.get_untracked() != Connectivity::Online {
+    if source == Source::HackerNews && conn.get_untracked() != Connectivity::Online {
         return thread_direct(source, id)
             .await
             .map(|thread| (thread, false));
@@ -70,29 +70,13 @@ async fn load_thread(
 /// text, cached under a key distinct from the server path's.
 async fn thread_direct(source: Source, id: &str) -> Result<PostThread, String> {
     let key = direct_thread_key(source, id);
-    let fetched = match source {
-        Source::HackerNews => {
-            chaos_client::posts::hacker_news_thread(&crate::weather_fetch::http(), id).await
-        }
-        Source::Lobsters => lobsters_thread_direct(id).await,
-    };
+    let fetched = chaos_client::posts::hacker_news_thread(&crate::weather_fetch::http(), id).await;
     match fetched {
         Ok(thread) => {
             crate::offline::cache_put(&key, &thread);
             Ok(thread)
         }
         Err(err) => crate::offline::cache_get::<PostThread>(&key).ok_or(err),
-    }
-}
-
-/// lobste.rs sends no CORS headers, so the story JSON must come through the
-/// shell's HTTP plugin (unavailable in a plain browser).
-async fn lobsters_thread_direct(id: &str) -> Result<PostThread, String> {
-    use chaos_client::posts;
-    match crate::tauri_http::fetch_text(&posts::lobsters_thread_url(id)).await {
-        Some(Ok(json)) => posts::parse_lobsters_thread(&json),
-        Some(Err(err)) => Err(err),
-        None => Err("lobsters needs the app shell offline".into()),
     }
 }
 

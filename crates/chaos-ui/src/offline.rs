@@ -25,7 +25,6 @@ pub(crate) fn use_connectivity() -> RwSignal<Connectivity> {
 }
 
 const CACHE_PREFIX: &str = "chaos-cache:";
-const SERVERS_SEEN_KEY: &str = "chaos-servers-seen";
 
 pub(crate) fn cache_put<T: Serialize>(key: &str, value: &T) {
     if let (Some(storage), Ok(json)) = (crate::local_storage(), serde_json::to_string(value)) {
@@ -109,45 +108,8 @@ fn is_connectivity_error(err: &ClientError) -> bool {
     matches!(err, ClientError::Transport(_))
 }
 
-// ---- "server seen" gate memory ----
-// Distinguishes "misconfigured / never reached" (connect form) from "known
-// server that is just offline right now" (cached UI + badge).
-
-fn seen_list(raw: &str) -> Vec<String> {
-    raw.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect()
-}
-
-pub(crate) fn server_seen(base: &str) -> bool {
-    crate::local_storage()
-        .and_then(|s| s.get_item(SERVERS_SEEN_KEY).ok().flatten())
-        .is_some_and(|raw| seen_list(&raw).iter().any(|b| b == base))
-}
-
-pub(crate) fn mark_server_seen(base: &str) {
-    let Some(storage) = crate::local_storage() else {
-        return;
-    };
-    let raw = storage
-        .get_item(SERVERS_SEEN_KEY)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let mut list = seen_list(&raw);
-    if !list.iter().any(|b| b == base) {
-        list.push(base.to_string());
-        let _ = storage.set_item(SERVERS_SEEN_KEY, &list.join("\n"));
-    }
-}
-
 /// One bounded health probe; the only code path that can set `Online`.
-/// Returns the server's response when it answered healthy (an Api-error
-/// health response also counts as offline), so callers that need more than
-/// "is it up" — the gate reads the auth advertisement — get the real thing
-/// rather than reconstructing one.
+/// Returns the healthy response, or `None` if the server cannot be reached.
 pub(crate) async fn probe(
     client: &ChaosClient,
     conn: RwSignal<Connectivity>,
@@ -160,14 +122,6 @@ pub(crate) async fn probe(
             // (where no health response exists) can restore it — see the
             // seen-server branch in ServerGate.
             cache_put("server-fahrenheit", &health.fahrenheit);
-            // The gate needs the auth advertisement, and an offline boot needs
-            // the last-known one so it doesn't forget the server wants OIDC.
-            cache_put("server-auth", &health.auth);
-            // The advertisement signal is published by `ServerGate` from the
-            // response this returns, not from here: `probe` runs inside an
-            // already-awaited task, where `use_context` finds no owner and a
-            // set through it would silently do nothing.
-            mark_server_seen(client.base().as_str());
             conn.set(Connectivity::Online);
             // Reaching Online from a non-Online state (boot or reconnect) is
             // the moment to drain any queued analytics — best-effort.
@@ -246,12 +200,5 @@ mod tests {
         assert!(!is_connectivity_error(&ClientError::Decode(
             "bad json".into()
         )));
-    }
-
-    #[test]
-    fn seen_list_parses_and_ignores_blanks() {
-        let raw = "http://zeus:4600/\n\n  http://other:4600/  \n";
-        assert_eq!(seen_list(raw), ["http://zeus:4600/", "http://other:4600/"]);
-        assert!(seen_list("").is_empty());
     }
 }

@@ -54,9 +54,6 @@ pub struct Config {
     /// Trust an authenticating reverse proxy (authentik via traefik). Feature
     /// is off unless `secret` is set.
     pub forward_auth: ForwardAuthConfig,
-    /// OIDC bearer-token auth for the apps; see OidcConfig.
-    #[serde(default)]
-    pub oidc: OidcConfig,
 }
 
 /// Trust an authenticating reverse proxy that forwards the user's identity in
@@ -97,37 +94,6 @@ impl ForwardAuthConfig {
         // An empty secret is treated as disabled — never trust a proxy that
         // stamps a blank secret.
         self.secret.as_deref().is_some_and(|s| !s.is_empty())
-    }
-}
-
-/// OIDC (authentik) access tokens presented by the apps as
-/// `Authorization: Bearer`. Off unless both values are set — a half-configured
-/// issuer must not silently accept anything.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
-pub struct OidcConfig {
-    /// Issuer URL, exactly as it appears in the `iss` claim — authentik's is
-    /// `https://<auth host>/application/o/<app slug>/` (trailing slash).
-    /// Discovery is this URL + `.well-known/openid-configuration`.
-    pub issuer: Option<String>,
-    /// The public client's id; checked against the token's `aud`.
-    pub client_id: Option<String>,
-}
-
-impl OidcConfig {
-    /// Whether OIDC bearer-token auth is enabled (issuer and client id set).
-    pub fn enabled(&self) -> bool {
-        self.issuer.as_ref().is_some_and(|s| !s.trim().is_empty())
-            && self
-                .client_id
-                .as_ref()
-                .is_some_and(|s| !s.trim().is_empty())
-    }
-
-    /// The OIDC discovery document URL for this issuer.
-    pub fn discovery_url(&self) -> Option<String> {
-        let issuer = self.issuer.as_ref()?.trim_end_matches('/');
-        Some(format!("{issuer}/.well-known/openid-configuration"))
     }
 }
 
@@ -286,7 +252,6 @@ impl Default for Config {
             secure_cookies: false,
             notifications: NotificationsConfig::default(),
             forward_auth: ForwardAuthConfig::default(),
-            oidc: OidcConfig::default(),
         }
     }
 }
@@ -314,10 +279,8 @@ pub fn load() -> anyhow::Result<Config> {
 mod tests {
     use figment::providers::Format;
 
-    use super::OidcConfig;
-
     #[test]
-    fn legacy_apps_section_is_ignored_and_bookmark_android_package_parses() {
+    fn legacy_native_app_config_is_ignored() {
         let toml = r#"
             [[apps]]
             id = "yomu"
@@ -330,6 +293,10 @@ mod tests {
             title = "Yomu"
             url = "http://zeus:4700"
             android_package = "xyz.tdbm.yomu"
+
+            [oidc]
+            issuer = "https://auth.example/application/o/chaos-app/"
+            client_id = "retired-native-client"
         "#;
         let config: super::Config = figment::Figment::from(
             figment::providers::Serialized::defaults(super::Config::default()),
@@ -337,9 +304,17 @@ mod tests {
         .merge(figment::providers::Toml::string(toml))
         .extract()
         .expect("legacy apps key must not break config parsing");
+        assert_eq!(config.bookmarks[0].links[0].title, "Yomu");
         assert_eq!(
-            config.bookmarks[0].links[0].android_package.as_deref(),
-            Some("xyz.tdbm.yomu")
+            config.bookmarks[0].links[0].url.as_str(),
+            "http://zeus:4700/"
+        );
+        let json = serde_json::to_value(config).unwrap();
+        assert!(json.get("oidc").is_none());
+        assert!(
+            json["bookmarks"][0]["links"][0]
+                .get("android_package")
+                .is_none()
         );
     }
 
@@ -433,23 +408,5 @@ mod tests {
             !super::Config::default().backup.enabled,
             "backups are opt-in"
         );
-    }
-
-    #[test]
-    fn oidc_is_disabled_until_both_issuer_and_client_id_are_set() {
-        let none = OidcConfig::default();
-        assert!(!none.enabled());
-
-        let half = OidcConfig {
-            issuer: Some("https://auth.example/application/o/chaos-app/".into()),
-            ..Default::default()
-        };
-        assert!(!half.enabled());
-
-        let full = OidcConfig {
-            issuer: Some("https://auth.example/application/o/chaos-app/".into()),
-            client_id: Some("abc123".into()),
-        };
-        assert!(full.enabled());
     }
 }

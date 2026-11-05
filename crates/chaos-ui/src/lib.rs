@@ -1,9 +1,7 @@
-//! Shared Leptos UI: the same `App` component is mounted by the web bundle
-//! (trunk) and rendered inside the Tauri webview. Anything platform-specific
-//! (like where the API lives) is injected from the outside via [`AppConfig`].
+//! Browser UI, mounted by the trunk web bundle. API configuration is
+//! injected via [`AppConfig`].
 
 mod analytics;
-pub(crate) mod auth;
 mod components;
 mod date_util;
 mod echarts;
@@ -11,7 +9,6 @@ mod hooks;
 pub(crate) mod offline;
 mod pages;
 mod search;
-mod tauri_http;
 mod weather_fetch;
 
 use chaos_client::ChaosClient;
@@ -27,7 +24,7 @@ use url::Url;
 #[derive(Clone)]
 pub struct AppConfig {
     pub api_base: Url,
-    /// The API is cross-origin (Tauri shell or explicit override): the
+    /// The API is cross-origin (an explicit override): the
     /// HttpOnly session cookie won't flow there, so the session token from
     /// `login` is kept in localStorage and sent as a bearer header instead.
     pub persist_token: bool,
@@ -330,9 +327,8 @@ pub(crate) fn set_pref(key: &str, value: &str) {
     }
 }
 
-/// The per-device server override (settings page / connect screen). `None`
-/// means the platform default: the page origin on web, the bundled default
-/// in the shells — see chaos-web's `resolve()`.
+/// The per-device server override (Settings). `None`
+/// means the page origin — see chaos-web's `resolve()`.
 pub(crate) fn api_base_override() -> Option<String> {
     local_storage()?.get_item(API_BASE_KEY).ok()?
 }
@@ -383,93 +379,24 @@ pub(crate) fn use_news_cache() -> NewsCache {
 #[derive(Clone)]
 struct SharedClient(ChaosClient);
 
-/// Ask the Android shell to launch a companion app natively. True only when
-/// the app is installed and claimed the tap; false (not installed, or no
-/// bridge) means the caller should let the URL open normally.
-pub(crate) fn open_app_native(package: &str) -> bool {
-    use leptos::wasm_bindgen::JsCast;
-    let Some(window) = web_sys::window() else {
-        return false;
-    };
-    if let Ok(bridge) = js_sys::Reflect::get(&window, &"ChaosAndroid".into())
-        && !bridge.is_undefined()
-        && let Ok(f) = js_sys::Reflect::get(&bridge, &"openApp".into())
-        && let Ok(f) = f.dyn_into::<js_sys::Function>()
-    {
-        return f
-            .call1(&bridge, &package.into())
-            .ok()
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-    }
-    false
-}
-
-/// Open a URL outside the webview. In the Android shell that is a VIEW
-/// intent (an installed app that registered the URL claims it, the default
-/// browser otherwise); in the desktop shell it is the `open_external`
-/// command (xdg-open and friends). Returns false in a plain browser, where
-/// the anchor's own `target="_blank"` is already the right behavior.
-pub(crate) fn open_external(url: &str) -> bool {
-    use leptos::wasm_bindgen::JsCast;
-    let Some(window) = web_sys::window() else {
-        return false;
-    };
-    if let Ok(bridge) = js_sys::Reflect::get(&window, &"ChaosAndroid".into())
-        && !bridge.is_undefined()
-        && let Ok(f) = js_sys::Reflect::get(&bridge, &"openUrl".into())
-        && let Ok(f) = f.dyn_into::<js_sys::Function>()
-    {
-        let _ = f.call1(&bridge, &url.into());
-        return true;
-    }
-    if let Ok(tauri) = js_sys::Reflect::get(&window, &"__TAURI__".into())
-        && !tauri.is_undefined()
-        && let Ok(core) = js_sys::Reflect::get(&tauri, &"core".into())
-        && let Ok(invoke) = js_sys::Reflect::get(&core, &"invoke".into())
-        && let Ok(invoke) = invoke.dyn_into::<js_sys::Function>()
-    {
-        let args = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&args, &"url".into(), &url.into());
-        let _ = invoke.call2(&core, &"open_external".into(), &args);
-        return true;
-    }
-    false
-}
-
-/// True inside the Android shell (it injects `window.CHAOS_PLATFORM`).
-pub(crate) fn on_android() -> bool {
-    web_sys::window()
-        .and_then(|w| js_sys::Reflect::get(&w, &"CHAOS_PLATFORM".into()).ok())
-        .and_then(|v| v.as_string())
-        .is_some_and(|p| p == "android")
-}
-
-/// The token a request should carry right now: the OIDC access token when a
-/// shell holds one, otherwise chaos's own session token. Rebuilding a client
-/// with this is how a detached task picks up a token that arrived after the
-/// client was cloned — the boot identity call did not, which is why a
-/// freshly signed-in app used to greet its owner as a stranger.
+/// The current session token for detached tasks that cannot read context.
 pub(crate) fn current_token() -> Option<String> {
     // No `persist_token()` here: it reads reactive context, and this is called
     // from detached tasks where there is none, so the fallback would silently
     // vanish. Reading the stored token unconditionally is equivalent — login
     // only writes it when `persist_token()` was true in the first place.
-    crate::auth::access_token().or_else(stored_token)
+    stored_token()
 }
 
 pub fn use_client() -> ChaosClient {
-    let config = use_context::<AppConfig>().expect("AppConfig provided by the shell");
+    let config = use_context::<AppConfig>().expect("AppConfig provided by App");
     // The token is read per call, not per app: it changes on login/logout
     // and callers must always see the current one (matches the previous
     // behavior, where the whole client was rebuilt per call).
-    // An OIDC access token (shells, signed in through authentik) wins over
-    // chaos's own session token; the server accepts either.
-    let token =
-        crate::auth::access_token().or_else(|| config.persist_token.then(stored_token).flatten());
+    let token = config.persist_token.then(stored_token).flatten();
     match use_context::<SharedClient>() {
         Some(SharedClient(client)) => client.with_token(token),
-        // Components rendered outside App (tests, shells) fall back to a
+        // Components rendered outside App (tests) fall back to a
         // one-off client. Logged so a refactor that loses the context shows
         // up instead of silently rebuilding a client per call.
         None => {
@@ -492,7 +419,6 @@ pub(crate) fn use_logout() -> Callback<leptos::ev::MouseEvent> {
         let client = client.clone();
         spawn_local(async move {
             let _ = client.logout().await;
-            crate::auth::sign_out().await;
             store_token(None);
             offline::cache_clear();
             session.0.set(None);
@@ -512,9 +438,12 @@ const NAV_PRIMARY: [(&str, &str, &str); 5] = [
 
 #[component]
 pub fn App(config: AppConfig) -> impl IntoView {
-    // Migration: the app-password path was replaced by OIDC sign-in. Drop the
-    // stored credentials rather than leaving a password in localStorage.
-    for stale in ["chaos-authentik-user", "chaos-authentik-token"] {
+    // Clear credentials left by retired native-app authentication.
+    for stale in [
+        "chaos-authentik-user",
+        "chaos-authentik-token",
+        "chaos-oidc-access",
+    ] {
         set_pref(stale, "");
     }
 
@@ -528,13 +457,6 @@ pub fn App(config: AppConfig) -> impl IntoView {
     // reachable", so it triggers a probe rather than trusting it).
     let conn = RwSignal::new(offline::Connectivity::Checking);
     provide_context(conn);
-
-    // The server's advertised auth methods. Seeded from the last successful
-    // probe so an offline boot still remembers that this server wants OIDC.
-    let advertisement = RwSignal::new(
-        offline::cache_get::<Option<chaos_domain::api::AuthAdvertisement>>("server-auth").flatten(),
-    );
-    provide_context(advertisement);
 
     let client_for_online = use_client();
     let online_probe = window_event_listener(leptos::ev::online, move |_| {
@@ -579,13 +501,6 @@ pub fn App(config: AppConfig) -> impl IntoView {
         }
         let client = client.clone();
         spawn_local(async move {
-            // Ask the shell for a token before identifying: this client was
-            // cloned at startup, when a shell that had just signed in hadn't
-            // mirrored its token yet. Behind an authenticating proxy an
-            // anonymous `me()` isn't a 401 we could recover from — it's the
-            // proxy's redirect to a login page on another origin, which the
-            // webview can only report as a transport failure.
-            auth::sync_access_token().await;
             let client = client.with_token(current_token());
             match client.me().await {
                 Ok(user) => {
@@ -604,24 +519,8 @@ pub fn App(config: AppConfig) -> impl IntoView {
                         session.0.set(Some(user));
                     }
                 }
-                // The server answered "no session" (expired/revoked): try one
-                // token refresh before concluding the user is signed out — an
-                // access token that expired while the app slept is normal.
+                // An expired or revoked session must not survive in the cache.
                 Err(chaos_client::ClientError::Api { status: 401, .. }) => {
-                    // Rebuilt rather than `use_client()`: this runs detached
-                    // from the reactive owner, and the point is to carry the
-                    // token the refresh just mirrored.
-                    if crate::auth::sync_access_token().await
-                        && let Ok(user) = client
-                            .clone()
-                            .with_token(crate::auth::access_token())
-                            .me()
-                            .await
-                    {
-                        offline::cache_put("me", &user);
-                        session.0.set(Some(user));
-                        return;
-                    }
                     offline::cache_remove("me");
                     session.0.set(None);
                 }
@@ -640,8 +539,7 @@ pub fn App(config: AppConfig) -> impl IntoView {
     Effect::new(move |_| apply_theme(&theme.0.get()));
 
     // Global quick-search: Ctrl-K (Cmd-K on mac) toggles the overlay from
-    // anywhere. Window-level listener, removed on unmount like the click
-    // interceptor below.
+    // anywhere. Window-level listener, removed on unmount.
     let search_open = RwSignal::new(false);
     let search_keys = window_event_listener(leptos::ev::keydown, move |ev| {
         if (ev.ctrl_key() || ev.meta_key()) && ev.key().eq_ignore_ascii_case("k") {
@@ -651,39 +549,11 @@ pub fn App(config: AppConfig) -> impl IntoView {
     });
     on_cleanup(move || search_keys.remove());
 
-    // Inside a shell, clicking an outbound link must not navigate the
-    // webview: one document-level interceptor reroutes every external
-    // http(s) anchor through the system opener (covers all target="_blank"
-    // links at once). Same-origin anchors — the SPA's own routes — pass
-    // through untouched, as does everything in a plain browser.
-    let external_clicks = window_event_listener(leptos::ev::click, |ev| {
-        use leptos::wasm_bindgen::JsCast;
-        let Some(target) = ev.target() else { return };
-        let Ok(el) = target.dyn_into::<web_sys::Element>() else {
-            return;
-        };
-        let Ok(Some(anchor)) = el.closest("a[href]") else {
-            return;
-        };
-        let Ok(anchor) = anchor.dyn_into::<web_sys::HtmlAnchorElement>() else {
-            return;
-        };
-        let href = anchor.href();
-        let origin = window().location().origin().unwrap_or_default();
-        let external = (href.starts_with("http://") || href.starts_with("https://"))
-            && !href.starts_with(&origin);
-        if external && !ev.default_prevented() && open_external(&href) {
-            ev.prevent_default();
-        }
-    });
-    on_cleanup(move || external_clicks.remove());
-
     let logout = use_logout();
 
     view! {
         <ServerGate>
         <Router>
-            <ShareRedirect/>
             <search::QuickSearch open=search_open/>
             <offline::OfflineBadge/>
             <nav class="topbar">
@@ -773,276 +643,26 @@ pub fn App(config: AppConfig) -> impl IntoView {
     }
 }
 
-/// Android share-sheet entry: the shell cold-loads `/?share=<text>` (only
-/// the root path is guaranteed to resolve in Tauri's asset protocol), and
-/// this forwards the payload to the links quick-add.
-#[component]
-fn ShareRedirect() -> impl IntoView {
-    let navigate = leptos_router::hooks::use_navigate();
-    let shared = web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .and_then(|search| {
-            url::form_urlencoded::parse(search.trim_start_matches('?').as_bytes())
-                .find(|(k, _)| k == "share")
-                .map(|(_, v)| v.into_owned())
-        });
-    if let Some(text) = shared {
-        let target = format!(
-            "/links?add={}",
-            url::form_urlencoded::byte_serialize(text.as_bytes()).collect::<String>()
-        );
-        // Deferred: navigating during the initial render is a no-op.
-        leptos::task::spawn_local(async move {
-            navigate(
-                &target,
-                leptos_router::NavigateOptions {
-                    replace: true,
-                    ..Default::default()
-                },
-            );
-        });
-    }
-}
-
-/// One step of the post-sign-in poll: the shell completes the code exchange
-/// when authentik redirects back, so the UI waits for a token to appear.
-/// Written as a `set_timeout` chain rather than an async sleep because the
-/// crate has no timer future (see `offline.rs`, `analytics.rs`).
-/// Re-run `me()` and update the session. Split out because acquiring a token is
-/// a second, independent reason to revalidate: the connectivity effect only
-/// fires on an Offline→Online *transition*, and by the time sign-in completes
-/// the app has long been online, so nothing would otherwise refresh the
-/// identity and the user stays "stranger" until the next cold start.
-/// Re-identify once a token has arrived.
-///
-/// The client is passed in rather than fetched with `use_client()`: every
-/// caller is a detached task (a `spawn_local` that has already awaited), and
-/// there is no reactive owner there — `use_client()` would panic on its
-/// `expect("AppConfig provided by the shell")` and take the task with it,
-/// which is exactly how a freshly signed-in app kept greeting its owner as a
-/// stranger. Signals are `Copy` and owner-independent, so `session` is fine.
-async fn revalidate_session(session: Session, client: ChaosClient) {
-    if let Ok(user) = client.with_token(current_token()).me().await {
-        offline::cache_put("me", &user);
-        session.0.set(Some(user));
-    }
-}
-
-fn poll_for_token(
-    left: u32,
-    waiting: RwSignal<bool>,
-    gate: RwSignal<auth::GateState>,
-    session: Session,
-    status: RwSignal<Option<String>>,
-    client: ChaosClient,
-) {
-    if left == 0 {
-        waiting.set(false);
-        return;
-    }
-    set_timeout(
-        move || {
-            spawn_local(async move {
-                let (has_token, latest) = auth::sync_status().await;
-                status.set(latest);
-                if has_token {
-                    waiting.set(false);
-                    gate.set(auth::GateState::Ready);
-                    // The token only just arrived, so the identity fetched at
-                    // boot was anonymous. Redo it now that we can authorize.
-                    revalidate_session(session, client).await;
-                } else {
-                    poll_for_token(left - 1, waiting, gate, session, status, client.clone());
-                }
-            });
-        },
-        std::time::Duration::from_millis(1_500),
-    );
-}
-
-/// Blocks the app behind a health check so a shell pointing at the wrong
-/// place gets a "connect to your server" form instead of a wall of failed
-/// requests. The chosen URL is the `chaos-api-base` localStorage override
-/// that the web entrypoint's API-base resolution already honors.
+/// Probe before mounting resources; known offline servers can use cached data.
 #[component]
 fn ServerGate(children: ChildrenFn) -> impl IntoView {
-    let gate = RwSignal::new(auth::GateState::Checking);
+    let ready = RwSignal::new(false);
     let client = use_client();
-    // Every task below needs a client of its own: they all run detached, where
-    // `use_client()` would panic for want of a reactive owner. Parked in a
-    // `StoredValue` (which is `Copy`) so the handlers stay `Copy` too — the
-    // view moves them on every render.
-    let shared_client = StoredValue::new_local(client.clone());
     let conn = offline::use_connectivity();
-    let seen = offline::server_seen(use_client().base().as_str());
-    let advertisement = auth::advertisement();
-    // "Waiting for the browser to come back" — drives the polling UI.
-    let waiting = RwSignal::new(false);
-    // What the shell says the sign-in flow last did, shown under the button.
-    let sign_in_status = RwSignal::new(None::<String>);
-    let session = use_session();
-
-    // Returning from the browser is the moment the token exists, and it is a
-    // more reliable signal than a timer: Android suspends webview timers for a
-    // backgrounded app, and may kill the process outright while the browser is
-    // in front — in which case the poll loop that started the sign-in is gone
-    // and only this path (on the fresh webview) can notice.
-    // Cloned per firing: the listener runs many times, and `revalidate_session`
-    // needs a client it can own (it can't ask for one — there is no reactive
-    // owner inside a spawned task).
-    let resumed = window_event_listener(leptos::ev::visibilitychange, move |_| {
-        let visible = web_sys::window()
-            .and_then(|w| w.document())
-            .is_some_and(|d| !d.hidden());
-        if !visible || !auth::shell_available() {
-            return;
-        }
-        let client = shared_client.get_value();
-        spawn_local(async move {
-            let (has_token, status) = auth::sync_status().await;
-            sign_in_status.set(status);
-            if has_token && gate.get_untracked() != auth::GateState::Ready {
-                waiting.set(false);
-                gate.set(auth::GateState::Ready);
-                revalidate_session(session, client).await;
-            }
-        });
-    });
-    on_cleanup(move || resumed.remove());
-
     spawn_local(async move {
-        // A shell may already hold a token from a previous run; mirror it
-        // before the first gate decision so a signed-in app never flashes the
-        // sign-in screen. Outside a shell (plain browser) there is nothing to
-        // sign into from here — the page rides the browser's own authentik
-        // session — so the gate must not demand a token it can't obtain.
-        let has_token = !auth::shell_available() || auth::sync_access_token().await;
-        // `probe` handles set_server_fahrenheit, mark_server_seen and the
-        // auth advertisement.
-        let health = offline::probe(&client, conn).await;
-        if health.is_none() && seen {
-            // Known server, just offline right now: the probe couldn't
-            // deliver the server's °F/°C default, so restore the one it
-            // reported last time. `cache_get` wraps the stored value in its
-            // own Option (Option<Option<bool>>: outer = "was it cached",
-            // inner = the server's own answer); flatten collapses "never
-            // cached" and "server said None" — both mean locale fallback.
+        if offline::probe(&client, conn).await.is_none() {
             set_server_fahrenheit(
                 offline::cache_get::<Option<bool>>("server-fahrenheit").flatten(),
             );
         }
-        // Publish the advertisement from here, not from `probe`: `probe` sets
-        // it through `use_context`, which is empty inside this already-awaited
-        // task, so the signal stayed `None` on a first run and the sign-in
-        // button had nothing to open. This signal was captured while the owner
-        // existed, so it works.
-        if let Some(health) = health.as_ref() {
-            advertisement.set(health.auth.clone());
-        }
-        gate.set(auth::gate_state(health.as_ref(), has_token, seen));
-        // Booting with a token already stored races the connectivity effect's
-        // `me()`: whichever runs first, that one may go out unauthenticated.
-        // Redo it here, where the token is known to be mirrored.
-        if auth::shell_available() && has_token {
-            revalidate_session(session, client.clone()).await;
-        }
+        ready.set(true);
     });
 
-    let sign_in = move |_| {
-        let Some(oidc) = advertisement.get_untracked().and_then(|a| a.oidc) else {
-            // Say so rather than doing nothing: a button that silently no-ops
-            // is indistinguishable from a broken app.
-            sign_in_status.set(Some(
-                "The server hasn't said how to sign in yet — retry in a moment.".into(),
-            ));
-            return;
-        };
-        waiting.set(true);
-        let client = shared_client.get_value();
-        spawn_local(async move {
-            if let Err(err) = auth::start_sign_in(&oidc.issuer, &oidc.client_id).await {
-                waiting.set(false);
-                sign_in_status.set(Some(err));
-                return;
-            }
-            // The shell completes the exchange when authentik redirects back;
-            // poll until a token appears. Two minutes is long enough for a
-            // password + 2FA and short enough not to poll forever.
-            poll_for_token(80, waiting, gate, session, sign_in_status, client);
-        });
-    };
-
-    let current = use_client().base().to_string();
-    let input = RwSignal::new(current);
-    let connect = move |_| {
-        let value = input.get_untracked().trim().to_string();
-        if Url::parse(&value).is_err() {
-            return;
-        }
-        set_api_base_override(Some(&value));
-    };
-
     view! {
-        {move || match gate.get() {
-            auth::GateState::Checking => {
-                view! { <p class="muted gate-msg">"Connecting…"</p> }.into_any()
-            }
-            auth::GateState::Ready => children().into_any(),
-            auth::GateState::NeedsSignIn => {
-                view! {
-                    <section class="server-gate">
-                        <h2>"Sign in"</h2>
-                        <p class="muted">
-                            "This server is protected by authentik. Signing in opens it in your browser."
-                        </p>
-                        <div class="gate-form">
-                            <button class="primary" on:click=sign_in disabled=move || waiting.get()>
-                                {move || {
-                                    if waiting.get() {
-                                        "Waiting for authentik…"
-                                    } else {
-                                        "Sign in with authentik"
-                                    }
-                                }}
-                            </button>
-                        </div>
-                        // The shell's own account of the flow: without it a
-                        // failed exchange is indistinguishable from a slow
-                        // one, and a phone has no console to check.
-                        {move || {
-                            sign_in_status
-                                .get()
-                                .map(|status| view! { <p class="muted gate-msg">{status}</p> })
-                        }}
-                    </section>
-                }
-                    .into_any()
-            }
-            auth::GateState::Unreachable => {
-                view! {
-                    <section class="server-gate">
-                        <h2>"Cannot reach the chaos server"</h2>
-                        <p class="muted">
-                            "Enter the address of your server (for example "
-                            <code>"http://zeus:4600"</code> ")."
-                        </p>
-                        <div class="gate-form">
-                            <input
-                                type="url"
-                                prop:value=move || input.get()
-                                on:input=move |ev| input.set(event_target_value(&ev))
-                            />
-                            <button class="primary" on:click=connect>
-                                "Connect"
-                            </button>
-                            <button on:click=move |_| gate.set(auth::GateState::Ready)>
-                                "Continue anyway"
-                            </button>
-                        </div>
-                    </section>
-                }
-                    .into_any()
-            }
+        {move || if ready.get() {
+            children().into_any()
+        } else {
+            view! { <p class="muted gate-msg">"Connecting…"</p> }.into_any()
         }}
     }
 }

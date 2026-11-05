@@ -85,10 +85,8 @@ pub fn router(state: AppState) -> Router {
     }
 
     app
-        // The desktop app runs on a tauri:// origin, and LAN clients hit the
-        // server cross-origin. Every route but /health and /auth/login now
-        // requires a signed-in user, so a permissive CORS policy only exposes
-        // what the caller could already reach with its own credentials.
+        // Allow explicitly configured cross-origin browser API clients.
+        // Protected routes still require the caller's own credentials.
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
@@ -110,8 +108,7 @@ mod tests {
     }
 
     /// Every route must require a signed-in user except the three that cannot:
-    /// `/health` (liveness + the auth advertisement the apps read before they
-    /// have a token), `/auth/login` (how you get one), and `/icons/{spec}`
+    /// `/health` (liveness), `/auth/login` (how you get a session), and `/icons/{spec}`
     /// (referenced from `<img src>`, which cannot carry an Authorization
     /// header — see the note on the handler).
     ///

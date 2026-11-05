@@ -1,4 +1,11 @@
-# Rolling out app sign-in (OIDC)
+# Archived: rolling out app sign-in (OIDC)
+
+> Retired: native apps and their OIDC integration have been removed. Do not
+> follow this rollout. Use browser forward-auth as documented in
+> [deployment.md](deployment.md#browser-only-delivery). The host configuration
+> removes the native bypass routes and marks the OAuth application/provider
+> absent for the next rebuild/reconciliation. The steps below are historical
+> reference only.
 
 What to do, in this order, to switch the mobile and desktop apps from the
 app-password hack to a real authentik sign-in. Everything here is a manual

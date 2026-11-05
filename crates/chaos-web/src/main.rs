@@ -4,14 +4,9 @@ use url::Url;
 
 /// Where the chaos API lives, resolved in order:
 ///
-/// 1. `window.CHAOS_API_BASE` — set by a hosting shell (the Tauri shell
-///    injects it; a reverse proxy could inline a `<script>`).
-/// 2. `localStorage["chaos-api-base"]` — user override written by the
-///    connect screen (the path on Android), survives reloads.
-/// 3. The page origin, when it can actually be the server — the
-///    served-by-chaos-server case (and trunk's dev proxy). Tauri's own
-///    origins (`tauri://localhost`, `http://tauri.localhost`) are the app
-///    bundle, never the API.
+/// 1. `window.CHAOS_API_BASE` — optional hosting-page configuration.
+/// 2. `localStorage["chaos-api-base"]` — user override from Settings.
+/// 3. The page origin (chaos-server in production, trunk's dev proxy locally).
 /// 4. The default local server.
 fn resolve() -> (Url, bool) {
     let fallback = Url::parse("http://127.0.0.1:4600").expect("valid fallback url");
@@ -36,19 +31,14 @@ fn resolve() -> (Url, bool) {
     }
 
     match window.location().origin().ok().map(|o| Url::parse(&o)) {
-        Some(Ok(url))
-            if (url.scheme() == "http" || url.scheme() == "https")
-                && url.host_str() != Some("tauri.localhost") =>
-        {
-            (url, false)
-        }
+        Some(Ok(url)) if url.scheme() == "http" || url.scheme() == "https" => (url, false),
         _ => (fallback, true),
     }
 }
 
 fn main() {
     console_error_panic_hook::set_once();
-    // Cross-origin API (shell or override): the session cookie won't flow,
+    // Cross-origin API override: the session cookie won't flow,
     // so the client keeps the bearer token in localStorage instead.
     let (api_base, cross_origin) = resolve();
     let config = AppConfig {

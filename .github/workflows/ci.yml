@@ -57,8 +57,7 @@ jobs:
       - name: cargo nextest
         run: nix develop -c cargo nextest run --workspace
 
-  # The packages the server deployment actually uses (the Android APK
-  # and desktop bundle are built locally, not here).
+  # The packages used by the browser/server deployment.
   build:
     runs-on: ubuntu-latest
     steps:

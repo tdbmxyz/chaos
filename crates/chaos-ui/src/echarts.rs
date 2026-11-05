@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     /// `window.chaosLoadECharts()` — fetch the vendored bundle, memoized in JS
     /// so concurrent charts share one request. `catch` also covers the function
-    /// being absent (a shell serving a stale index.html), which surfaces as a
+    /// being absent (a stale index.html), which surfaces as a
     /// load failure rather than a panic.
     #[wasm_bindgen(js_name = chaosLoadECharts, catch)]
     async fn load_echarts() -> Result<JsValue, JsValue>;

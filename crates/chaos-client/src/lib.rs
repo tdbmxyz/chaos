@@ -55,7 +55,7 @@ pub struct ChaosClient {
     http: reqwest::Client,
     /// Session token sent as `Authorization: Bearer`. Browsers leave this
     /// unset and rely on the same-origin session cookie instead; native
-    /// clients (desktop/mobile) store the token from `login`.
+    /// clients with an explicit cross-origin API store the token from `login`.
     token: Option<String>,
 }
 

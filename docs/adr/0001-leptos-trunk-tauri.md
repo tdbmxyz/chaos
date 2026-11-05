@@ -1,6 +1,10 @@
 # ADR 0001 — UI stack: Leptos (CSR) + trunk + Tauri v2
 
-Date: 2026-07-04 · Status: accepted
+Date: 2026-07-04 · Status: partially superseded
+
+The Leptos CSR + trunk choice remains. Native desktop/mobile delivery has
+been removed in favor of the responsive browser UI; the Tauri decision below
+is historical. See [current architecture](../ARCHITECTURE.md).
 
 ## Context
 

@@ -229,13 +229,12 @@ fn DataWidget(id: String, widget: Widget) -> impl IntoView {
         _ => String::new(),
     };
 
-    // HN/lobsters can be fetched without the server: HN's Algolia archive
-    // API sends CORS `*`, lobsters only works through the shell's HTTP
-    // plugin. Cached under the same widget key either way, so each path
+    // HN can be fetched without the server: Algolia sends CORS `*`.
+    // Lobsters relies on the server and the browser cache.
+    // Cached under the same widget key either way, so each path
     // serves the other's leftovers.
     let direct = match &widget {
-        Widget::HackerNews { limit, .. } => Some(DirectFeed::HackerNews(*limit)),
-        Widget::Lobsters { limit, .. } => Some(DirectFeed::Lobsters(*limit)),
+        Widget::HackerNews { limit, .. } => Some(DirectFeed(*limit)),
         _ => None,
     };
 
@@ -442,57 +441,17 @@ fn PostsBody(
     }
 }
 
-/// A feed the client can fetch without the chaos server. Only consulted
-/// while offline: online, the server's cached copy is authoritative (and
-/// the lobsters path only exists inside the shells anyway).
+/// HN direct fetch, used only offline; online the server is authoritative.
 #[derive(Clone, Copy)]
-enum DirectFeed {
-    HackerNews(u32),
-    Lobsters(u32),
-}
+struct DirectFeed(u32);
 
 impl DirectFeed {
     async fn fetch(self) -> Result<WidgetData, ClientError> {
-        let now = chrono::Utc::now();
-        let posts = match self {
-            DirectFeed::HackerNews(limit) => {
-                chaos_client::posts::hacker_news(&crate::weather_fetch::http(), limit, now).await
-            }
-            DirectFeed::Lobsters(limit) => lobsters_direct(limit, now).await,
-        }
-        .map_err(ClientError::Transport)?;
-        Ok(WidgetData::Posts(posts))
+        chaos_client::posts::hacker_news(&crate::weather_fetch::http(), self.0, chrono::Utc::now())
+            .await
+            .map(WidgetData::Posts)
+            .map_err(ClientError::Transport)
     }
-}
-
-/// Page through newest.json via the shell's HTTP plugin (lobste.rs sends no
-/// CORS headers) until the sweep covers a week or hits the page cap.
-async fn lobsters_direct(
-    limit: u32,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<chaos_domain::PostsData, String> {
-    use chaos_client::posts;
-    let mut items = Vec::new();
-    for page in 1..=posts::LOBSTERS_PAGE_CAP {
-        let json = match crate::tauri_http::fetch_text(&posts::lobsters_page_url(page)).await {
-            Some(Ok(json)) => json,
-            Some(Err(err)) => return Err(err),
-            None => return Err("lobsters needs the app shell offline".into()),
-        };
-        let page_items = posts::parse_lobsters_page(&json)?;
-        if page_items.is_empty() {
-            break;
-        }
-        let done = posts::lobsters_page_done(&page_items, now);
-        items.extend(page_items);
-        if done {
-            break;
-        }
-    }
-    if items.is_empty() {
-        return Err("no stories returned".into());
-    }
-    Ok(posts::posts_from_items(&items, limit, now))
 }
 
 /// [`crate::offline::cached`] for a fetch that does NOT go through the
@@ -526,9 +485,9 @@ const NEWS_LIMIT: u32 = 50;
 
 /// Load a source's [`PostsData`] the same way a dashboard posts widget does,
 /// but keyed to the dedicated news page: online it hits `posts_list(source)`
-/// (cached under `posts:{source}`); offline it fetches the provider directly
-/// (HN's Algolia archive, or lobsters through the shell's HTTP plugin) and
-/// falls back to the cached copy. The `bool` is the same "· cached" staleness
+/// (cached under `posts:{source}`); offline HN uses Algolia with a cache
+/// fallback, while Lobsters uses only the cache (no CORS). The `bool` is the
+/// same "· cached" staleness
 /// flag `cached()`/`cached_direct()` return.
 pub(crate) async fn load_posts(
     source: Source,
@@ -536,12 +495,10 @@ pub(crate) async fn load_posts(
     client: &ChaosClient,
 ) -> Result<(PostsData, bool), String> {
     let key = format!("posts:{}", source.as_str());
-    let direct = match source {
-        Source::HackerNews => DirectFeed::HackerNews(NEWS_LIMIT),
-        Source::Lobsters => DirectFeed::Lobsters(NEWS_LIMIT),
-    };
-    let result = if conn.get_untracked() != crate::offline::Connectivity::Online {
-        cached_direct(&key, direct.fetch()).await
+    let result = if source == Source::HackerNews
+        && conn.get_untracked() != crate::offline::Connectivity::Online
+    {
+        cached_direct(&key, DirectFeed(NEWS_LIMIT).fetch()).await
     } else {
         crate::offline::cached(conn, &key, async { client.posts_list(source).await }).await
     };
@@ -1295,10 +1252,7 @@ fn SearchBar(template: String) -> impl IntoView {
         }
         let encoded: String = url::form_urlencoded::byte_serialize(q.as_bytes()).collect();
         let target = template.replace("{}", &encoded);
-        // shells: system browser; plain web: a normal new tab
-        if !crate::open_external(&target) {
-            let _ = window().open_with_url_and_target(&target, "_blank");
-        }
+        let _ = window().open_with_url_and_target(&target, "_blank");
         query.set(String::new());
     };
 
@@ -1536,25 +1490,12 @@ fn Bookmarks(groups: Vec<BookmarkGroup>) -> impl IntoView {
                                                 .and_then(|spec| client.icon_url(spec));
                                             let title = bookmark.title.clone();
                                             let url = bookmark.url.to_string();
-                                            let package = bookmark.android_package.clone();
-                                            let on_click = move |ev: leptos::ev::MouseEvent| {
-                                                if let Some(package) = &package
-                                                    && crate::on_android()
-                                                    && crate::open_app_native(package)
-                                                {
-                                                    // The native app claimed the tap.
-                                                    ev.prevent_default();
-                                                }
-                                                // Otherwise the anchor's target="_blank"
-                                                // does the right thing everywhere.
-                                            };
                                             view! {
                                                 <li>
                                                     <a
                                                         href=url
                                                         target="_blank"
                                                         rel="noreferrer"
-                                                        on:click=on_click
                                                     >
                                                         <crate::components::IconOrLetter
                                                             url=icon.map(|u| u.to_string())

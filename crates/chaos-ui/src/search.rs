@@ -89,7 +89,6 @@ pub fn QuickSearch(open: RwSignal<bool>) -> impl IntoView {
             SearchKind::Event => navigate("/calendar", Default::default()),
             _ => {
                 if let Some(url) = &hit.url
-                    && !crate::open_external(url.as_str())
                     && let Some(window) = web_sys::window()
                 {
                     let _ = window.open_with_url_and_target(url.as_str(), "_blank");
