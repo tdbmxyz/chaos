@@ -111,6 +111,10 @@
 
       cargoLock.lockFile = ./Cargo.lock;
 
+      # nixpkgs' Cargo hook disables bundled SQLite; SQLx needs the system lib.
+      nativeBuildInputs = [pkgs.pkg-config];
+      buildInputs = [pkgs.sqlite];
+
       # Only the backend: the desktop crate would drag the webkit stack in.
       cargoBuildFlags = ["-p" "chaos-server"];
       cargoTestFlags = ["-p" "chaos-server"];
