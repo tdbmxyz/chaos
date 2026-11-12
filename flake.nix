@@ -2,7 +2,7 @@
   description = "chaos - unified entry point for local services (web + desktop)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
@@ -110,6 +110,10 @@
       src = self;
 
       cargoLock.lockFile = ./Cargo.lock;
+
+      # nixpkgs' Cargo hook disables bundled SQLite; SQLx needs the system lib.
+      nativeBuildInputs = [pkgs.pkg-config];
+      buildInputs = [pkgs.sqlite];
 
       # Only the backend: the desktop crate would drag the webkit stack in.
       cargoBuildFlags = ["-p" "chaos-server"];
