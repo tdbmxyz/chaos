@@ -45,8 +45,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          # Cached build scripts embed Nix store ELF interpreter paths. Reuse
+          # target artifacts only within the same toolchain/native environment.
+          key: cargo-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'rust-toolchain.toml') }}-
 
       # fmt + clippy (native and wasm targets), same as local `just check`
       - name: just check
